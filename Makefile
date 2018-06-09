@@ -9,8 +9,9 @@ GOFMT     = gofmt
 GOLINT    = gometalinter
 
 CLIENT    = client
-SERVER    = server
+API       = api
 BROKER    = broker
+RESPONDER = responder
 
 FBSDIR    = .
 
@@ -20,7 +21,7 @@ M         = $(shell printf "\033[0;35m▶\033[0m")
 
 .PHONY: all
 
-all: client server broker
+all: client api broker
 
 # Executables
 client:
@@ -31,13 +32,13 @@ client:
 		-o ../../bin/$(PACKAGE)_$(CLIENT)_$(VERSION)
 	$Q cp bin/$(PACKAGE)_$(CLIENT)_$(VERSION) bin/$(PACKAGE)_$(CLIENT)
 
-server:
-	$(info $(M) building executable server…) @ ## Build program binary
-	$Q cd cmd/$(SERVER) &&  $(GO) build \
+api:
+	$(info $(M) building executable api…) @ ## Build program binary
+	$Q cd cmd/$(API) &&  $(GO) build \
 		-tags release \
 		-ldflags '-X $(PACKAGE)/cmd.Version=$(VERSION) -X $(PACKAGE)/cmd.BuildDate=$(DATE)' \
-		-o ../../bin/$(PACKAGE)_$(SERVER)_$(VERSION)
-	$Q cp bin/$(PACKAGE)_$(SERVER)_$(VERSION) bin/$(PACKAGE)_$(SERVER)
+		-o ../../bin/$(PACKAGE)_$(API)_$(VERSION)
+	$Q cp bin/$(PACKAGE)_$(API)_$(VERSION) bin/$(PACKAGE)_$(API)
 
 broker:
 	$(info $(M) building executable broker…) @ ## Build program binary
@@ -46,6 +47,14 @@ broker:
 		-ldflags '-X $(PACKAGE)/cmd.Version=$(VERSION) -X $(PACKAGE)/cmd.BuildDate=$(DATE)' \
 		-o ../../bin/$(PACKAGE)_$(BROKER)_$(VERSION)
 	$Q cp bin/$(PACKAGE)_$(BROKER)_$(VERSION) bin/$(PACKAGE)_$(BROKER)
+
+responder:
+	$(info $(M) building executable responder…) @ ## Build program binary
+	$Q cd cmd/$(RESPONDER) &&  $(GO) build \
+		-tags release \
+		-ldflags '-X $(PACKAGE)/cmd.Version=$(VERSION) -X $(PACKAGE)/cmd.BuildDate=$(DATE)' \
+		-o ../../bin/$(PACKAGE)_$(RESPONDER)_$(VERSION)
+	$Q cp bin/$(PACKAGE)_$(RESPONDER)_$(VERSION) bin/$(PACKAGE)_$(RESPONDER)
 
 # Utils
 
