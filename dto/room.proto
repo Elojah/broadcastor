@@ -10,6 +10,6 @@ message Room {
 }
 
 service RoomService {
-	rpc Create(google.protobuf.Empty) returns (ID);
-	rpc ListIDs(google.protobuf.Empty) returns (IDs);
+	rpc Create(google.protobuf.Empty) returns (ID) {}
+	rpc ListIDs(google.protobuf.Empty) returns (IDs) {}
 }

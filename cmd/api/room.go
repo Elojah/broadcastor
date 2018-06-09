@@ -6,6 +6,7 @@ import (
 	grpc "github.com/go-kit/kit/transport/grpc"
 
 	bc "github.com/elojah/broadcastor"
+	"github.com/elojah/broadcastor/dto"
 )
 
 // RoomService interface room routes.
@@ -19,57 +20,54 @@ type room struct {
 }
 
 func (r room) Create(_ context.Context) (bc.ID, error) {
-	return r.CreateRoom(bc.Room{ID: bc.NewID()})
+	room := bc.Room{ID: bc.NewID()}
+	return room.ID, r.CreateRoom(room)
 }
 
 func (r room) ListIDs(_ context.Context) ([]bc.ID, error) {
 	return r.ListRoomIDs()
 }
 
-func makeCreateRoom(svc RoomService) endpoint.Endpoint {
-	return func(ctx context.Context, request interface{}) (interface{}, error) {
-		return svc.Create(ctx)
-	}
-}
-
-func makeListIDsRoom(svc RoomService) endpoint.Endpoint {
-	return func(ctx context.Context, request interface{}) (interface{}, error) {
-		return svc.ListIDs(ctx)
-	}
-}
-
+// GRPCRoomService wraps room with grpc.
 type GRPCRoomService struct {
 	create  grpc.Handler
 	listIDs grpc.Handler
 }
 
-func (s *GRPCRoomService) Create(ctx context.Context, room *dto.Room) (*dto.Error, error) {
-	_, resp, err := s.listIDs.ServeGRPC(ctx, req)
+// Create serve grpc CreateRoom.
+func (s *GRPCRoomService) Create(ctx context.Context) (*dto.ID, error) {
+	_, resp, err := s.listIDs.ServeGRPC(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
-	return resp.(*pb.RoomResponse), nil
+	return resp.(*dto.ID), nil
 }
 
-func (s *GRPCRoomService) ListIDs(ctx context.Context, req *pb.ListIDsRoomRequest) (*pb.RoomResponse, error) {
-	_, resp, err := s.create.ServeGRPC(ctx, req)
+// ListIDs serve grpc ListIDsRoom.
+func (s *GRPCRoomService) ListIDs(ctx context.Context) (*dto.IDs, error) {
+	_, resp, err := s.create.ServeGRPC(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
-	return resp.(*pb.RoomResponse), nil
+	return resp.(*dto.IDs), nil
 }
 
-func NewGRPCServer(_ context.Context, endpoint Endpoints) pb.RoomServer {
+// NewGRPCRoomService returns a valid implementation of RoomService wrapped by grpc.
+func NewGRPCRoomService(_ context.Context, r room) *dto.RoomService {
 	return &GRPCRoomService{
 		create: grpc.NewServer(
-			endpoint.CreateRoomEndpoint,
-			DecodeCreateRoomRequest,
-			EncodeRoomResponse,
+			func(ctx context.Context, request interface{}) (interface{}, error) {
+				return r.Create(ctx)
+			},
+			nil,
+			nil,
 		),
 		listIDs: grpc.NewServer(
-			endpoint.ListIDsRoomEndpoint,
-			DecodeListIDsRoomRequest,
-			EncodeRoomResponse,
+			func(ctx context.Context, request interface{}) (interface{}, error) {
+				return r.ListIDs(ctx)
+			},
+			nil,
+			nil,
 		),
 	}
 }

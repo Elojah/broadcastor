@@ -59,7 +59,7 @@ responder:
 # Utils
 
 proto:
-	$(info $(M) building executable responder…) @ ## Build program binary
+	$(info $(M) generate protobuf go files…) @
 	$Q protoc --proto_path=./dto --go_out=dto ./dto/*.proto
 
 # Dependencies
@@ -82,14 +82,15 @@ test:
 .PHONY: lint
 lint:
 	$(info $(M) running $(GOLINT)…) @
-	$Q GO_VENDOR=1 $(GOLINT) "--vendor" \
-					"--disable=gotype" \
-					"--disable=vetshadow" \
-					"--disable=gocyclo" \
-					"--fast" \
-					"--json" \
-					"./..." \
-			| grep -v schema.gen.go
+	$Q GO_VENDOR=1 $(GOLINT) --vendor \
+					--exclude="Binds to all network interfaces"\
+					--disable=gotype \
+					--disable=vetshadow \
+					--disable=gocyclo \
+					--fast \
+					--json \
+					./... \
+			| grep -v pb.go
 
 .PHONY: fmt
 fmt:

@@ -8,5 +8,5 @@ type Room struct {
 // RoomMapper interfaces data room interactions.
 type RoomMapper interface {
 	CreateRoom(Room) error
-	ListRooms() ([]Room, error)
+	ListRoomIDs() ([]ID, error)
 }

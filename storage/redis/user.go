@@ -33,7 +33,7 @@ func (s *Service) RemoveUser(user bc.User, roomID bc.ID) error {
 	).Err()
 }
 
-// ListUsers implements UserMapper with redis.
+// ListUserIDs implements UserMapper with redis.
 func (s *Service) ListUserIDs(subset bc.UserSubset) ([]bc.ID, uint64, error) {
 	keys, cursor, err := s.Scan(
 		subset.Cursor,

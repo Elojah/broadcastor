@@ -10,7 +10,7 @@ const (
 	messagekey = "message:"
 )
 
-// AddMessage implements MessageMapper with redis.
+// CreateMessage implements MessageMapper with redis.
 func (s *Service) CreateMessage(message bc.Message) error {
 	raw, err := json.Marshal(message)
 	if err != nil {

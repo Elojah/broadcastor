@@ -7,6 +7,7 @@ import (
 	"github.com/elojah/broadcastor/storage/redis"
 )
 
+// Config is the configuration object for API service.
 type Config struct {
 	Redis redis.Config
 }

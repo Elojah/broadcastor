@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"flag"
+	"net"
 
-	grpc "github.com/go-kit/kit/transport/grpc"
 	log "github.com/sirupsen/logrus"
 
 	"github.com/elojah/broadcastor/storage/redis"
@@ -26,9 +28,19 @@ func run(filepath string) {
 		return
 	}
 
-	r := room
+	var r room
 	r.RoomMapper = rdx
-	grpc.Foo()
+
+	listener, err := net.Listen("tcp", ":9090")
+	if err != nil {
+		log.WithField("port", ":9090").Error(errors.New("failed to listen port"))
+		return
+	}
+	rms := NewGRPCRoomService(context.Background(), r)
+	if err := rms.Listen(listener); err != nil {
+		log.Error(errors.New("failed to serve room service"))
+		return
+	}
 
 	select {}
 }
