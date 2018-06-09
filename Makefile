@@ -58,6 +58,10 @@ responder:
 
 # Utils
 
+proto:
+	$(info $(M) building executable responder…) @ ## Build program binary
+	$Q protoc --proto_path=./dto --go_out=dto ./dto/*.proto
+
 # Dependencies
 .PHONY: dep
 dep:

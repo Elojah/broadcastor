@@ -7,3 +7,8 @@ type Message struct {
 	RoomID  ID
 	Content string
 }
+
+// MessageMapper interfaces Message data interactions.
+type MessageMapper interface {
+	CreateMessage(Message) error
+}

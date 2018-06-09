@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package dto;
+
+message ID {
+	string value = 1;
+}
+
+message IDs {
+	repeated string values = 1;
+}

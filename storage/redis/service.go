@@ -6,6 +6,8 @@ import (
 	bc "github.com/elojah/broadcastor"
 )
 
+var _ bc.MessageMapper = (*Service)(nil)
+var _ bc.RoomMapper = (*Service)(nil)
 var _ bc.UserMapper = (*Service)(nil)
 
 // Service is a mem service to store data directly in memory.

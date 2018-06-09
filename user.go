@@ -9,7 +9,7 @@ type User struct {
 type UserMapper interface {
 	AddUser(User, ID) error
 	RemoveUser(User, ID) error
-	ListUsers(UserSubset) ([]ID, uint64, error)
+	ListUserIDs(UserSubset) ([]ID, uint64, error)
 }
 
 // UserSubset retrieves users based on room ID and cursor/count SCAN.

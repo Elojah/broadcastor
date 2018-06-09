@@ -4,3 +4,9 @@ package bc
 type Room struct {
 	ID ID
 }
+
+// RoomMapper interfaces data room interactions.
+type RoomMapper interface {
+	CreateRoom(Room) error
+	ListRooms() ([]Room, error)
+}

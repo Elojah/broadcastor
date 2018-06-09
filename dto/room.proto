@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package dto;
+
+import "id.proto";
+import "google/protobuf/empty.proto";
+
+message Room {
+	ID id = 1;
+}
+
+service RoomService {
+	rpc Create(google.protobuf.Empty) returns (ID);
+	rpc ListIDs(google.protobuf.Empty) returns (IDs);
+}
