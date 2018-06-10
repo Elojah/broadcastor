@@ -1,11 +1,10 @@
 package main
 
 import (
-	"context"
-	"errors"
 	"flag"
-	"net"
+	"net/http"
 
+	httptransport "github.com/go-kit/kit/transport/http"
 	log "github.com/sirupsen/logrus"
 
 	"github.com/elojah/broadcastor/storage/redis"
@@ -31,18 +30,19 @@ func run(filepath string) {
 	var r room
 	r.RoomMapper = rdx
 
-	listener, err := net.Listen("tcp", ":9090")
-	if err != nil {
-		log.WithField("port", ":9090").Error(errors.New("failed to listen port"))
-		return
-	}
-	rms := NewGRPCRoomService(context.Background(), r)
-	if err := rms.Listen(listener); err != nil {
-		log.Error(errors.New("failed to serve room service"))
-		return
-	}
+	http.Handle("/room/create", httptransport.NewServer(
+		r.MakeCreateEndpoint(),
+		r.DecodeReq,
+		r.EncodeResp,
+	))
 
-	select {}
+	http.Handle("/room/list", httptransport.NewServer(
+		r.MakeListIDsEndpoint(),
+		r.DecodeReq,
+		r.EncodeResp,
+	))
+
+	log.Fatal(http.ListenAndServe(cfg.Address, nil))
 }
 
 func main() {

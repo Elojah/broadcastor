@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"io/ioutil"
 
 	"github.com/elojah/broadcastor/storage/redis"
@@ -9,7 +10,8 @@ import (
 
 // Config is the configuration object for API service.
 type Config struct {
-	Redis redis.Config
+	Address string
+	Redis   redis.Config
 }
 
 // NewConfig creates a new Config initialized from filepath in JSON format.
@@ -26,5 +28,8 @@ func NewConfig(filepath string) (Config, error) {
 
 // Check check if Config fields are valid.
 func (c Config) Check() error {
+	if c.Address == "" {
+		return errors.New("missing api address")
+	}
 	return c.Redis.Check()
 }

@@ -21,7 +21,7 @@ M         = $(shell printf "\033[0;35m▶\033[0m")
 
 .PHONY: all
 
-all: client api broker
+all: client api broker responder
 
 # Executables
 client:
@@ -55,12 +55,6 @@ responder:
 		-ldflags '-X $(PACKAGE)/cmd.Version=$(VERSION) -X $(PACKAGE)/cmd.BuildDate=$(DATE)' \
 		-o ../../bin/$(PACKAGE)_$(RESPONDER)_$(VERSION)
 	$Q cp bin/$(PACKAGE)_$(RESPONDER)_$(VERSION) bin/$(PACKAGE)_$(RESPONDER)
-
-# Utils
-
-proto:
-	$(info $(M) generate protobuf go files…) @
-	$Q protoc --proto_path=./dto --go_out=dto ./dto/*.proto
 
 # Dependencies
 .PHONY: dep

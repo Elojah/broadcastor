@@ -24,7 +24,7 @@ func (s *Service) CreateRoom(room bc.Room) error {
 // ListRoomIDs implements RoomMapper with redis.
 func (s *Service) ListRoomIDs() ([]bc.ID, error) {
 	keys, err := s.Keys(
-		roomkey,
+		roomkey + "*",
 	).Result()
 	if err != nil {
 		return nil, err
