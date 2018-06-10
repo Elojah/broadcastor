@@ -27,6 +27,7 @@ func run(filepath string) {
 		return
 	}
 
+	// Room routes
 	var r room
 	r.RoomMapper = rdx
 
@@ -40,6 +41,27 @@ func run(filepath string) {
 		r.MakeListIDsEndpoint(),
 		r.DecodeReq,
 		r.EncodeResp,
+	))
+
+	// User routes
+	var u user
+	u.UserMapper = rdx
+
+	http.Handle("/user/create", httptransport.NewServer(
+		u.MakeCreateEndpoint(),
+		u.DecodeReq,
+		u.EncodeResp,
+	))
+
+	// Message routes
+	var m message
+	m.UserMapper = rdx
+	m.MessageMapper = rdx
+
+	http.Handle("/message/send", httptransport.NewServer(
+		m.MakeSendEndpoint(),
+		m.DecodeReq,
+		m.EncodeResp,
 	))
 
 	log.Fatal(http.ListenAndServe(cfg.Address, nil))
