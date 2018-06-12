@@ -18,6 +18,15 @@ type RoomService interface {
 
 type room struct {
 	bc.RoomMapper
+	pools uint
+}
+
+func (r room) newPools() []bc.ID {
+	pools := make([]bc.ID, r.pools)
+	for i := range pools {
+		pools[i] = bc.NewID()
+	}
+	return pools
 }
 
 func (r room) Create(_ context.Context) (bc.ID, error) {

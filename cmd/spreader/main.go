@@ -27,37 +27,10 @@ func run(filepath string) {
 		return
 	}
 
-	// Room routes
-	var r room
-	r.pools = cfg.NPools
-	r.RoomMapper = rdx
-
-	http.Handle("/room/create", httptransport.NewServer(
-		r.MakeCreateEndpoint(),
-		r.DecodeReq,
-		r.EncodeResp,
-	))
-
-	http.Handle("/room/list", httptransport.NewServer(
-		r.MakeListIDsEndpoint(),
-		r.DecodeReq,
-		r.EncodeResp,
-	))
-
-	// User routes
-	var u user
-	u.UserMapper = rdx
-	u.RoomMapper = rdx
-
-	http.Handle("/user/create", httptransport.NewServer(
-		u.MakeCreateEndpoint(),
-		u.DecodeReq,
-		u.EncodeResp,
-	))
-
 	// Message routes
 	var m message
 	m.UserMapper = rdx
+	m.RoomMapper = rdx
 	m.MessageMapper = rdx
 
 	http.Handle("/message/send", httptransport.NewServer(

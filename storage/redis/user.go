@@ -14,30 +14,52 @@ const (
 )
 
 // AddUser implements UserMapper with redis.
-func (s *Service) AddUser(user bc.User, roomID bc.ID) error {
+func (s *Service) AddUser(user bc.User, roomID bc.ID, poolID bc.ID) error {
 	raw, err := json.Marshal(user)
 	if err != nil {
 		return err
 	}
 	return s.Set(
-		userkey+roomID.String()+":"+user.ID.String(),
+		userkey+roomID.String()+":"+poolID.String()+":"+user.ID.String(),
 		raw,
 		0,
 	).Err()
 }
 
+// GetUser implements UserMapper with redis.
+func (s *Service) GetUser(subset bc.UserSubset) (bc.User, error) {
+	val, err := s.Get(
+		userkey + subset.RoomID.String() + ":" + subset.PoolID.String() + ":" + subset.ID.String(),
+	).Result()
+	if err != nil {
+		return bc.User{}, err
+	}
+	var user bc.User
+	err = json.Unmarshal([]byte(val), &user)
+	return user, err
+}
+
 // RemoveUser implements UserMapper with redis.
 func (s *Service) RemoveUser(user bc.User, roomID bc.ID) error {
-	return s.Del(
-		userkey + roomID.String() + ":" + user.ID.String(),
-	).Err()
+	keys, err := s.Keys(
+		userkey + roomID.String() + ":*:" + user.ID.String(),
+	).Result()
+	if err != nil {
+		return err
+	}
+	for _, key := range keys {
+		if err := s.Del(key).Err(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ListUserIDs implements UserMapper with redis.
 func (s *Service) ListUserIDs(subset bc.UserSubset) ([]bc.ID, uint64, error) {
 	keys, cursor, err := s.Scan(
 		subset.Cursor,
-		userkey+subset.RoomID.String(),
+		userkey+subset.RoomID.String()+":"+subset.PoolID.String(),
 		subset.Count,
 	).Result()
 	if err != nil {
@@ -45,7 +67,7 @@ func (s *Service) ListUserIDs(subset bc.UserSubset) ([]bc.ID, uint64, error) {
 	}
 	users := make([]bc.ID, len(keys))
 	for i, key := range keys {
-		users[i] = ulid.MustParse(strings.Split(key, ":")[2])
+		users[i] = ulid.MustParse(strings.Split(key, ":")[3])
 	}
 	return users, cursor, nil
 }

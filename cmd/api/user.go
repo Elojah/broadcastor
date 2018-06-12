@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"math/rand"
 	"net/http"
 
 	"github.com/go-kit/kit/endpoint"
@@ -17,12 +18,21 @@ type UserService interface {
 }
 
 type user struct {
+	bc.RoomMapper
 	bc.UserMapper
 }
 
+func (u user) pickPool(pools []bc.ID) bc.ID {
+	return pools[rand.Intn(len(pools))]
+}
+
 func (u user) Create(_ context.Context, roomID bc.ID) (bc.ID, error) {
+	room, err := u.GetRoom(bc.RoomSubset{ID: roomID})
+	if err != nil {
+		return bc.ID{}, err
+	}
 	user := bc.User{ID: bc.NewID()}
-	return user.ID, u.AddUser(user, roomID)
+	return user.ID, u.AddUser(user, roomID, u.pickPool(room.Pools))
 }
 
 func (u user) MakeCreateEndpoint() endpoint.Endpoint {
