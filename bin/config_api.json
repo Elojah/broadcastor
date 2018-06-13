@@ -1,5 +1,6 @@
 {
     "address": "localhost:8080",
+    "client_port": "4242",
     "npools": 3,
     "spreader_addresses": [
         "http://127.0.0.1:8081",

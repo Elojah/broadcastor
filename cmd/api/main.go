@@ -48,6 +48,7 @@ func run(filepath string) {
 	var u user
 	u.UserMapper = rdx
 	u.RoomMapper = rdx
+	u.clientPort = cfg.ClientPort
 
 	http.Handle("/user/create", httptransport.NewServer(
 		u.MakeCreateEndpoint(),

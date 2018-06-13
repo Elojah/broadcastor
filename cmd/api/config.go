@@ -11,6 +11,7 @@ import (
 // Config is the configuration object for API service.
 type Config struct {
 	Address           string
+	ClientPort        string   `json:"client_port"`
 	NPools            uint     `json:"npools"`
 	SpreaderAddresses []string `json:"spreader_addresses"`
 	Redis             redis.Config
@@ -32,6 +33,9 @@ func NewConfig(filepath string) (Config, error) {
 func (c Config) Check() error {
 	if c.Address == "" {
 		return errors.New("missing api address")
+	}
+	if c.ClientPort == "" {
+		return errors.New("missing client server port")
 	}
 	if c.NPools == 0 {
 		return errors.New("missing pool number per room")

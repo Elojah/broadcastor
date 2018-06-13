@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"math/rand"
 	"net/http"
+	"strings"
 
 	"github.com/go-kit/kit/endpoint"
 	"github.com/oklog/ulid"
@@ -20,6 +21,8 @@ type UserService interface {
 type user struct {
 	bc.RoomMapper
 	bc.UserMapper
+
+	clientPort string
 }
 
 type userRequest struct {
@@ -57,7 +60,9 @@ func (u user) DecodeReq(_ context.Context, req *http.Request) (interface{}, erro
 	if err != nil {
 		return nil, err
 	}
-	return userRequest{RoomID: id, Addr: req.RemoteAddr}, nil
+	addrs := strings.Split(req.RemoteAddr, ":")
+	addr := strings.Join([]string{addrs[0], u.clientPort}, ":")
+	return userRequest{RoomID: id, Addr: addr}, nil
 }
 
 func (u user) EncodeResp(ctx context.Context, w http.ResponseWriter, response interface{}) error {
