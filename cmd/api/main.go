@@ -14,7 +14,7 @@ func run(filepath string) {
 
 	cfg, err := NewConfig(filepath)
 	if err != nil {
-		log.WithField("read", "config").Error(err)
+		log.WithField("read", "config").WithField("file", filepath).Error(err)
 		return
 	}
 	if err := cfg.Check(); err != nil {

@@ -1,8 +1,8 @@
 {
-    "address": "localhost:8081",
+    "address": "localhost:5000",
     "count": 20,
     "redis": {
-        "addr": "127.0.0.1:6379",
+        "addr": "localhost:6379",
         "password": "secret",
         "db": 0
     }
