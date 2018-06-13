@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/go-kit/kit/endpoint"
+	log "github.com/sirupsen/logrus"
 
 	bc "github.com/elojah/broadcastor"
 )
@@ -28,6 +29,7 @@ type message struct {
 func (m message) Send(_ context.Context, mr bc.MessageRequest) error {
 	msg, err := m.GetMessage(bc.MessageSubset{ID: mr.MessageID})
 	if err != nil {
+		log.WithError(err).WithField("message", mr.MessageID.String()).Error("failed to retrieve message")
 		return err
 	}
 	raw, err := json.Marshal(msg)
@@ -37,6 +39,7 @@ func (m message) Send(_ context.Context, mr bc.MessageRequest) error {
 
 	var addrs []string
 	var cursor uint64
+	log.WithField("message", msg.ID.String()).WithField("pool", mr.PoolID).Info("send message")
 	for {
 		addrs, cursor, err = m.ListUserAddr(bc.UserSubset{
 			Cursor: cursor,
@@ -45,16 +48,19 @@ func (m message) Send(_ context.Context, mr bc.MessageRequest) error {
 			PoolID: mr.PoolID,
 		})
 		if err != nil {
+			log.WithError(err).Error("failed to retrieve users address")
 			return err
 		}
+		log.WithField("n_addrs", len(addrs)).Info("found addresses")
+		go func(addrs ...string) {
+			for _, addr := range addrs {
+				log.Infof("send message %s to %s", msg.ID.String(), addr)
+				m.client.Post("http://"+addr+"/message/receive", "application/json; charset=utf-8", bytes.NewBuffer(raw))
+			}
+		}(addrs...)
 		if cursor == 0 {
 			return nil
 		}
-		go func(addrs ...string) {
-			for _, addr := range addrs {
-				m.client.Post(addr+"/message/receive", "application/json; charset=utf-8", bytes.NewBuffer(raw))
-			}
-		}(addrs...)
 	}
 }
 

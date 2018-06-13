@@ -11,8 +11,8 @@ import (
 // Config is the configuration object for API service.
 type Config struct {
 	Address           string
-	NPools            uint
-	SpreaderAddresses []string
+	NPools            uint     `json:"npools"`
+	SpreaderAddresses []string `json:"spreader_addresses"`
 	Redis             redis.Config
 }
 

@@ -27,7 +27,7 @@ func (s *Service) AddUser(user bc.User, roomID bc.ID, poolID bc.ID) error {
 // GetUser implements UserMapper with redis.
 func (s *Service) GetUser(subset bc.UserSubset) (bc.User, error) {
 	keys, err := s.Keys(
-		userkey + subset.RoomID.String() + ":" + subset.PoolID.String() + ":" + subset.ID.String() + ":*",
+		userkey + subset.RoomID.String() + ":*:" + subset.ID.String() + ":*",
 	).Result()
 	if err != nil {
 		return bc.User{}, err
@@ -72,7 +72,8 @@ func (s *Service) ListUserAddr(subset bc.UserSubset) ([]string, uint64, error) {
 	}
 	addrs := make([]string, len(keys))
 	for i, key := range keys {
-		addrs[i] = strings.Split(key, ":")[4]
+		parts := strings.Split(key, ":")
+		addrs[i] = strings.Join(parts[4:], ":")
 	}
 	return addrs, cursor, nil
 }

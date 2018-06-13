@@ -1,5 +1,6 @@
 {
     "address": "localhost:8081",
+    "count": 20,
     "redis": {
         "addr": "127.0.0.1:6379",
         "password": "secret",

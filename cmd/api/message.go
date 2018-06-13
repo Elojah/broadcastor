@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/go-kit/kit/endpoint"
+	log "github.com/sirupsen/logrus"
 
 	bc "github.com/elojah/broadcastor"
 )
@@ -31,12 +32,14 @@ func (m message) Send(_ context.Context, msg bc.Message) error {
 	if err != nil {
 		return err
 	}
+	log.WithField("room", room.ID).Info("room found")
 	if _, err := m.GetUser(bc.UserSubset{
 		ID:     msg.UserID,
 		RoomID: msg.RoomID,
 	}); err != nil {
 		return err
 	}
+	log.WithField("user", msg.UserID).Info("user found")
 	msg.ID = bc.NewID()
 	if err := m.CreateMessage(msg); err != nil {
 		return err
@@ -51,7 +54,20 @@ func (m message) Send(_ context.Context, msg bc.Message) error {
 			})
 			// TODO use something smarter instead than rand.
 			address := m.spreaders[rand.Intn(len(m.spreaders))]
-			m.client.Post(address+"/message/send", "application/json; charset=utf-8", bytes.NewBuffer(raw))
+			log.WithField("message", msg.ID).
+				WithField("pool", pool.String()).
+				WithField("address", address).
+				Info("spread message")
+			resp, err := m.client.Post(
+				address+"/message/send",
+				"application/json; charset=utf-8",
+				bytes.NewBuffer(raw),
+			)
+			if err != nil {
+				log.WithError(err).Error("failed to spread message")
+				return
+			}
+			log.WithField("code", resp.StatusCode).Info("spreader response code")
 		}(pool)
 	}
 	return nil
