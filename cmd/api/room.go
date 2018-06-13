@@ -30,7 +30,7 @@ func (r room) newPools() []bc.ID {
 }
 
 func (r room) Create(_ context.Context) (bc.ID, error) {
-	room := bc.Room{ID: bc.NewID()}
+	room := bc.Room{ID: bc.NewID(), Pools: r.newPools()}
 	return room.ID, r.CreateRoom(room)
 }
 

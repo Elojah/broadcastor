@@ -59,6 +59,10 @@ func run(filepath string) {
 	var m message
 	m.UserMapper = rdx
 	m.MessageMapper = rdx
+	m.RoomMapper = rdx
+	m.spreaders = make([]string, len(cfg.SpreaderAddresses))
+	copy(m.spreaders, cfg.SpreaderAddresses)
+	m.client = http.DefaultClient
 
 	http.Handle("/message/send", httptransport.NewServer(
 		m.MakeSendEndpoint(),

@@ -14,7 +14,7 @@ import (
 
 // UserService interface user routes.
 type UserService interface {
-	Create(context.Context, bc.ID) (bc.ID, error)
+	Create(context.Context, userRequest) (bc.ID, error)
 }
 
 type user struct {
@@ -22,22 +22,28 @@ type user struct {
 	bc.UserMapper
 }
 
+type userRequest struct {
+	RoomID bc.ID
+	Addr   string
+}
+
+// TODO use something smarter instead than rand.
 func (u user) pickPool(pools []bc.ID) bc.ID {
 	return pools[rand.Intn(len(pools))]
 }
 
-func (u user) Create(_ context.Context, roomID bc.ID) (bc.ID, error) {
-	room, err := u.GetRoom(bc.RoomSubset{ID: roomID})
+func (u user) Create(_ context.Context, ur userRequest) (bc.ID, error) {
+	room, err := u.GetRoom(bc.RoomSubset{ID: ur.RoomID})
 	if err != nil {
 		return bc.ID{}, err
 	}
-	user := bc.User{ID: bc.NewID()}
-	return user.ID, u.AddUser(user, roomID, u.pickPool(room.Pools))
+	user := bc.User{ID: bc.NewID(), Addr: ur.Addr}
+	return user.ID, u.AddUser(user, ur.RoomID, u.pickPool(room.Pools))
 }
 
 func (u user) MakeCreateEndpoint() endpoint.Endpoint {
 	return func(ctx context.Context, request interface{}) (interface{}, error) {
-		req := request.(bc.ID)
+		req := request.(userRequest)
 		return u.Create(ctx, req)
 	}
 }
@@ -47,7 +53,11 @@ func (u user) DecodeReq(_ context.Context, req *http.Request) (interface{}, erro
 	if err := json.NewDecoder(req.Body).Decode(&request); err != nil {
 		return nil, err
 	}
-	return ulid.Parse(request)
+	id, err := ulid.Parse(request)
+	if err != nil {
+		return nil, err
+	}
+	return userRequest{RoomID: id, Addr: req.RemoteAddr}, nil
 }
 
 func (u user) EncodeResp(ctx context.Context, w http.ResponseWriter, response interface{}) error {

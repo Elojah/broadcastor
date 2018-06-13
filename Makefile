@@ -10,8 +10,7 @@ GOLINT    = gometalinter
 
 CLIENT    = client
 API       = api
-BROKER    = broker
-RESPONDER = responder
+SPREADER  = spreader
 
 FBSDIR    = .
 
@@ -21,7 +20,7 @@ M         = $(shell printf "\033[0;35m▶\033[0m")
 
 .PHONY: all
 
-all: client api broker responder
+all: client api spreader
 
 # Executables
 client:
@@ -40,21 +39,13 @@ api:
 		-o ../../bin/$(PACKAGE)_$(API)_$(VERSION)
 	$Q cp bin/$(PACKAGE)_$(API)_$(VERSION) bin/$(PACKAGE)_$(API)
 
-broker:
-	$(info $(M) building executable broker…) @ ## Build program binary
-	$Q cd cmd/$(BROKER) &&  $(GO) build \
+spreader:
+	$(info $(M) building executable spreader…) @ ## Build program binary
+	$Q cd cmd/$(SPREADER) &&  $(GO) build \
 		-tags release \
 		-ldflags '-X $(PACKAGE)/cmd.Version=$(VERSION) -X $(PACKAGE)/cmd.BuildDate=$(DATE)' \
-		-o ../../bin/$(PACKAGE)_$(BROKER)_$(VERSION)
-	$Q cp bin/$(PACKAGE)_$(BROKER)_$(VERSION) bin/$(PACKAGE)_$(BROKER)
-
-responder:
-	$(info $(M) building executable responder…) @ ## Build program binary
-	$Q cd cmd/$(RESPONDER) &&  $(GO) build \
-		-tags release \
-		-ldflags '-X $(PACKAGE)/cmd.Version=$(VERSION) -X $(PACKAGE)/cmd.BuildDate=$(DATE)' \
-		-o ../../bin/$(PACKAGE)_$(RESPONDER)_$(VERSION)
-	$Q cp bin/$(PACKAGE)_$(RESPONDER)_$(VERSION) bin/$(PACKAGE)_$(RESPONDER)
+		-o ../../bin/$(PACKAGE)_$(SPREADER)_$(VERSION)
+	$Q cp bin/$(PACKAGE)_$(SPREADER)_$(VERSION) bin/$(PACKAGE)_$(SPREADER)
 
 # Dependencies
 .PHONY: dep

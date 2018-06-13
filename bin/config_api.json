@@ -1,5 +1,10 @@
 {
     "address": "localhost:8080",
+    "npools": 3,
+    "spreader_addresses": [
+        "localhost:8081",
+        "localhost:8082"
+    ],
     "redis": {
         "addr": "127.0.0.1:6379",
         "password": "secret",

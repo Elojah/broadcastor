@@ -10,9 +10,10 @@ import (
 
 // Config is the configuration object for API service.
 type Config struct {
-	Address string
-	NPools  uint
-	Redis   redis.Config
+	Address           string
+	NPools            uint
+	SpreaderAddresses []string
+	Redis             redis.Config
 }
 
 // NewConfig creates a new Config initialized from filepath in JSON format.
@@ -34,6 +35,9 @@ func (c Config) Check() error {
 	}
 	if c.NPools == 0 {
 		return errors.New("missing pool number per room")
+	}
+	if len(c.SpreaderAddresses) == 0 {
+		return errors.New("missing spreader addresses")
 	}
 	return c.Redis.Check()
 }

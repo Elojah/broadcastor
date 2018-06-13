@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"math/rand"
 	"net/http"
 
 	"github.com/go-kit/kit/endpoint"
@@ -18,9 +20,17 @@ type MessageService interface {
 type message struct {
 	bc.UserMapper
 	bc.MessageMapper
+	bc.RoomMapper
+
+	spreaders []string
+	client    *http.Client
 }
 
 func (m message) Send(_ context.Context, msg bc.Message) error {
+	room, err := m.GetRoom(bc.RoomSubset{ID: msg.RoomID})
+	if err != nil {
+		return err
+	}
 	if _, err := m.GetUser(bc.UserSubset{
 		ID:     msg.UserID,
 		RoomID: msg.RoomID,
@@ -28,7 +38,23 @@ func (m message) Send(_ context.Context, msg bc.Message) error {
 		return err
 	}
 	msg.ID = bc.NewID()
-	return m.CreateMessage(msg)
+	if err := m.CreateMessage(msg); err != nil {
+		return err
+	}
+
+	for _, pool := range room.Pools {
+		go func(pool bc.ID) {
+			raw, _ := json.Marshal(bc.MessageRequest{
+				MessageID: msg.ID,
+				RoomID:    room.ID,
+				PoolID:    pool,
+			})
+			// TODO use something smarter instead than rand.
+			address := m.spreaders[rand.Intn(len(m.spreaders))]
+			m.client.Post(address+"/message/send", "application/json; charset=utf-8", bytes.NewBuffer(raw))
+		}(pool)
+	}
+	return nil
 }
 
 func (m message) MakeSendEndpoint() endpoint.Endpoint {

@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/oklog/ulid"
-
 	bc "github.com/elojah/broadcastor"
 )
 
@@ -20,7 +18,7 @@ func (s *Service) AddUser(user bc.User, roomID bc.ID, poolID bc.ID) error {
 		return err
 	}
 	return s.Set(
-		userkey+roomID.String()+":"+poolID.String()+":"+user.ID.String(),
+		userkey+roomID.String()+":"+poolID.String()+":"+user.ID.String()+":"+user.Addr,
 		raw,
 		0,
 	).Err()
@@ -28,9 +26,16 @@ func (s *Service) AddUser(user bc.User, roomID bc.ID, poolID bc.ID) error {
 
 // GetUser implements UserMapper with redis.
 func (s *Service) GetUser(subset bc.UserSubset) (bc.User, error) {
-	val, err := s.Get(
-		userkey + subset.RoomID.String() + ":" + subset.PoolID.String() + ":" + subset.ID.String(),
+	keys, err := s.Keys(
+		userkey + subset.RoomID.String() + ":" + subset.PoolID.String() + ":" + subset.ID.String() + ":*",
 	).Result()
+	if err != nil {
+		return bc.User{}, err
+	}
+	if len(keys) == 0 {
+		return bc.User{}, bc.ErrNotFound
+	}
+	val, err := s.Get(keys[0]).Result()
 	if err != nil {
 		return bc.User{}, err
 	}
@@ -42,7 +47,7 @@ func (s *Service) GetUser(subset bc.UserSubset) (bc.User, error) {
 // RemoveUser implements UserMapper with redis.
 func (s *Service) RemoveUser(user bc.User, roomID bc.ID) error {
 	keys, err := s.Keys(
-		userkey + roomID.String() + ":*:" + user.ID.String(),
+		userkey + roomID.String() + ":*:" + user.ID.String() + ":*",
 	).Result()
 	if err != nil {
 		return err
@@ -55,19 +60,19 @@ func (s *Service) RemoveUser(user bc.User, roomID bc.ID) error {
 	return nil
 }
 
-// ListUserIDs implements UserMapper with redis.
-func (s *Service) ListUserIDs(subset bc.UserSubset) ([]bc.ID, uint64, error) {
+// ListUserAddr implements UserMapper with redis.
+func (s *Service) ListUserAddr(subset bc.UserSubset) ([]string, uint64, error) {
 	keys, cursor, err := s.Scan(
 		subset.Cursor,
-		userkey+subset.RoomID.String()+":"+subset.PoolID.String(),
+		userkey+subset.RoomID.String()+":"+subset.PoolID.String()+":*",
 		subset.Count,
 	).Result()
 	if err != nil {
 		return nil, 0, err
 	}
-	users := make([]bc.ID, len(keys))
+	addrs := make([]string, len(keys))
 	for i, key := range keys {
-		users[i] = ulid.MustParse(strings.Split(key, ":")[3])
+		addrs[i] = strings.Split(key, ":")[4]
 	}
-	return users, cursor, nil
+	return addrs, cursor, nil
 }

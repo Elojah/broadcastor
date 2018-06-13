@@ -32,6 +32,8 @@ func run(filepath string) {
 	m.UserMapper = rdx
 	m.RoomMapper = rdx
 	m.MessageMapper = rdx
+	m.client = http.DefaultClient
+	m.count = cfg.Count
 
 	http.Handle("/message/send", httptransport.NewServer(
 		m.MakeSendEndpoint(),

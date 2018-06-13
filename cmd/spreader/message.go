@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -19,27 +20,52 @@ type message struct {
 	bc.UserMapper
 	bc.MessageMapper
 	bc.RoomMapper
+
+	client *http.Client
+	count  int64
 }
 
-func (m message) Send(_ context.Context, msg bc.Message) error {
-	if _, err := m.GetUser(bc.UserSubset{
-		ID:     msg.UserID,
-		RoomID: msg.RoomID,
-	}); err != nil {
+func (m message) Send(_ context.Context, mr bc.MessageRequest) error {
+	msg, err := m.GetMessage(bc.MessageSubset{ID: mr.MessageID})
+	if err != nil {
 		return err
 	}
-	msg.ID = bc.NewID()
-	return m.CreateMessage(msg)
+	raw, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+
+	var addrs []string
+	var cursor uint64
+	for {
+		addrs, cursor, err = m.ListUserAddr(bc.UserSubset{
+			Cursor: cursor,
+			Count:  m.count,
+			RoomID: mr.RoomID,
+			PoolID: mr.PoolID,
+		})
+		if err != nil {
+			return err
+		}
+		if cursor == 0 {
+			return nil
+		}
+		go func(addrs ...string) {
+			for _, addr := range addrs {
+				m.client.Post(addr+"/message/receive", "application/json; charset=utf-8", bytes.NewBuffer(raw))
+			}
+		}(addrs...)
+	}
 }
 
 func (m message) MakeSendEndpoint() endpoint.Endpoint {
 	return func(ctx context.Context, request interface{}) (interface{}, error) {
-		return nil, m.Send(ctx, request.(bc.Message))
+		return nil, m.Send(ctx, request.(bc.MessageRequest))
 	}
 }
 
 func (m message) DecodeReq(_ context.Context, req *http.Request) (interface{}, error) {
-	var request bc.Message
+	var request bc.MessageRequest
 	err := json.NewDecoder(req.Body).Decode(&request)
 	return request, err
 }
