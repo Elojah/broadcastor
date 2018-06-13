@@ -21,7 +21,7 @@ type message struct{}
 
 func (m message) Receive(_ context.Context, msg bc.Message) error {
 	fmt.Printf(
-		"%s | %s\n",
+		"%s | %s",
 		time.Unix(int64(msg.ID.Time()), 0).Format("Mon Jan 2 15:04:05 MST 2006"),
 		msg.Content,
 	)
