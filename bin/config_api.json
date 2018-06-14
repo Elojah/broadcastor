@@ -3,11 +3,11 @@
     "client_port": "4242",
     "npools": 3,
     "spreader_addresses": [
-        "http://localhost:5000",
-        "http://localhost:5001"
+        "http://spreader0:5000",
+        "http://spreader1:5000"
     ],
     "redis": {
-        "addr": "localhost:6379",
+        "addr": "redis:6379",
         "password": "secret",
         "db": 0
     }

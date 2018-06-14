@@ -4,14 +4,30 @@ services:
   # Redis
   redis:
     build: docker/redis
-    network_mode: host
+    ports:
+      - 6379:6379
 
   # API
   api:
     build:
       context: .
       dockerfile: docker/api/Dockerfile
-    network_mode: host
+    ports:
+      - 8080:8080
+    links:
+      - redis
+      - spreader0
+      - spreader1
+
+  # Client
+  client:
+    build:
+      context: .
+      dockerfile: docker/client/Dockerfile
+    ports:
+      - 4242:4242
+    links:
+      - api
 
   # Spreader 0
   spreader0:
@@ -19,7 +35,10 @@ services:
       context: .
       dockerfile: docker/spreader/Dockerfile
     entrypoint: ["bin/bc_spreader", "-c", "bin/config_spreader_0.json"]
-    network_mode: host
+    expose:
+      - 5000
+    links:
+      - redis
 
   # Spreader 1
   spreader1:
@@ -27,4 +46,7 @@ services:
       context: .
       dockerfile: docker/spreader/Dockerfile
     entrypoint: ["bin/bc_spreader", "-c", "bin/config_spreader_1.json"]
-    network_mode: host
+    expose:
+      - 5000
+    links:
+      - redis
