@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"time"
 
@@ -17,14 +16,13 @@ type MessageService interface {
 	Receive(context.Context, bc.Message) error
 }
 
-type message struct{}
+type message struct {
+	callback func(string)
+}
 
 func (m message) Receive(_ context.Context, msg bc.Message) error {
-	fmt.Printf(
-		"%s | %s",
-		time.Unix(int64(msg.ID.Time()), 0).Format("Mon Jan 2 15:04:05 MST 2006"),
-		msg.Content,
-	)
+	m.callback(time.Unix(int64(msg.ID.Time()/1000), 0).Format("Mon Jan 2 15:04:05 MST 2006") +
+		" | " + msg.Content)
 	return nil
 }
 

@@ -61,6 +61,10 @@ func (u user) DecodeReq(_ context.Context, req *http.Request) (interface{}, erro
 		return nil, err
 	}
 	addrs := strings.Split(req.RemoteAddr, ":")
+	// HACK for localhost tests
+	if addrs[0] == "[" {
+		addrs[0] = "localhost"
+	}
 	addr := strings.Join([]string{addrs[0], u.clientPort}, ":")
 	return userRequest{RoomID: id, Addr: addr}, nil
 }

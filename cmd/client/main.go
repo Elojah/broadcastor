@@ -20,7 +20,12 @@ func run(filepath string) {
 		return
 	}
 
+	var c console
+	c.serverAddr = cfg.ServerAddress
+	c.client = http.DefaultClient
+
 	var m message
+	m.callback = c.addMessage
 	http.Handle("/message/receive", httptransport.NewServer(
 		m.MakeReceiveEndpoint(),
 		m.DecodeReq,
@@ -29,10 +34,7 @@ func run(filepath string) {
 
 	go func() { log.Fatal(http.ListenAndServe(cfg.ClientAddress, nil)) }()
 
-	var c console
-	c.serverAddr = cfg.ServerAddress
-	c.client = http.DefaultClient
-	c.read()
+	c.start()
 }
 
 func main() {
