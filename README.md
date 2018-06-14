@@ -15,10 +15,12 @@ local
 docker-compose
 ```
 # Run redis, API and 2 spreaders
-> docker-compose up -d --scale client=0
+> docker-compose up -d redis spreader0 spreader1 api
 
-# Run the client interactive
-> docker-compose run --rm client
+# Run clients interactive
+> docker-compose run --rm client_0
+> docker-compose run --rm client_1
+> docker-compose run --rm client_2
 ```
 
 Client commands
