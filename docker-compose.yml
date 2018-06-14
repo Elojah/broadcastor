@@ -28,6 +28,8 @@ services:
       - 4242:4242
     links:
       - api
+    stdin_open: true
+    tty: true
 
   # Spreader 0
   spreader0:

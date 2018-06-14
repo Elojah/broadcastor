@@ -15,10 +15,10 @@ local
 docker-compose
 ```
 # Run redis, API and 2 spreaders
-> docker-compose -d
+> docker-compose up -d --scale client=0
 
 # Run the client interactive
-> docker run -it broadcastor_client
+> docker-compose run --rm client
 ```
 
 Client commands
