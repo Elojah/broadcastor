@@ -87,6 +87,20 @@ func (c *console) start() {
 		ui.Render(c.writebox)
 	})
 
+	ui.Handle("/sys/kbd/<space>", func(_ ui.Event) {
+		c.writebox.Text += " "
+		ui.Render(c.writebox)
+	})
+
+	ui.Handle("/sys/kbd/C-8", func(_ ui.Event) {
+		lenTxt := len(c.writebox.Text)
+		if lenTxt == 0 {
+			return
+		}
+		c.writebox.Text = c.writebox.Text[:lenTxt-1]
+		ui.Render(c.writebox)
+	})
+
 	ui.Render(c.msgbox, c.writebox)
 	ui.Loop()
 }
@@ -169,6 +183,7 @@ func (c *console) newRoom() {
 	}
 	defer resp.Body.Close()
 	c.addMessage(roomID.String())
+	c.currentRoom = roomID
 }
 
 func (c *console) listRooms() {
@@ -198,14 +213,20 @@ func (c *console) listRooms() {
 }
 
 func (c *console) connect(tokens []string) {
+	var roomID bc.ID
 	if len(tokens) < 2 {
-		c.addMessage("missing room ID")
-		return
-	}
-	roomID, err := ulid.Parse(tokens[1])
-	if err != nil {
-		c.addMessage("invalid room ID")
-		return
+		if c.currentRoom.Time() == 0 {
+			c.addMessage("missing room ID")
+			return
+		}
+		roomID = c.currentRoom
+	} else {
+		var err error
+		roomID, err = ulid.Parse(tokens[1])
+		if err != nil {
+			c.addMessage("invalid room ID")
+			return
+		}
 	}
 	raw, err := json.Marshal(roomID)
 	if err != nil {

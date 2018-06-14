@@ -2,6 +2,7 @@ package redis
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/oklog/ulid"
@@ -28,6 +29,7 @@ func (s *Service) CreateRoom(room bc.Room) error {
 
 // GetRoom implements RoomMapper with redis.
 func (s *Service) GetRoom(subset bc.RoomSubset) (bc.Room, error) {
+	fmt.Println(roomkey + subset.ID.String())
 	val, err := s.Get(
 		roomkey + subset.ID.String(),
 	).Result()

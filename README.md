@@ -4,6 +4,8 @@ Scalable message broadcaster
 ## Usage
 local
 ```
+> docker-compose up -d redis
+# in configuration files, all references to `redis:6379` must be change to `localhost:6379`
 > make dep
 > make
 > ./bin/bc_spreader -c bin config_spreader_0.json
@@ -27,9 +29,15 @@ Client commands
 ```
 /rooms -> list rooms
 /newroom -> create a new room
-/connect ROOM_ID -> connect to a room ROOM_ID as a new user
+/connect ROOM_ID -> connect to a room ROOM_ID as a new user, or last room created
 ```
-
+e.g:
+```
+/newroom
+01CFZFPPF7PGQK1RSJEE15GYQD
+/connect
+connected with user ID: 01CFZFPRCPDB09G283JRV3CRFJ
+```
 ## TODO
 - [ ] Set expiration time for user (set with ping time from client to keep alive)
 - [ ] Set expiration time for messages
