@@ -32,7 +32,7 @@ func run(filepath string) {
 	var c console
 	c.serverAddr = cfg.ServerAddress
 	c.client = http.DefaultClient
-	c.read()
+	c.start()
 }
 
 func main() {
