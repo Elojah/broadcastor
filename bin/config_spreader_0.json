@@ -1,5 +1,5 @@
 {
-    "address": "localhost:5000",
+    "address": "0.0.0.0:5000",
     "count": 20,
     "redis": {
         "addr": "redis:6379",
