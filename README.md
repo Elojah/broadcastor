@@ -23,6 +23,7 @@ docker-compose
 > docker-compose run --rm client_0
 > docker-compose run --rm client_1
 > docker-compose run --rm client_2
+# first frame may be not rendered correctly, just press space to render correctly
 ```
 
 Client commands
@@ -31,12 +32,15 @@ Client commands
 /newroom -> create a new room
 /connect ROOM_ID -> connect to a room ROOM_ID as a new user, or last room created
 ```
+
 e.g:
 ```
 /newroom
 01CFZFPPF7PGQK1RSJEE15GYQD
 /connect
 connected with user ID: 01CFZFPRCPDB09G283JRV3CRFJ
+test
+Thu Jun 14 16:02:56 UTC 2018 | test
 ```
 ## TODO
 - [ ] Set expiration time for user (set with ping time from client to keep alive)
