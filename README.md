@@ -9,7 +9,7 @@ local
 > ./bin/bc_spreader -c bin config_spreader_0.json
 > ./bin/bc_spreader -c bin config_spreader_1.json
 > ./bin/bc_api -c bin/config_api.json
-> ./bin/bc_client -c bin/config_client.json
+> ./bin/bc_client -c bin/config_client_0.json
 ```
 
 docker-compose
