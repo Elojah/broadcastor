@@ -173,3 +173,8 @@ linters:
     # Log a warning if an exclusion rule is unused.
     # Default: false
     warn-unused: true
+    rules:
+      # The examples are programs whose job is to print what happens.
+      - path: ^examples/
+        linters:
+          - forbidigo

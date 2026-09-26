@@ -32,7 +32,21 @@ if err := b.Unsubscribe(ctx, id); err != nil {
 }
 ```
 
-See the [package documentation](https://pkg.go.dev/github.com/elojah/broadcastor) for runnable examples.
+### Examples
+
+[`examples/`](examples) holds small runnable programs, from simple to complex. Run one with
+`go run ./examples/01-basic`.
+
+1. [`01-basic`](examples/01-basic/main.go): one subscriber, `Subscribe`, `Broadcast`, `Unsubscribe`.
+2. [`02-fanout`](examples/02-fanout/main.go): several subscribers, and what `Broadcast` returns.
+3. [`03-errors`](examples/03-errors/main.go): `WithSubscriberErrorHandler` and `*HandleError`.
+4. [`04-recover`](examples/04-recover/main.go): `WithSubscriberRecover` and `*PanicError`.
+5. [`05-unsubscribe`](examples/05-unsubscribe/main.go): a subscriber unsubscribing itself from `handle`.
+6. [`06-buffer`](examples/06-buffer/main.go): `WithSubscriberBuffer`.
+7. [`07-timeout`](examples/07-timeout/main.go): `WithMessageTimeout`, `WithMessageErrorHandler` and `*TimeoutError`.
+8. [`08-async`](examples/08-async/main.go): `WithMessageAsync`.
+9. [`09-non-blocking`](examples/09-non-blocking/main.go): `WithMessageNonBlocking` and `*DroppedError`.
+10. [`10-defaults`](examples/10-defaults/main.go): `WithSubscriberDefaultMessageOptions`, overridden by `WithMessageSync`.
 
 ## Delivery
 

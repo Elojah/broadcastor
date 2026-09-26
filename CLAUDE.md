@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-`github.com/elojah/broadcastor` is a single-package Go library (package `broadcastor`, no `cmd/`) that provides a generic in-process fan-out: one `Broadcast` call hands a message to every subscriber's `handle` function. Its only dependency is `github.com/google/uuid`. `go.mod` requires Go 1.26.1.
+`github.com/elojah/broadcastor` is a single-package Go library (package `broadcastor`, no `cmd/`, plus runnable programs under `examples/`) that provides a generic in-process fan-out: one `Broadcast` call hands a message to every subscriber's `handle` function. Its only dependency is `github.com/google/uuid`. `go.mod` requires Go 1.26.1.
 
 ## Commands
 
@@ -35,4 +35,4 @@ Lint uses the committed `.golangci.yml`: `default: all` minus a disable list, th
 
 Most tests run inside a `synctest` bubble. There, a subscriber goroutine that never ends (because its channel was never closed, or because it is stuck) fails the test, and `synctest.Wait()` after `Unsubscribe` waits until the subscriber has processed everything. Every wait is bounded by `deadlockTimeout`, so a deadlock fails the test instead of hanging.
 
-The runnable examples (`example_test.go`) run in real time, not in a bubble, so their output must not depend on scheduling: they synchronise on channels or a `WaitGroup`, or use `// Unordered output:`. `bench_test.go` holds the benchmarks. Each `BenchmarkBroadcast` op waits until every subscriber has handled the message, which keeps async from piling up goroutines.
+The examples (`examples/NN-name/main.go`, numbered from simple to complex, listed in the README) are `main` programs, each with a `main_test.go` whose `Example()` runs `main()` and checks its output. They run in real time, not in a bubble, so their output must not depend on scheduling: they synchronise on channels or a `WaitGroup`, or use `// Unordered output:`. A slow `handle` waits on a `release` channel rather than sleeping. `forbidigo` is excluded for `examples/` in `.golangci.yml`, since they print. `bench_test.go` holds the benchmarks. Each `BenchmarkBroadcast` op waits until every subscriber has handled the message, which keeps async from piling up goroutines.
