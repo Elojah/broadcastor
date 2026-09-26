@@ -37,6 +37,12 @@ test: ## Run tests with race detector
 	$(info $(M) running go test) @
 	$Q $(GO) test -cover -race -v ./...
 
+# Bench
+.PHONY: bench
+bench: ## Run benchmarks
+	$(info $(M) running go test -bench) @
+	$Q $(GO) test -run '^$$' -bench . -benchmem ./...
+
 ## Helpers
 
 .PHONY: go-version

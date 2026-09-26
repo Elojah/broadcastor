@@ -2,6 +2,7 @@ package broadcastor
 
 import (
 	"context"
+	"runtime/debug"
 	"sync/atomic"
 
 	"github.com/google/uuid"
@@ -16,6 +17,9 @@ type subscriber[T any] struct {
 
 	// errorHandler is called with every error handle returns, or nil to discard them.
 	errorHandler func(ctx context.Context, err error)
+
+	// recover makes a panic in handle a *PanicError instead of a crash.
+	recover bool
 
 	// refs is 1 for the subscription itself, plus 1 for each Broadcast currently sending on ch. Whoever drops it to 0
 	// closes ch, so ch is never closed while a Broadcast can still send on it.
@@ -52,10 +56,21 @@ func (s *subscriber[T]) report(ctx context.Context, m message[T], err error) {
 	}
 }
 
-// send hands m to the subscriber, or gives up once ctx is done or m's timeout runs out, then drops the reference the
-// caller acquired.
-func (s *subscriber[T]) send(ctx context.Context, m message[T]) {
+// send hands m to the subscriber and reports whether it took it. It gives up once ctx is done or m's timeout runs out,
+// or right away for a non-blocking message, then drops the reference the caller acquired.
+func (s *subscriber[T]) send(ctx context.Context, m message[T]) bool {
 	defer s.release()
+
+	if m.delivery == deliveryNonBlocking {
+		select {
+		case s.ch <- m:
+			return true
+		default:
+			s.report(ctx, m, &DroppedError[T]{SubscriberID: s.id, Message: m.value})
+
+			return false
+		}
+	}
 
 	sendCtx := ctx
 	if m.timeout > 0 {
@@ -66,16 +81,38 @@ func (s *subscriber[T]) send(ctx context.Context, m message[T]) {
 
 	select {
 	case s.ch <- m:
+		return true
 	case <-sendCtx.Done():
 		// ctx, not sendCtx, so that the error handler is not handed a ctx that the timeout alone has ended.
 		s.report(ctx, m, &TimeoutError[T]{SubscriberID: s.id, Message: m.value, Err: sendCtx.Err()})
+
+		return false
 	}
 }
 
 func (s *subscriber[T]) consume(ctx context.Context, handle func(ctx context.Context, msg T) error) {
 	for m := range s.ch {
-		if err := handle(ctx, m.value); err != nil {
-			s.report(ctx, m, &HandleError[T]{SubscriberID: s.id, Message: m.value, Err: err})
+		// Reported here rather than from process, so that a panic in an error handler is not recovered.
+		if err := s.process(ctx, handle, m.value); err != nil {
+			s.report(ctx, m, err)
 		}
 	}
+}
+
+// process calls handle and returns a *HandleError if it fails, or a *PanicError if it panics and the subscriber
+// recovers.
+func (s *subscriber[T]) process(ctx context.Context, handle func(ctx context.Context, msg T) error, value T) (err error) {
+	if s.recover {
+		defer func() {
+			if v := recover(); v != nil {
+				err = &PanicError[T]{SubscriberID: s.id, Message: value, Value: v, Stack: debug.Stack()}
+			}
+		}()
+	}
+
+	if handleErr := handle(ctx, value); handleErr != nil {
+		return &HandleError[T]{SubscriberID: s.id, Message: value, Err: handleErr}
+	}
+
+	return nil
 }
