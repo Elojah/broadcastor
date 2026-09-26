@@ -58,8 +58,8 @@ func TestBroadcast_NoSubscribers(t *testing.T) {
 	b.Broadcast(t.Context(), 1)
 }
 
-// The error handler is given every error process returns, in order, with the subscriber and the message it failed on,
-// and both process and the error handler are given the ctx that was passed to Subscribe.
+// The error handler is given every error handle returns, in order, with the subscriber and the message it failed on,
+// and both handle and the error handler are given the ctx that was passed to Subscribe.
 func TestWithErrorHandler(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		type key struct{}
@@ -72,9 +72,9 @@ func TestWithErrorHandler(t *testing.T) {
 		b := broadcastor.NewBroadcastor[int]()
 		errs := &recorder[*broadcastor.HandleError[int]]{}
 		id, err := b.Subscribe(ctx, func(ctx context.Context, msg int) error {
-			checkCtx(ctx, "process")
+			checkCtx(ctx, "handle")
 			if msg%2 == 1 {
-				return processError(msg)
+				return handleError(msg)
 			}
 			return nil
 		}, broadcastor.WithSubscriberErrorHandler[int](func(ctx context.Context, err error) {
@@ -106,24 +106,24 @@ func TestWithErrorHandler(t *testing.T) {
 				t.Errorf("error %d is for subscriber %s and message %d, want %s and %d",
 					i, err.SubscriberID, err.Message, id, msg)
 			}
-			if !errors.Is(err, processError(msg)) {
-				t.Errorf("error %d = %v, want it to wrap %v", i, err, processError(msg))
+			if !errors.Is(err, handleError(msg)) {
+				t.Errorf("error %d = %v, want it to wrap %v", i, err, handleError(msg))
 			}
-			if s := err.Error(); !strings.Contains(s, id.String()) || !strings.Contains(s, processError(msg).Error()) {
-				t.Errorf("error %q does not mention both the subscriber %s and the error from process", s, id)
+			if s := err.Error(); !strings.Contains(s, id.String()) || !strings.Contains(s, handleError(msg).Error()) {
+				t.Errorf("error %q does not mention both the subscriber %s and the error from handle", s, id)
 			}
 		}
 	})
 }
 
-// Without an error handler, errors from process are discarded, and they do not hold the subscriber up.
+// Without an error handler, errors from handle are discarded, and they do not hold the subscriber up.
 func TestSubscribe_ErrorsWithoutHandler(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b := broadcastor.NewBroadcastor[int]()
 		r := &recorder[int]{}
 		id := subscribe(t, b, func(_ context.Context, msg int) error {
 			r.record(msg)
-			return processError(msg)
+			return handleError(msg)
 		})
 
 		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
@@ -208,7 +208,7 @@ func TestUnsubscribe_StopsDelivery(t *testing.T) {
 	})
 }
 
-// A subscriber stuck in process holds Broadcast up only until ctx is done, and the messages Broadcast gave up on are
+// A subscriber stuck in handle holds Broadcast up only until ctx is done, and the messages Broadcast gave up on are
 // dropped rather than delivered late.
 func TestBroadcast_ContextUnblocksStuckSubscriber(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
@@ -244,9 +244,9 @@ func TestBroadcast_ContextUnblocksStuckSubscriber(t *testing.T) {
 	})
 }
 
-// A subscriber is unsubscribed while it is stuck in process and a Broadcast is waiting to send to it. That Broadcast
+// A subscriber is unsubscribed while it is stuck in handle and a Broadcast is waiting to send to it. That Broadcast
 // can only give up once ctx is done, and it must still close the channel on its way out, or the subscriber's goroutine
-// never ends once process returns.
+// never ends once handle returns.
 func TestBroadcast_ContextDoneAfterUnsubscribe(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b := broadcastor.NewBroadcastor[int]()
@@ -277,8 +277,8 @@ func TestBroadcast_ContextDoneAfterUnsubscribe(t *testing.T) {
 	})
 }
 
-// A process unsubscribes its own subscription while a Broadcast is waiting to send to it. The subscriber only reads
-// again once process returns, so Unsubscribe must not wait for that Broadcast. The Broadcast then delivers its message
+// handle unsubscribes its own subscription while a Broadcast is waiting to send to it. The subscriber only reads
+// again once handle returns, so Unsubscribe must not wait for that Broadcast. The Broadcast then delivers its message
 // and closes the channel.
 func TestUnsubscribe_SelfDuringBroadcast(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
@@ -397,7 +397,7 @@ func TestWithSubscriberBuffer(t *testing.T) {
 		const buffer = 3
 		b := broadcastor.NewBroadcastor[int]()
 		stuck := &recorder[int]{hold: make(chan struct{})}
-		id := subscribe(t, b, stuck.process, broadcastor.WithSubscriberBuffer[int](buffer))
+		id := subscribe(t, b, stuck.handle, broadcastor.WithSubscriberBuffer[int](buffer))
 		b.Broadcast(t.Context(), 0)
 		synctest.Wait() // stuck is now processing 0 and not reading
 
@@ -464,7 +464,7 @@ func TestWithMessageAsync_ContextDone(t *testing.T) {
 		b := broadcastor.NewBroadcastor[int]()
 		stuck := &recorder[int]{hold: make(chan struct{})}
 		errs := &recorder[error]{}
-		id := subscribe(t, b, stuck.process, broadcastor.WithSubscriberErrorHandler[int](func(_ context.Context, err error) {
+		id := subscribe(t, b, stuck.handle, broadcastor.WithSubscriberErrorHandler[int](func(_ context.Context, err error) {
 			errs.record(err)
 		}))
 		b.Broadcast(t.Context(), 0)
@@ -502,7 +502,7 @@ func TestWithMessageErrorHandler(t *testing.T) {
 		b := broadcastor.NewBroadcastor[int]()
 		subscriberErrs := &recorder[int]{}
 		failingID, err := b.Subscribe(ctx, func(_ context.Context, msg int) error {
-			return processError(msg)
+			return handleError(msg)
 		}, broadcastor.WithSubscriberErrorHandler[int](recordFailures(t, subscriberErrs)))
 		if err != nil {
 			t.Fatalf("Subscribe: %v", err)
@@ -523,9 +523,9 @@ func TestWithMessageErrorHandler(t *testing.T) {
 		got := messageErrs.messages()
 		var handleErr *broadcastor.HandleError[int]
 		if len(got) != 1 || !errors.As(got[0], &handleErr) || handleErr.SubscriberID != failingID ||
-			handleErr.Message != 1 || !errors.Is(handleErr, processError(1)) {
+			handleErr.Message != 1 || !errors.Is(handleErr, handleError(1)) {
 			t.Errorf("message error handler got %v, want a single *HandleError for subscriber %s and message 1 wrapping %v",
-				got, failingID, processError(1))
+				got, failingID, handleError(1))
 		}
 		if got, want := subscriberErrs.messages(), []int{1, 2}; !slices.Equal(got, want) {
 			t.Errorf("subscriber error handler got errors for messages %v, want %v", got, want)
@@ -571,7 +571,7 @@ func TestWithSubscriberDefaultMessageOptions_Async(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b := broadcastor.NewBroadcastor[int]()
 		stuck := &recorder[int]{hold: make(chan struct{})}
-		stuckID := subscribe(t, b, stuck.process,
+		stuckID := subscribe(t, b, stuck.handle,
 			broadcastor.WithSubscriberDefaultMessageOptions(broadcastor.WithMessageAsync[int]()))
 		reader, readerID := record(t, b)
 		b.Broadcast(t.Context(), 0)
@@ -605,7 +605,7 @@ func TestWithSubscriberDefaultMessageOptions_ErrorHandlerOverridden(t *testing.T
 		b := broadcastor.NewBroadcastor[int]()
 		defaults, override := &recorder[int]{}, &recorder[int]{}
 		id := subscribe(t, b, func(_ context.Context, msg int) error {
-			return processError(msg)
+			return handleError(msg)
 		}, broadcastor.WithSubscriberDefaultMessageOptions(
 			broadcastor.WithMessageErrorHandler[int](recordFailures(t, defaults))))
 
@@ -670,7 +670,7 @@ func TestWithSubscriberTimeout(t *testing.T) {
 		b := broadcastor.NewBroadcastor[int]()
 		stuck := &recorder[int]{hold: make(chan struct{})}
 		timeouts := &recorder[int]{}
-		id := subscribe(t, b, stuck.process, broadcastor.WithSubscriberTimeout[int](time.Second),
+		id := subscribe(t, b, stuck.handle, broadcastor.WithSubscriberTimeout[int](time.Second),
 			broadcastor.WithSubscriberErrorHandler[int](recordTimeouts(t, timeouts)))
 		b.Broadcast(t.Context(), 0) // stuck is now processing 0 and not reading
 
@@ -829,8 +829,8 @@ func TestUnsubscribe_RacesBroadcastPickingUpChannel(t *testing.T) {
 	}
 }
 
-// A process leaves both of its consumer's subscriptions while a Broadcast is waiting to send to the first one, then
-// the subscriber drains that Broadcast's message. The subscriber is not reading while process runs, so Unsubscribe must
+// handle leaves both of its consumer's subscriptions while a Broadcast is waiting to send to the first one, then
+// the subscriber drains that Broadcast's message. The subscriber is not reading while handle runs, so Unsubscribe must
 // never wait on a Broadcast, not even indirectly through a lock held by another Broadcast that is waiting on this one.
 // This runs in real time rather than in a synctest bubble: a goroutine stuck on a sync.Mutex is not durably blocked, so
 // the bubble would hang instead of failing.
@@ -839,14 +839,14 @@ func TestUnsubscribe_SeveralThenDrain(t *testing.T) {
 	b := broadcastor.NewBroadcastor[int]()
 
 	proceed := make(chan struct{})
-	processDone := make(chan struct{})
+	handleDone := make(chan struct{})
 	secondBroadcastDone := make(chan struct{})
 	var firstID, secondID uuid.UUID
 	firstID = subscribe(t, b, func(ctx context.Context, msg int) error {
 		if msg != 1 {
 			return nil
 		}
-		defer close(processDone)
+		defer close(handleDone)
 		<-proceed
 		if err := b.Unsubscribe(ctx, firstID); err != nil {
 			t.Errorf("Unsubscribe(first): %v", err)
@@ -872,7 +872,7 @@ func TestUnsubscribe_SeveralThenDrain(t *testing.T) {
 	time.Sleep(10 * time.Millisecond) // let the first Broadcast get to first and wait on it
 	close(proceed)
 
-	waitClosed(t, processDone, "process to leave both subscriptions")
+	waitClosed(t, handleDone, "handle to leave both subscriptions")
 	waitClosed(t, firstBroadcastDone, "first Broadcast")
 	waitClosed(t, secondBroadcastDone, "second Broadcast")
 }
@@ -965,7 +965,7 @@ func TestSubscribe_Parallel(t *testing.T) {
 		for range subscribers {
 			wg.Go(func() {
 				r := &recorder[int]{}
-				id, err := b.Subscribe(ctx, r.process)
+				id, err := b.Subscribe(ctx, r.handle)
 				if err != nil {
 					t.Errorf("Subscribe: %v", err)
 					return
@@ -1066,7 +1066,7 @@ func TestSubscribeUnsubscribe_ChurnDuringBroadcasts(t *testing.T) {
 	})
 }
 
-// recorder is a process function that records every message it is given, in order. If hold is set, process does not
+// recorder is a handle function that records every message it is given, in order. If hold is set, handle does not
 // return until it is closed, so the subscriber stops reading and holds up the next Broadcast until then.
 type recorder[T any] struct {
 	hold chan struct{}
@@ -1075,7 +1075,7 @@ type recorder[T any] struct {
 	got []T
 }
 
-func (r *recorder[T]) process(_ context.Context, msg T) error {
+func (r *recorder[T]) handle(_ context.Context, msg T) error {
 	r.record(msg)
 	if r.hold != nil {
 		<-r.hold
@@ -1098,15 +1098,15 @@ func (r *recorder[T]) messages() []T {
 	return slices.Clone(r.got)
 }
 
-// release lets process return, now and for every message after.
+// release lets handle return, now and for every message after.
 func (r *recorder[T]) release() {
 	close(r.hold)
 }
 
-type processError int
+type handleError int
 
-func (e processError) Error() string {
-	return fmt.Sprintf("processing %d failed", int(e))
+func (e handleError) Error() string {
+	return fmt.Sprintf("handling %d failed", int(e))
 }
 
 // recordFailures returns an error handler that records the message of every *HandleError it is given into r, and fails
@@ -1136,11 +1136,11 @@ func recordTimeouts(t *testing.T, r *recorder[int]) func(context.Context, error)
 }
 
 func subscribe[T any](
-	t *testing.T, b *broadcastor.Broadcastor[T], process func(context.Context, T) error,
+	t *testing.T, b *broadcastor.Broadcastor[T], handle func(context.Context, T) error,
 	options ...broadcastor.SubscriberOption[T],
 ) uuid.UUID {
 	t.Helper()
-	id, err := b.Subscribe(t.Context(), process, options...)
+	id, err := b.Subscribe(t.Context(), handle, options...)
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -1151,7 +1151,7 @@ func subscribe[T any](
 func record[T any](t *testing.T, b *broadcastor.Broadcastor[T]) (*recorder[T], uuid.UUID) {
 	t.Helper()
 	r := &recorder[T]{}
-	id := subscribe(t, b, r.process)
+	id := subscribe(t, b, r.handle)
 	return r, id
 }
 
@@ -1159,7 +1159,7 @@ func record[T any](t *testing.T, b *broadcastor.Broadcastor[T]) (*recorder[T], u
 func hold[T any](t *testing.T, b *broadcastor.Broadcastor[T]) (*recorder[T], uuid.UUID) {
 	t.Helper()
 	r := &recorder[T]{hold: make(chan struct{})}
-	id := subscribe(t, b, r.process)
+	id := subscribe(t, b, r.handle)
 	return r, id
 }
 
