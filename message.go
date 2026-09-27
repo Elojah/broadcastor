@@ -18,11 +18,15 @@ const (
 	deliveryNonBlocking
 )
 
-// message is how a single Broadcast sends its message to one subscriber, as set by the subscriber's default message
-// options and then the Broadcast's own.
+// message is what a single Broadcast sends to one subscriber: the value, and how it is sent.
 type message[T any] struct {
-	value T
+	value  T
+	config messageConfig
+}
 
+// messageConfig is how a single Broadcast sends its message to one subscriber, as set by the subscriber's default
+// message options and then the Broadcast's own. Message options change nothing else.
+type messageConfig struct {
 	delivery delivery
 
 	// timeout bounds how long Broadcast waits for the subscriber to take the message, on top of ctx, or is 0 for none.
@@ -32,13 +36,13 @@ type message[T any] struct {
 	errorHandler func(ctx context.Context, err error)
 }
 
-// with returns what a Broadcast sends to one subscriber, starting from m, that subscriber's defaults: value, with the
-// Broadcast's options applied on top, so that they override the defaults. m itself is left as it was.
-func (m message[T]) with(value T, options ...MessageOptions[T]) message[T] {
-	m.value = value
+// newMessage returns what a Broadcast sends to one subscriber: value, with config, that subscriber's defaults, and the
+// Broadcast's options applied on top, so that they override the defaults. config is a copy, so the defaults are left as
+// they were.
+func newMessage[T any](value T, config messageConfig, options ...MessageOptions[T]) message[T] {
 	for _, option := range options {
-		option(&m)
+		option(&config)
 	}
 
-	return m
+	return message[T]{value: value, config: config}
 }

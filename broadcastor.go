@@ -145,7 +145,7 @@ func (b *Broadcastor[T]) Broadcast(ctx context.Context, msg T, options ...Messag
 			return true
 		}
 
-		m := s.defaults.with(msg, options...)
+		m := newMessage(msg, s.config.defaults, options...)
 
 		if !s.acquire() {
 			s.report(ctx, m, &SubscriberClosedError[T]{SubscriberID: s.id, Message: msg})
@@ -153,7 +153,7 @@ func (b *Broadcastor[T]) Broadcast(ctx context.Context, msg T, options ...Messag
 			return true // unsubscribed and closed since Range picked it up
 		}
 
-		if m.delivery == deliveryAsync {
+		if m.config.delivery == deliveryAsync {
 			go s.send(ctx, m)
 			n++
 		} else if s.send(ctx, m) {
@@ -175,10 +175,11 @@ func (b *Broadcastor[T]) add(ctx context.Context, options []SubscriberOption[T])
 		return nil, err
 	}
 
-	s := &subscriber[T]{id: id, ch: make(chan message[T])}
+	var config subscriberConfig
 	for _, option := range options {
-		option(s)
+		option(&config)
 	}
+	s := &subscriber[T]{id: id, ch: make(chan message[T], config.buffer), config: config}
 	s.refs.Store(1)
 
 	if !b.gate.Enter() {
@@ -186,13 +187,13 @@ func (b *Broadcastor[T]) add(ctx context.Context, options []SubscriberOption[T])
 	}
 	defer b.gate.Leave()
 
-	// Before the subscriber is stored, so that whoever removes it sees stopWatching.
-	if s.autoUnsubscribe {
-		s.stopWatching = context.AfterFunc(ctx, func() { b.remove(id) })
+	// Before the subscriber is stored, so that whoever removes it sees autoUnsubscribe.
+	if s.config.autoUnsubscribe {
+		s.autoUnsubscribe = context.AfterFunc(ctx, func() { b.remove(id) })
 	}
 	b.subscribers.Store(id, s)
 	// ctx may have been done early enough for the watch to run before the subscriber was stored, and find nothing.
-	if s.autoUnsubscribe && ctx.Err() != nil {
+	if s.config.autoUnsubscribe && ctx.Err() != nil {
 		b.remove(id)
 	}
 

@@ -6,11 +6,11 @@ import (
 )
 
 // SubscriberOption configures a subscriber when it is passed to Subscribe.
-type SubscriberOption[T any] func(subscriber *subscriber[T])
+type SubscriberOption[T any] func(config *subscriberConfig)
 
 // MessageOptions configures how a Broadcast hands its message to each subscriber, when passed to Broadcast or to
 // WithSubscriberDefaultMessageOptions.
-type MessageOptions[T any] func(message *message[T])
+type MessageOptions[T any] func(config *messageConfig)
 
 // UnsubscribeOption configures what a subscriber does with the messages it takes once it is unsubscribed, when passed
 // to Unsubscribe or to WithSubscriberDefaultUnsubscribeOptions.
@@ -25,16 +25,16 @@ type unsubscription struct {
 
 // WithSubscriberBuffer sets the channel buffer size for the subscriber.
 func WithSubscriberBuffer[T any](buffer int) SubscriberOption[T] {
-	return func(subscriber *subscriber[T]) {
-		subscriber.ch = make(chan message[T], buffer)
+	return func(config *subscriberConfig) {
+		config.buffer = buffer
 	}
 }
 
 // WithSubscriberErrorHandler sets the function called with every error handle returns, with the ctx passed to Subscribe.
 // Without it, errors are discarded.
 func WithSubscriberErrorHandler[T any](handler func(ctx context.Context, err error)) SubscriberOption[T] {
-	return func(subscriber *subscriber[T]) {
-		subscriber.errorHandler = handler
+	return func(config *subscriberConfig) {
+		config.errorHandler = handler
 	}
 }
 
@@ -44,8 +44,8 @@ func WithSubscriberErrorHandler[T any](handler func(ctx context.Context, err err
 // next message. Only panics in handle are recovered, not those in error handlers. It has no effect on SubscribeSeq,
 // whose loop body runs in the caller's goroutine.
 func WithSubscriberRecover[T any]() SubscriberOption[T] {
-	return func(subscriber *subscriber[T]) {
-		subscriber.recover = true
+	return func(config *subscriberConfig) {
+		config.recover = true
 	}
 }
 
@@ -59,8 +59,8 @@ func WithSubscriberRecover[T any]() SubscriberOption[T] {
 // sending to it, and processes them with the done ctx, unless it discards them. Once the subscriber is unsubscribed
 // another way, nothing waits for ctx any more, so ctx may be one that is never done.
 func WithSubscriberAutoUnsubscribe[T any]() SubscriberOption[T] {
-	return func(subscriber *subscriber[T]) {
-		subscriber.autoUnsubscribe = true
+	return func(config *subscriberConfig) {
+		config.autoUnsubscribe = true
 	}
 }
 
@@ -69,9 +69,9 @@ func WithSubscriberAutoUnsubscribe[T any]() SubscriberOption[T] {
 // subscriber, which may then receive the messages of successive Broadcasts out of order, unless a Broadcast passes
 // WithMessageSync.
 func WithSubscriberDefaultMessageOptions[T any](options ...MessageOptions[T]) SubscriberOption[T] {
-	return func(subscriber *subscriber[T]) {
+	return func(config *subscriberConfig) {
 		for _, option := range options {
-			option(&subscriber.defaults)
+			option(&config.defaults)
 		}
 	}
 }
@@ -81,9 +81,9 @@ func WithSubscriberDefaultMessageOptions[T any](options ...MessageOptions[T]) Su
 // WithUnsubscribeDiscard, for instance, the subscriber stops processing messages as soon as it is unsubscribed, by
 // Unsubscribe or by Close, unless an Unsubscribe passes WithUnsubscribeDeliver.
 func WithSubscriberDefaultUnsubscribeOptions[T any](options ...UnsubscribeOption) SubscriberOption[T] {
-	return func(subscriber *subscriber[T]) {
+	return func(config *subscriberConfig) {
 		for _, option := range options {
-			option(&subscriber.unsubscribeDefaults)
+			option(&config.unsubscribeDefaults)
 		}
 	}
 }
@@ -92,8 +92,8 @@ func WithSubscriberDefaultUnsubscribeOptions[T any](options ...UnsubscribeOption
 // WithMessageTimeout. It is the same as WithSubscriberDefaultMessageOptions(WithMessageTimeout(timeout)), so a Broadcast
 // passing WithMessageTimeout overrides it, whether longer, shorter or 0 for none.
 func WithSubscriberTimeout[T any](timeout time.Duration) SubscriberOption[T] {
-	return func(subscriber *subscriber[T]) {
-		subscriber.defaults.timeout = timeout
+	return func(config *subscriberConfig) {
+		config.defaults.timeout = timeout
 	}
 }
 
@@ -102,8 +102,8 @@ func WithSubscriberTimeout[T any](timeout time.Duration) SubscriberOption[T] {
 // WithMessageAsync or WithMessageNonBlocking for one Broadcast. WithMessageSync, WithMessageAsync and
 // WithMessageNonBlocking exclude each other: the last one given wins.
 func WithMessageSync[T any]() MessageOptions[T] {
-	return func(message *message[T]) {
-		message.delivery = deliverySync
+	return func(config *messageConfig) {
+		config.delivery = deliverySync
 	}
 }
 
@@ -112,8 +112,8 @@ func WithMessageSync[T any]() MessageOptions[T] {
 // runs out. A slow subscriber then holds up neither Broadcast nor the other subscribers, but a subscriber may receive
 // the messages of successive Broadcasts out of order.
 func WithMessageAsync[T any]() MessageOptions[T] {
-	return func(message *message[T]) {
-		message.delivery = deliveryAsync
+	return func(config *messageConfig) {
+		config.delivery = deliveryAsync
 	}
 }
 
@@ -123,8 +123,8 @@ func WithMessageAsync[T any]() MessageOptions[T] {
 // ctx passed to Broadcast. Since Broadcast never waits, neither ctx nor the message's timeout plays any part. A slow
 // subscriber then holds up nobody, and still gets the messages it does take in order.
 func WithMessageNonBlocking[T any]() MessageOptions[T] {
-	return func(message *message[T]) {
-		message.delivery = deliveryNonBlocking
+	return func(config *messageConfig) {
+		config.delivery = deliveryNonBlocking
 	}
 }
 
@@ -136,8 +136,8 @@ func WithMessageNonBlocking[T any]() MessageOptions[T] {
 // the subscriber took it after being unsubscribed with WithUnsubscribeDiscard, with the ctx passed to Subscribe or
 // SubscribeSeq. Every subscriber shares it, so it may be called concurrently, and after Broadcast has returned.
 func WithMessageErrorHandler[T any](handler func(ctx context.Context, err error)) MessageOptions[T] {
-	return func(message *message[T]) {
-		message.errorHandler = handler
+	return func(config *messageConfig) {
+		config.errorHandler = handler
 	}
 }
 
@@ -148,8 +148,8 @@ func WithMessageErrorHandler[T any](handler func(ctx context.Context, err error)
 // Broadcast can then take up to the timeout for each subscriber. A timeout of 0 or less means none, which overrides
 // WithSubscriberTimeout.
 func WithMessageTimeout[T any](timeout time.Duration) MessageOptions[T] {
-	return func(message *message[T]) {
-		message.timeout = timeout
+	return func(config *messageConfig) {
+		config.timeout = timeout
 	}
 }
 

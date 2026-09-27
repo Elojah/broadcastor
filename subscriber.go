@@ -9,19 +9,35 @@ import (
 )
 
 type subscriber[T any] struct {
-	id uuid.UUID
-	ch chan message[T]
-
-	// defaults is what every message sent to this subscriber starts from, before the Broadcast's own options.
-	defaults message[T]
-
-	// unsubscribeDefaults is what every Unsubscribe and Close of this subscriber starts from, before the Unsubscribe's
-	// own options.
-	unsubscribeDefaults unsubscription
+	id     uuid.UUID
+	ch     chan message[T]
+	config subscriberConfig
 
 	// discarding is set when the subscriber is unsubscribed with WithUnsubscribeDiscard, before ch is released: from then
 	// on, consume and pull report every message they take instead of processing it.
 	discarding atomic.Bool
+
+	// autoUnsubscribe undoes the context.AfterFunc that add set up on the ctx passed to Subscribe or SubscribeSeq, once the
+	// subscriber was removed another way. It is nil without autoUnsubscribe.
+	autoUnsubscribe func() bool
+
+	// refs is 1 for the subscription itself, plus 1 for each Broadcast currently sending on ch. Whoever drops it to 0
+	// closes ch, so ch is never closed while a Broadcast can still send on it.
+	refs atomic.Int64
+}
+
+// subscriberConfig is what the subscriber options passed to Subscribe or SubscribeSeq set, which add then builds the
+// subscriber from. Subscriber options change nothing else.
+type subscriberConfig struct {
+	// buffer is the size of the subscriber's channel buffer, 0 for unbuffered.
+	buffer int
+
+	// defaults is what every message sent to this subscriber starts from, before the Broadcast's own options.
+	defaults messageConfig
+
+	// unsubscribeDefaults is what every Unsubscribe and Close of this subscriber starts from, before the Unsubscribe's
+	// own options.
+	unsubscribeDefaults unsubscription
 
 	// errorHandler is called with every error handle returns, or nil to discard them.
 	errorHandler func(ctx context.Context, err error)
@@ -31,14 +47,6 @@ type subscriber[T any] struct {
 
 	// autoUnsubscribe makes add remove the subscriber once the ctx passed to Subscribe or SubscribeSeq is done.
 	autoUnsubscribe bool
-
-	// stopWatching undoes the context.AfterFunc that add set up on that ctx, once the subscriber was removed another way.
-	// It is nil without autoUnsubscribe.
-	stopWatching func() bool
-
-	// refs is 1 for the subscription itself, plus 1 for each Broadcast currently sending on ch. Whoever drops it to 0
-	// closes ch, so ch is never closed while a Broadcast can still send on it.
-	refs atomic.Int64
 }
 
 // send hands m to the subscriber and reports whether it took it. It gives up once ctx is done or m's timeout runs out,
@@ -46,7 +54,7 @@ type subscriber[T any] struct {
 func (s *subscriber[T]) send(ctx context.Context, m message[T]) bool {
 	defer s.release()
 
-	if m.delivery == deliveryNonBlocking {
+	if m.config.delivery == deliveryNonBlocking {
 		select {
 		case s.ch <- m:
 			return true
@@ -58,9 +66,9 @@ func (s *subscriber[T]) send(ctx context.Context, m message[T]) bool {
 	}
 
 	sendCtx := ctx
-	if m.timeout > 0 {
+	if m.config.timeout > 0 {
 		var cancel context.CancelFunc
-		sendCtx, cancel = context.WithTimeout(ctx, m.timeout)
+		sendCtx, cancel = context.WithTimeout(ctx, m.config.timeout)
 		defer cancel()
 	}
 
@@ -98,7 +106,7 @@ func (s *subscriber[T]) release() {
 // unsubscribe drops the subscription's reference, and first makes the subscriber discard if its unsubscribe defaults,
 // then options, say so. It must be called once, by whoever took the subscriber out of the map.
 func (s *subscriber[T]) unsubscribe(options ...UnsubscribeOption) {
-	u := s.unsubscribeDefaults
+	u := s.config.unsubscribeDefaults
 	for _, option := range options {
 		option(&u)
 	}
@@ -107,8 +115,8 @@ func (s *subscriber[T]) unsubscribe(options ...UnsubscribeOption) {
 		s.discarding.Store(true)
 	}
 	// However it was removed, so that nothing keeps waiting for a ctx that may never be done.
-	if s.stopWatching != nil {
-		s.stopWatching()
+	if s.autoUnsubscribe != nil {
+		s.autoUnsubscribe()
 	}
 
 	// Closes the channel now, or once the last Broadcast still sending on it is done.
@@ -117,11 +125,11 @@ func (s *subscriber[T]) unsubscribe(options ...UnsubscribeOption) {
 
 // report passes err to the subscriber's error handler, then to m's, skipping whichever is not set.
 func (s *subscriber[T]) report(ctx context.Context, m message[T], err error) {
-	if s.errorHandler != nil {
-		s.errorHandler(ctx, err)
+	if s.config.errorHandler != nil {
+		s.config.errorHandler(ctx, err)
 	}
-	if m.errorHandler != nil {
-		m.errorHandler(ctx, err)
+	if m.config.errorHandler != nil {
+		m.config.errorHandler(ctx, err)
 	}
 }
 
@@ -184,7 +192,7 @@ func (s *subscriber[T]) consume(ctx context.Context, handle func(ctx context.Con
 // process calls handle and returns a *HandleError if it fails, or a *PanicError if it panics and the subscriber
 // recovers.
 func (s *subscriber[T]) process(ctx context.Context, handle func(ctx context.Context, msg T) error, value T) (err error) {
-	if s.recover {
+	if s.config.recover {
 		defer func() {
 			if v := recover(); v != nil {
 				err = &PanicError[T]{SubscriberID: s.id, Message: value, Value: v, Stack: debug.Stack()}

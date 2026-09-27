@@ -70,7 +70,7 @@ when nobody reads it.
 
 ### Broadcast ctx reaching `handle`
 
-- [x] `handle` gets the `Subscribe` ctx, so values on the `Broadcast` ctx (trace IDs, request-scoped loggers) never reach it.
+- [ ] `handle` gets the `Subscribe` ctx, so values on the `Broadcast` ctx (trace IDs, request-scoped loggers) never reach it.
   Carry the `Broadcast` ctx's values on the message, and give `handle` a ctx that combines those values with the
   subscriber's cancellation. This needs a small custom `context.Context`. Offer it as an option, or make it the default
   before v1.
@@ -129,8 +129,8 @@ when nobody reads it.
 
 - `Broadcast` walks a `sync.Map` through a closure on every call. For workloads that broadcast often but subscribe
   rarely, a copy-on-write `atomic.Pointer[[]*subscriber[T]]` avoids both the map walk and the allocation.
-- `Broadcast` allocates once per subscriber (32 B for `T = int`), even in sync mode. The per-subscriber `message` `m` is
-  moved to the heap because `option(&m)` passes its address to an unknown func (`go build -gcflags=-m`). Applying the
+- `Broadcast` allocates once per subscriber (24 B), even in sync mode. The per-subscriber `messageConfig` is moved to
+  the heap because `option(&config)` in `newMessage` passes its address to an unknown func (`go build -gcflags=-m`). Applying the
   options once per `Broadcast`, recording which fields they set, and then merging those over each subscriber's
   defaults by value could avoid it.
 - Async starts one goroutine per subscriber per `Broadcast`. The per-subscriber sender from "Ordered async" would cap
