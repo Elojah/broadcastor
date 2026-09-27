@@ -13,6 +13,15 @@
 //	...
 //	err = b.Unsubscribe(ctx, id)
 //
+// SubscribeSeq adds a subscriber too, but returns an iterator instead of taking a handle function. The loop body then
+// takes the place of handle, in the caller's goroutine:
+//
+//	_, seq, err := b.SubscribeSeq(ctx)
+//	...
+//	for msg := range seq {
+//		fmt.Println(msg)
+//	}
+//
 // # Delivery
 //
 // Delivery is at most once: a subscriber gets a message once or misses it, and a missed message is never sent again.
@@ -43,6 +52,10 @@
 // sending to it. Its goroutine ends once it has processed them. Cancelling the ctx given to Subscribe, which is the one
 // handle gets, does not unsubscribe it.
 //
+// A SubscribeSeq loop ends once its subscriber is unsubscribed and has yielded those messages. The loop unsubscribes
+// the subscriber itself when it ends another way: when it breaks, or once the ctx given to SubscribeSeq is done. The
+// messages the subscriber took but did not yield are then reported as *SubscriberClosedError.
+//
 // # Errors
 //
 // Errors are reported to error handlers, and discarded when there are none. A subscriber's handler
@@ -54,6 +67,8 @@
 //     goroutine, right after handle, with the ctx given to Subscribe.
 //   - *TimeoutError, *DroppedError or *SubscriberClosedError when Broadcast could not hand the message over. The
 //     handlers are called with the ctx given to Broadcast.
+//   - *SubscriberClosedError when a SubscribeSeq loop ended before yielding a message its subscriber took. The
+//     handlers are called with the ctx given to SubscribeSeq.
 //
 // Each error type matches a sentinel (ErrTimeout, ErrDropped, and so on) with errors.Is, which does not need to know T.
 package broadcastor

@@ -111,15 +111,16 @@ func (e *DroppedError[T]) Is(target error) bool {
 	return target == ErrDropped
 }
 
-// SubscriberClosedError is what an error handler is given when Broadcast skips a subscriber that was unsubscribed, and
-// its channel closed, between Broadcast picking it up and sending to it. It matches ErrSubscriberClosed.
+// SubscriberClosedError is what an error handler is given when a subscriber misses a message because it was
+// unsubscribed: either Broadcast skips it, because its channel was closed between Broadcast picking it up and sending
+// to it, or it took the message but its SubscribeSeq loop ended before yielding it. It matches ErrSubscriberClosed.
 type SubscriberClosedError[T any] struct {
 	SubscriberID uuid.UUID
 	Message      T
 }
 
 func (e *SubscriberClosedError[T]) Error() string {
-	return "subscriber " + e.SubscriberID.String() + ": channel closed"
+	return "subscriber " + e.SubscriberID.String() + ": unsubscribed, message dropped"
 }
 
 func (e *SubscriberClosedError[T]) Is(target error) bool {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
 	"maps"
 	"slices"
 	"strings"
@@ -1403,6 +1404,295 @@ func TestWithSubscriberRecover(t *testing.T) {
 	})
 }
 
+// SubscribeSeq yields every message the subscriber takes, in order, and breaking out of the loop unsubscribes it.
+func TestSubscribeSeq(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := broadcastor.NewBroadcastor[int]()
+		_, seq := subscribeSeq(t, b)
+
+		go func() {
+			for msg := 1; msg <= 3; msg++ {
+				b.Broadcast(t.Context(), msg)
+			}
+		}()
+		var got []int
+		for msg := range seq {
+			got = append(got, msg)
+			if msg == 3 {
+				break
+			}
+		}
+		if want := []int{1, 2, 3}; !slices.Equal(got, want) {
+			t.Errorf("loop got %v, want %v", got, want)
+		}
+
+		if n := b.Broadcast(t.Context(), 4); n != 0 {
+			t.Errorf("Broadcast after the loop ended handed the message to %d subscribers, want 0", n)
+		}
+		synctest.Wait()
+	})
+}
+
+// The loop body takes the place of handle: while it runs, the subscriber is busy and takes nothing, so a non-blocking
+// Broadcast drops its message and a sync one waits.
+func TestSubscribeSeq_BodyHoldsSubscriber(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := broadcastor.NewBroadcastor[int]()
+		errs := &recorder[error]{}
+		_, seq := subscribeSeq(t, b, broadcastor.WithSubscriberErrorHandler[int](func(_ context.Context, err error) {
+			errs.record(err)
+		}))
+
+		yielded := &recorder[int]{}
+		proceed := make(chan struct{})
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for msg := range seq {
+				yielded.record(msg)
+				<-proceed
+				if msg == 2 {
+					break
+				}
+			}
+		}()
+		b.Broadcast(t.Context(), 0)
+		synctest.Wait() // the loop body is now processing 0
+
+		if n := b.Broadcast(t.Context(), 1, broadcastor.WithMessageNonBlocking[int]()); n != 0 {
+			t.Errorf("non-blocking Broadcast handed the message to %d subscribers, want 0: the loop body is busy", n)
+		}
+		start := time.Now()
+		if n := b.Broadcast(t.Context(), 1, broadcastor.WithMessageTimeout[int](time.Second)); n != 0 {
+			t.Errorf("sync Broadcast handed the message to %d subscribers, want 0: the loop body is busy", n)
+		}
+		if elapsed := time.Since(start); elapsed != time.Second {
+			t.Errorf("sync Broadcast returned after %v, want it to wait for the whole %v timeout", elapsed, time.Second)
+		}
+
+		close(proceed)
+		if n := b.Broadcast(t.Context(), 2); n != 1 {
+			t.Errorf("Broadcast handed the message to %d subscribers, want 1", n)
+		}
+		waitClosed(t, done, "the loop to break")
+		synctest.Wait()
+
+		if got, want := yielded.messages(), []int{0, 2}; !slices.Equal(got, want) {
+			t.Errorf("loop got %v, want %v", got, want)
+		}
+		got := errs.messages()
+		if len(got) != 2 || !errors.Is(got[0], broadcastor.ErrDropped) || !errors.Is(got[1], broadcastor.ErrTimeout) {
+			t.Errorf("error handler got %v, want a *DroppedError then a *TimeoutError", got)
+		}
+	})
+}
+
+// Once the loop has broken, the messages the subscriber took but did not yield are reported as *SubscriberClosedError,
+// with the ctx passed to SubscribeSeq, and a Broadcast that was waiting on the subscriber returns.
+func TestSubscribeSeq_BreakReportsUnyielded(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		type key struct{}
+		ctx := context.WithValue(t.Context(), key{}, "seq")
+		b := broadcastor.NewBroadcastor[int]()
+		closed := &recorder[int]{}
+		id, seq, err := b.SubscribeSeq(ctx, broadcastor.WithSubscriberBuffer[int](2),
+			broadcastor.WithSubscriberErrorHandler[int](func(ctx context.Context, err error) {
+				var closedErr *broadcastor.SubscriberClosedError[int]
+				if !errors.As(err, &closedErr) || !errors.Is(err, broadcastor.ErrSubscriberClosed) {
+					t.Errorf("error handler got %v, want a *SubscriberClosedError", err)
+
+					return
+				}
+				if v := ctx.Value(key{}); v != "seq" {
+					t.Errorf("error handler got a ctx with value %v, want the one passed to SubscribeSeq", v)
+				}
+				closed.record(closedErr.Message)
+			}))
+		if err != nil {
+			t.Fatalf("SubscribeSeq: %v", err)
+		}
+
+		// Nothing reads before the loop starts: 1 and 2 fill the buffer, and the Broadcast of 3 waits.
+		b.Broadcast(t.Context(), 1)
+		b.Broadcast(t.Context(), 2)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			b.Broadcast(t.Context(), 3)
+		}()
+		synctest.Wait()
+
+		for msg := range seq {
+			if msg != 1 {
+				t.Errorf("loop got %d first, want 1", msg)
+			}
+
+			break
+		}
+		waitClosed(t, done, "Broadcast to a subscriber whose loop has ended")
+		synctest.Wait()
+
+		if got, want := closed.messages(), []int{2, 3}; !slices.Equal(got, want) {
+			t.Errorf("error handler got *SubscriberClosedError for messages %v, want %v", got, want)
+		}
+		if err := b.Unsubscribe(t.Context(), id); !isNotFound(err) {
+			t.Errorf("Unsubscribe after the loop ended = %v, want *SubscriberNotFoundError", err)
+		}
+	})
+}
+
+// Once ctx is done, a loop waiting for its next message ends and unsubscribes.
+func TestSubscribeSeq_ContextDone(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		b := broadcastor.NewBroadcastor[int]()
+		_, seq, err := b.SubscribeSeq(ctx)
+		if err != nil {
+			t.Fatalf("SubscribeSeq: %v", err)
+		}
+
+		got := &recorder[int]{}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for msg := range seq {
+				got.record(msg)
+			}
+		}()
+		b.Broadcast(t.Context(), 1)
+		synctest.Wait() // the loop is waiting for its next message
+
+		cancel()
+		waitClosed(t, done, "the loop to end once ctx is done")
+		if n := b.Broadcast(t.Context(), 2); n != 0 {
+			t.Errorf("Broadcast after the loop ended handed the message to %d subscribers, want 0", n)
+		}
+		synctest.Wait()
+		if got, want := got.messages(), []int{1}; !slices.Equal(got, want) {
+			t.Errorf("loop got %v, want %v", got, want)
+		}
+	})
+}
+
+// A loop whose ctx is already done yields nothing, even with messages waiting, and reports them.
+func TestSubscribeSeq_ContextDoneFirst(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		b := broadcastor.NewBroadcastor[int]()
+		errs := &recorder[error]{}
+		_, seq, err := b.SubscribeSeq(ctx, broadcastor.WithSubscriberBuffer[int](1),
+			broadcastor.WithSubscriberErrorHandler[int](func(_ context.Context, err error) {
+				errs.record(err)
+			}))
+		if err != nil {
+			t.Fatalf("SubscribeSeq: %v", err)
+		}
+
+		b.Broadcast(t.Context(), 1)
+		cancel()
+		for msg := range seq {
+			t.Errorf("loop got %d, want nothing once ctx is done", msg)
+		}
+		synctest.Wait()
+		if got := errs.messages(); len(got) != 1 || !errors.Is(got[0], broadcastor.ErrSubscriberClosed) {
+			t.Errorf("error handler got %v, want a single *SubscriberClosedError", got)
+		}
+	})
+}
+
+// Unsubscribing a SubscribeSeq subscriber from elsewhere ends its loop once it has yielded every message it took, like
+// a handle subscriber processes them after Unsubscribe.
+func TestSubscribeSeq_Unsubscribe(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := broadcastor.NewBroadcastor[int]()
+		id, seq := subscribeSeq(t, b, broadcastor.WithSubscriberBuffer[int](2),
+			broadcastor.WithSubscriberErrorHandler[int](func(_ context.Context, err error) {
+				t.Errorf("error handler got %v, want no error", err)
+			}))
+
+		b.Broadcast(t.Context(), 1)
+		b.Broadcast(t.Context(), 2)
+		unsubscribe(t, b, id)
+
+		var got []int
+		for msg := range seq {
+			got = append(got, msg)
+		}
+		if want := []int{1, 2}; !slices.Equal(got, want) {
+			t.Errorf("loop got %v, want %v", got, want)
+		}
+		synctest.Wait()
+	})
+}
+
+// The iterator can be ranged over once: a range after it, or alongside it, yields nothing.
+func TestSubscribeSeq_RangeOnce(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := broadcastor.NewBroadcastor[int]()
+		_, seq := subscribeSeq(t, b)
+
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for range seq {
+				break
+			}
+		}()
+		synctest.Wait() // the first loop is waiting for its next message
+
+		for msg := range seq {
+			t.Errorf("a second loop alongside the first got %d, want nothing", msg)
+		}
+		if n := b.Broadcast(t.Context(), 1); n != 1 {
+			t.Errorf("Broadcast handed the message to %d subscribers, want 1", n)
+		}
+		waitClosed(t, done, "the first loop to break")
+
+		for msg := range seq {
+			t.Errorf("a loop after the first got %d, want nothing", msg)
+		}
+		synctest.Wait()
+	})
+}
+
+// A panic in the loop body reaches the caller, and still unsubscribes.
+func TestSubscribeSeq_Panic(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := broadcastor.NewBroadcastor[int]()
+		_, seq := subscribeSeq(t, b)
+
+		go b.Broadcast(t.Context(), 1)
+		p := recovered(func() {
+			for msg := range seq {
+				panic(handleError(msg))
+			}
+		})
+		if p != handleError(1) {
+			t.Errorf("loop panicked with %v, want %v", p, handleError(1))
+		}
+		if n := b.Broadcast(t.Context(), 2); n != 0 {
+			t.Errorf("Broadcast after the loop panicked handed the message to %d subscribers, want 0", n)
+		}
+		synctest.Wait()
+	})
+}
+
 // recorder is a handle function that records every message it is given, in order. If hold is set, handle does not
 // return until it is closed, so the subscriber stops reading and holds up the next Broadcast until then.
 type recorder[T any] struct {
@@ -1510,6 +1800,17 @@ func hold[T any](t *testing.T, b *broadcastor.Broadcastor[T]) (*recorder[T], uui
 	id := subscribe(t, b, r.handle)
 
 	return r, id
+}
+
+// subscribeSeq subscribes with SubscribeSeq, with the test's ctx.
+func subscribeSeq[T any](t *testing.T, b *broadcastor.Broadcastor[T], options ...broadcastor.SubscriberOption[T]) (uuid.UUID, iter.Seq[T]) {
+	t.Helper()
+	id, seq, err := b.SubscribeSeq(t.Context(), options...)
+	if err != nil {
+		t.Fatalf("SubscribeSeq: %v", err)
+	}
+
+	return id, seq
 }
 
 func unsubscribe[T any](t *testing.T, b *broadcastor.Broadcastor[T], id uuid.UUID) {

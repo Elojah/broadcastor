@@ -32,6 +32,20 @@ if err := b.Unsubscribe(ctx, id); err != nil {
 }
 ```
 
+`SubscribeSeq` returns an iterator instead of taking a `handle` function. The loop body takes the place of `handle`, and
+the loop unsubscribes when it breaks or when `ctx` is done:
+
+```go
+_, seq, err := b.SubscribeSeq(ctx)
+if err != nil {
+	return err
+}
+
+for msg := range seq {
+	fmt.Println("got", msg)
+}
+```
+
 ### Examples
 
 [`examples/`](examples) holds small runnable programs, from simple to complex. Run one with
@@ -47,6 +61,7 @@ if err := b.Unsubscribe(ctx, id); err != nil {
 8. [`08-async`](examples/08-async/main.go): `WithMessageAsync`.
 9. [`09-non-blocking`](examples/09-non-blocking/main.go): `WithMessageNonBlocking` and `*DroppedError`.
 10. [`10-defaults`](examples/10-defaults/main.go): `WithSubscriberDefaultMessageOptions`, overridden by `WithMessageSync`.
+11. [`11-iterator`](examples/11-iterator/main.go): `SubscribeSeq` and a `for range` loop instead of `handle`.
 
 ## Delivery
 
@@ -81,6 +96,7 @@ Errors go to error handlers, and are discarded when there are none:
 | `*TimeoutError` | `Broadcast` gave up waiting. | `Broadcast`'s |
 | `*DroppedError` | A non-blocking `Broadcast` found the subscriber busy. | `Broadcast`'s |
 | `*SubscriberClosedError` | The subscriber was unsubscribed while `Broadcast` was running. | `Broadcast`'s |
+| `*SubscriberClosedError` | A `SubscribeSeq` loop ended before yielding a message its subscriber took. | `SubscribeSeq`'s |
 
 Each error type matches a sentinel with `errors.Is` (`ErrTimeout`, `ErrDropped`, `ErrPanic`, `ErrSubscriberClosed`,
 `ErrSubscriberNotFound`), without needing to know the message type.
@@ -91,6 +107,11 @@ Each error type matches a sentinel with `errors.Is` (`ErrTimeout`, `ErrDropped`,
 `Unsubscribe` returns: whatever is in its buffer, and the message of a `Broadcast` that was already sending to it. Its
 goroutine ends once it has processed them. `handle` gets the ctx passed to `Subscribe`, and cancelling that ctx does not
 unsubscribe it.
+
+A `SubscribeSeq` loop ends once its subscriber is unsubscribed and has yielded those messages. When it ends another way,
+because it breaks or because the ctx passed to `SubscribeSeq` is done, it unsubscribes the subscriber itself. The
+messages the subscriber took but did not yield are then reported as `*SubscriberClosedError`. The iterator can be ranged
+over once.
 
 ## Development
 

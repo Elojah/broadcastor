@@ -30,7 +30,8 @@ func WithSubscriberErrorHandler[T any](handler func(ctx context.Context, err err
 // WithSubscriberRecover makes the subscriber recover when handle panics, instead of letting the panic crash the program.
 // Its error handlers are given a *PanicError with the value handle panicked with and the stack at that point, from the
 // subscriber's goroutine and with the ctx passed to Subscribe, like a *HandleError. The subscriber then goes on with the
-// next message. Only panics in handle are recovered, not those in error handlers.
+// next message. Only panics in handle are recovered, not those in error handlers. It has no effect on SubscribeSeq,
+// whose loop body runs in the caller's goroutine.
 func WithSubscriberRecover[T any]() SubscriberOption[T] {
 	return func(subscriber *subscriber[T]) {
 		subscriber.recover = true
@@ -92,7 +93,8 @@ func WithMessageNonBlocking[T any]() MessageOptions[T] {
 // WithMessageErrorHandler sets a function called with every error about this message, on top of the error handler of
 // the subscriber it failed on: a *HandleError or a *PanicError when handle fails, with the ctx passed to Subscribe and
 // from the subscriber's goroutine, so a slow handler holds the subscriber up; a *TimeoutError, a *DroppedError or a
-// *SubscriberClosedError when Broadcast could not hand the message over, with the ctx passed to Broadcast. Every
+// *SubscriberClosedError when Broadcast could not hand the message over, with the ctx passed to Broadcast; a
+// *SubscriberClosedError when a SubscribeSeq loop ended before yielding it, with the ctx passed to SubscribeSeq. Every
 // subscriber shares it, so it may be called concurrently, and after Broadcast has returned.
 func WithMessageErrorHandler[T any](handler func(ctx context.Context, err error)) MessageOptions[T] {
 	return func(message *message[T]) {

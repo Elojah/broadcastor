@@ -2,7 +2,9 @@ package broadcastor
 
 import (
 	"context"
+	"iter"
 	"sync"
+	"sync/atomic"
 
 	"github.com/google/uuid"
 )
@@ -23,21 +25,56 @@ func NewBroadcastor[T any]() *Broadcastor[T] {
 // and has processed everything it took. Cancelling ctx does not unsubscribe it. The only error is a failure to
 // generate the ID.
 func (b *Broadcastor[T]) Subscribe(ctx context.Context, handle func(ctx context.Context, msg T) error, options ...SubscriberOption[T]) (uuid.UUID, error) {
-	id, err := uuid.NewV7()
+	s, err := b.add(options)
 	if err != nil {
 		return uuid.Nil, err
 	}
-
-	s := &subscriber[T]{id: id, ch: make(chan message[T])}
-	for _, option := range options {
-		option(s)
-	}
-	s.refs.Store(1)
 	go s.consume(ctx, handle)
 
-	b.subscribers.Store(id, s)
+	return s.id, nil
+}
 
-	return id, nil
+// SubscribeSeq adds a subscriber like Subscribe, but instead of calling a handle function from a goroutine of its own,
+// it returns its ID and an iterator over the messages it takes:
+//
+//	_, seq, err := b.SubscribeSeq(ctx)
+//	...
+//	for msg := range seq {
+//		...
+//	}
+//
+// The loop body takes the place of handle, in the goroutine that ranges over seq. The subscriber takes its next message
+// only once the body is done with the previous one, and takes nothing before the loop starts, so until then Broadcast
+// waits for it as for a busy handle.
+//
+// The loop ends when it breaks (or returns, or panics), when ctx is done, or once the subscriber was unsubscribed and has
+// yielded every message it took. Ending the loop unsubscribes the subscriber. Every message it took but did not yield,
+// from its buffer or from a Broadcast that was already sending to it, is reported to its error handlers as a
+// *SubscriberClosedError with ctx, from a goroutine of its own. seq can be ranged over only once: any other range
+// yields nothing.
+//
+// WithSubscriberRecover has no effect, since the loop body runs in the caller's goroutine. The only error is a failure
+// to generate the ID.
+func (b *Broadcastor[T]) SubscribeSeq(ctx context.Context, options ...SubscriberOption[T]) (uuid.UUID, iter.Seq[T], error) {
+	s, err := b.add(options)
+	if err != nil {
+		return uuid.Nil, nil, err
+	}
+
+	var ranged atomic.Bool
+
+	return s.id, func(yield func(T) bool) {
+		if ranged.Swap(true) {
+			return
+		}
+		defer func() {
+			// Unless it already was, which is one way for the loop to end.
+			_ = b.Unsubscribe(ctx, s.id)
+			// Nothing reads ch any more, but a Broadcast may still be sending to it.
+			go s.drain(ctx)
+		}()
+		s.pull(ctx, yield)
+	}, nil
 }
 
 // Unsubscribe removes the subscriber with the given ID, or returns a *SubscriberNotFoundError if there is none. It
@@ -100,4 +137,22 @@ func (b *Broadcastor[T]) Broadcast(ctx context.Context, msg T, options ...Messag
 	})
 
 	return n
+}
+
+// add creates a subscriber with the given options and adds it to b, which then sends it every message. Nothing reads its
+// channel yet.
+func (b *Broadcastor[T]) add(options []SubscriberOption[T]) (*subscriber[T], error) {
+	id, err := uuid.NewV7()
+	if err != nil {
+		return nil, err
+	}
+
+	s := &subscriber[T]{id: id, ch: make(chan message[T])}
+	for _, option := range options {
+		option(s)
+	}
+	s.refs.Store(1)
+	b.subscribers.Store(id, s)
+
+	return s, nil
 }

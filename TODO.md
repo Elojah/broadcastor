@@ -45,6 +45,9 @@ when nobody reads it.
 - `WithMessageNonBlocking` (name kept over `WithMessageFireAndForget`, which reads like async): a busy subscriber misses
   the message with a `*DroppedError`. Note that with a buffer this keeps the oldest messages and drops the newest, so
   it is not "latest value wins". That needs the `DropOldest` policy from "Ordered async" below.
+- `SubscribeSeq`, a pull-style variant returning `iter.Seq[T]`: the loop body takes the place of `handle`, reading the
+  subscriber's channel directly. Breaking out of the loop, or its ctx being done, unsubscribes. Messages it took but
+  never yielded are reported as `*SubscriberClosedError`.
 - Benchmarks (`bench_test.go`, `make bench`): `Broadcast` for 1 to 1000 subscribers × sync/async/buffered, and
   `Subscribe`/`Unsubscribe` churn, serial and parallel.
 
@@ -55,8 +58,6 @@ when nobody reads it.
 - `Subscribe` returns a `*Subscription` (`ID()`, `Unsubscribe()`, `Done() <-chan struct{}` closed once `consume`
   returns) instead of a bare `uuid.UUID`. With `Done()`, a caller outside `handle` can wait for the drain themselves,
   and the library still never waits.
-- A pull-style variant returning `iter.Seq[T]`, for callers who would rather write `for msg := range sub` than pass a
-  callback. Breaking out of the loop unsubscribes.
 - `Broadcastor.Close(ctx)`: unsubscribe everyone, refuse new `Subscribe` and `Broadcast` calls (`ErrClosed`), and wait
   for subscribers to drain, bounded by `ctx`. Called from `handle`, it would end up waiting on itself, so it has to
   either detect that case or be documented as off-limits there.

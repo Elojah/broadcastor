@@ -56,6 +56,66 @@ func (s *subscriber[T]) report(ctx context.Context, m message[T], err error) {
 	}
 }
 
+/*
+	Subscribe with iterator methods
+	#MARK: Iterator methods
+*/
+
+// pull is consume for SubscribeSeq: it yields every message the subscriber takes, one at a time, until yield returns
+// false, ctx is done or ch is closed.
+func (s *subscriber[T]) pull(ctx context.Context, yield func(T) bool) {
+	for ctx.Err() == nil {
+		select {
+		case m, ok := <-s.ch:
+			if !ok || !yield(m.value) {
+				return
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// drain reads ch until it is closed, once a SubscribeSeq loop has ended and unsubscribed, so that no Broadcast still
+// sending to it waits for nothing. Every message it reads was taken but never yielded, and is reported as such.
+func (s *subscriber[T]) drain(ctx context.Context) {
+	for m := range s.ch {
+		s.report(ctx, m, &SubscriberClosedError[T]{SubscriberID: s.id, Message: m.value})
+	}
+}
+
+/*
+	Subscribe with callback methods
+	#MARK: Callback methods
+*/
+
+func (s *subscriber[T]) consume(ctx context.Context, handle func(ctx context.Context, msg T) error) {
+	for m := range s.ch {
+		// Reported here rather than from process, so that a panic in an error handler is not recovered.
+		if err := s.process(ctx, handle, m.value); err != nil {
+			s.report(ctx, m, err)
+		}
+	}
+}
+
+// process calls handle and returns a *HandleError if it fails, or a *PanicError if it panics and the subscriber
+// recovers.
+func (s *subscriber[T]) process(ctx context.Context, handle func(ctx context.Context, msg T) error, value T) (err error) {
+	if s.recover {
+		defer func() {
+			if v := recover(); v != nil {
+				err = &PanicError[T]{SubscriberID: s.id, Message: value, Value: v, Stack: debug.Stack()}
+			}
+		}()
+	}
+
+	if handleErr := handle(ctx, value); handleErr != nil {
+		return &HandleError[T]{SubscriberID: s.id, Message: value, Err: handleErr}
+	}
+
+	return nil
+}
+
 // send hands m to the subscriber and reports whether it took it. It gives up once ctx is done or m's timeout runs out,
 // or right away for a non-blocking message, then drops the reference the caller acquired.
 func (s *subscriber[T]) send(ctx context.Context, m message[T]) bool {
@@ -88,31 +148,4 @@ func (s *subscriber[T]) send(ctx context.Context, m message[T]) bool {
 
 		return false
 	}
-}
-
-func (s *subscriber[T]) consume(ctx context.Context, handle func(ctx context.Context, msg T) error) {
-	for m := range s.ch {
-		// Reported here rather than from process, so that a panic in an error handler is not recovered.
-		if err := s.process(ctx, handle, m.value); err != nil {
-			s.report(ctx, m, err)
-		}
-	}
-}
-
-// process calls handle and returns a *HandleError if it fails, or a *PanicError if it panics and the subscriber
-// recovers.
-func (s *subscriber[T]) process(ctx context.Context, handle func(ctx context.Context, msg T) error, value T) (err error) {
-	if s.recover {
-		defer func() {
-			if v := recover(); v != nil {
-				err = &PanicError[T]{SubscriberID: s.id, Message: value, Value: v, Stack: debug.Stack()}
-			}
-		}()
-	}
-
-	if handleErr := handle(ctx, value); handleErr != nil {
-		return &HandleError[T]{SubscriberID: s.id, Message: value, Err: handleErr}
-	}
-
-	return nil
 }
