@@ -6,7 +6,11 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/elojah/broadcastor"
+	"github.com/elojah/broadcastor/message"
+	"github.com/elojah/broadcastor/subscriber"
 )
 
 // BenchmarkBroadcast measures one Broadcast until every subscriber has handled its message, with subscribers that do
@@ -16,12 +20,15 @@ import (
 func BenchmarkBroadcast(b *testing.B) {
 	modes := []struct {
 		name      string
-		subscribe []broadcastor.SubscriberOption[int]
-		broadcast []broadcastor.MessageOptions[int]
+		subscribe []subscriber.Option[int]
+		broadcast []message.Option[int]
 	}{
 		{name: "sync"},
-		{name: "async", broadcast: []broadcastor.MessageOptions[int]{broadcastor.WithMessageAsync[int]()}},
-		{name: "buffered", subscribe: []broadcastor.SubscriberOption[int]{broadcastor.WithSubscriberBuffer[int](64)}},
+		{name: "async", broadcast: []message.Option[int]{message.WithAsync[int]()}},
+		{name: "buffered", subscribe: []subscriber.Option[int]{subscriber.WithBuffer[int](64)}},
+		{name: "middleware", subscribe: []subscriber.Option[int]{subscriber.WithMiddleware(
+			func(next subscriber.Handler[int]) subscriber.Handler[int] { return next },
+		)}},
 	}
 
 	for _, subscribers := range []int{1, 10, 100, 1000} {
@@ -30,7 +37,7 @@ func BenchmarkBroadcast(b *testing.B) {
 				bc := broadcastor.NewBroadcastor[int]()
 				var handled sync.WaitGroup
 				for range subscribers {
-					id, err := bc.Subscribe(b.Context(), func(context.Context, int) error {
+					id, err := bc.Subscribe(b.Context(), func(context.Context, uuid.UUID, int) error {
 						handled.Done()
 
 						return nil
@@ -84,7 +91,7 @@ func BenchmarkSubscribeUnsubscribe_Parallel(b *testing.B) {
 }
 
 func subscribeUnsubscribe(ctx context.Context, bc *broadcastor.Broadcastor[int]) error {
-	id, err := bc.Subscribe(ctx, func(context.Context, int) error { return nil })
+	id, err := bc.Subscribe(ctx, func(context.Context, uuid.UUID, int) error { return nil })
 	if err != nil {
 		return fmt.Errorf("Subscribe: %w", err)
 	}

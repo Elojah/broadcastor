@@ -1,4 +1,4 @@
-// With WithSubscriberBuffer, Broadcast only waits for a busy subscriber once its buffer is full.
+// With subscriber.WithBuffer, Broadcast only waits for a busy subscriber once its buffer is full.
 //
 // handle waits for release, standing in for slow work.
 package main
@@ -9,7 +9,10 @@ import (
 	"log"
 	"sync"
 
+	"github.com/google/uuid"
+
 	"github.com/elojah/broadcastor"
+	"github.com/elojah/broadcastor/subscriber"
 )
 
 func main() {
@@ -18,13 +21,13 @@ func main() {
 
 	release := make(chan struct{})
 	var handled sync.WaitGroup
-	id, err := b.Subscribe(ctx, func(_ context.Context, n int) error {
+	id, err := b.Subscribe(ctx, func(_ context.Context, _ uuid.UUID, n int) error {
 		<-release
 		fmt.Println("got", n)
 		handled.Done()
 
 		return nil
-	}, broadcastor.WithSubscriberBuffer[int](2))
+	}, subscriber.WithBuffer[int](2))
 	if err != nil {
 		log.Fatal(err)
 	}

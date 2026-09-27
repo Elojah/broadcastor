@@ -10,6 +10,8 @@ import (
 	"log"
 	"sync"
 
+	"github.com/google/uuid"
+
 	"github.com/elojah/broadcastor"
 )
 
@@ -18,7 +20,7 @@ func main() {
 	b := broadcastor.NewBroadcastor[string]()
 
 	var handled sync.WaitGroup
-	id, err := b.Subscribe(ctx, func(_ context.Context, msg string) error {
+	id, err := b.Subscribe(ctx, func(_ context.Context, _ uuid.UUID, msg string) error {
 		defer handled.Done()
 		fmt.Println("got", msg)
 

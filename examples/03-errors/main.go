@@ -1,5 +1,5 @@
-// The error handler gets every error handle returns, wrapped in a *HandleError along with the message it failed on.
-// Without an error handler, errors are discarded.
+// The error handler gets every error handle returns. middleware.WrapError wraps each one in a *subscriber.HandleError,
+// along with the subscriber and the message it failed on. Without an error handler, errors are discarded.
 //
 // The error handler runs in the subscriber's goroutine, right after handle, so the output is in message order.
 package main
@@ -11,7 +11,11 @@ import (
 	"log"
 	"sync"
 
+	"github.com/google/uuid"
+
 	"github.com/elojah/broadcastor"
+	"github.com/elojah/broadcastor/middleware"
+	"github.com/elojah/broadcastor/subscriber"
 )
 
 var errNegative = errors.New("negative")
@@ -22,7 +26,7 @@ func main() {
 
 	// Every message is either handled or reported.
 	var done sync.WaitGroup
-	id, err := b.Subscribe(ctx, func(_ context.Context, n int) error {
+	id, err := b.Subscribe(ctx, func(_ context.Context, _ uuid.UUID, n int) error {
 		if n < 0 {
 			return errNegative
 		}
@@ -30,13 +34,16 @@ func main() {
 		done.Done()
 
 		return nil
-	}, broadcastor.WithSubscriberErrorHandler[int](func(_ context.Context, err error) {
-		var handleErr *broadcastor.HandleError[int]
-		if errors.As(err, &handleErr) {
-			fmt.Printf("failed on %d: %v\n", handleErr.Message, handleErr.Err)
-		}
-		done.Done()
-	}))
+	},
+		subscriber.WithMiddleware(middleware.WrapError[int]()),
+		subscriber.WithErrorHandler[int](func(_ context.Context, err error) {
+			var handleErr *subscriber.HandleError[int]
+			if errors.As(err, &handleErr) {
+				fmt.Printf("failed on %d: %v\n", handleErr.Message, handleErr.Err)
+			}
+			done.Done()
+		}),
+	)
 	if err != nil {
 		log.Fatal(err)
 	}

@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/elojah/broadcastor"
+	"github.com/elojah/broadcastor/subscriber"
 )
 
 // Once unsubscribed with WithUnsubscribeDiscard, the subscriber reports what is left in its buffer, and the message of a
@@ -23,8 +24,8 @@ func TestWithUnsubscribeDiscard(t *testing.T) {
 		b := broadcastor.NewBroadcastor[int]()
 		handled := &recorder[int]{hold: make(chan struct{})}
 		closed := &recorder[int]{}
-		id, err := b.Subscribe(ctx, handled.handle, broadcastor.WithSubscriberBuffer[int](2),
-			broadcastor.WithSubscriberErrorHandler[int](func(ctx context.Context, err error) {
+		id, err := b.Subscribe(ctx, handled.handle, subscriber.WithBuffer[int](2),
+			subscriber.WithErrorHandler[int](func(ctx context.Context, err error) {
 				if v := ctx.Value(key{}); v != "subscribe" {
 					t.Errorf("error handler got a ctx with value %v, want the one passed to Subscribe", v)
 				}
@@ -45,7 +46,7 @@ func TestWithUnsubscribeDiscard(t *testing.T) {
 		}()
 		synctest.Wait()
 
-		if err := b.Unsubscribe(t.Context(), id, broadcastor.WithUnsubscribeDiscard()); err != nil {
+		if err := b.Unsubscribe(t.Context(), id, subscriber.WithUnsubscribeDiscard()); err != nil {
 			t.Fatalf("Unsubscribe: %v", err)
 		}
 		handled.release()
@@ -56,7 +57,7 @@ func TestWithUnsubscribeDiscard(t *testing.T) {
 			t.Errorf("handle got %v, want %v", got, want)
 		}
 		if got, want := closed.messages(), []int{2, 3, 4}; !slices.Equal(got, want) {
-			t.Errorf("error handler got *SubscriberClosedError for messages %v, want %v", got, want)
+			t.Errorf("error handler got *subscriber.ClosedError for messages %v, want %v", got, want)
 		}
 	})
 }
@@ -71,16 +72,15 @@ func TestWithUnsubscribeDiscard_Self(t *testing.T) {
 		handled := &recorder[int]{}
 		closed := &recorder[int]{}
 		proceed := make(chan struct{})
-		var id uuid.UUID
-		id = subscribe(t, b, func(ctx context.Context, msg int) error {
+		subscribe(t, b, func(ctx context.Context, id uuid.UUID, msg int) error {
 			handled.record(msg)
 			<-proceed
-			if err := b.Unsubscribe(ctx, id, broadcastor.WithUnsubscribeDiscard()); err != nil {
+			if err := b.Unsubscribe(ctx, id, subscriber.WithUnsubscribeDiscard()); err != nil {
 				t.Errorf("Unsubscribe: %v", err)
 			}
 
 			return nil
-		}, broadcastor.WithSubscriberErrorHandler[int](recordClosed(t, closed)))
+		}, subscriber.WithErrorHandler[int](recordClosed(t, closed)))
 
 		b.Broadcast(t.Context(), 1) // handle is now processing 1 and not reading
 		done := make(chan struct{})
@@ -97,22 +97,22 @@ func TestWithUnsubscribeDiscard_Self(t *testing.T) {
 			t.Errorf("handle got %v, want %v", got, want)
 		}
 		if got, want := closed.messages(), []int{2}; !slices.Equal(got, want) {
-			t.Errorf("error handler got *SubscriberClosedError for messages %v, want %v", got, want)
+			t.Errorf("error handler got *subscriber.ClosedError for messages %v, want %v", got, want)
 		}
 	})
 }
 
 // A subscriber's default unsubscribe options apply to Close, and an Unsubscribe's own options override them.
-func TestWithSubscriberDefaultUnsubscribeOptions(t *testing.T) {
+func TestSubscriberWithDefaultUnsubscribeOptions(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
 		b := broadcastor.NewBroadcastor[int]()
 		subscribeHeld := func(closed *recorder[int]) (*recorder[int], uuid.UUID) {
 			handled := &recorder[int]{hold: make(chan struct{})}
-			id := subscribe(t, b, handled.handle, broadcastor.WithSubscriberBuffer[int](2),
-				broadcastor.WithSubscriberErrorHandler[int](recordClosed(t, closed)),
-				broadcastor.WithSubscriberDefaultUnsubscribeOptions[int](broadcastor.WithUnsubscribeDiscard()))
+			id := subscribe(t, b, handled.handle, subscriber.WithBuffer[int](2),
+				subscriber.WithErrorHandler[int](recordClosed(t, closed)),
+				subscriber.WithDefaultUnsubscribeOptions[int](subscriber.WithUnsubscribeDiscard()))
 
 			return handled, id
 		}
@@ -125,7 +125,7 @@ func TestWithSubscriberDefaultUnsubscribeOptions(t *testing.T) {
 		for msg := 1; msg <= 3; msg++ {
 			b.Broadcast(t.Context(), msg)
 		}
-		if err := b.Unsubscribe(t.Context(), deliveredID, broadcastor.WithUnsubscribeDeliver()); err != nil {
+		if err := b.Unsubscribe(t.Context(), deliveredID, subscriber.WithUnsubscribeDeliver()); err != nil {
 			t.Fatalf("Unsubscribe: %v", err)
 		}
 		if err := b.Close(); err != nil {
@@ -158,8 +158,8 @@ func TestSubscribeSeq_UnsubscribeDiscard(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b := broadcastor.NewBroadcastor[int]()
 		closed := &recorder[int]{}
-		id, seq := subscribeSeq(t, b, broadcastor.WithSubscriberBuffer[int](2),
-			broadcastor.WithSubscriberErrorHandler[int](recordClosed(t, closed)))
+		id, seq := subscribeSeq(t, b, subscriber.WithBuffer[int](2),
+			subscriber.WithErrorHandler[int](recordClosed(t, closed)))
 
 		// Nothing reads before the loop starts: 1 and 2 fill the buffer, and the Broadcast of 3 waits.
 		b.Broadcast(t.Context(), 1)
@@ -171,7 +171,7 @@ func TestSubscribeSeq_UnsubscribeDiscard(t *testing.T) {
 		}()
 		synctest.Wait()
 
-		if err := b.Unsubscribe(t.Context(), id, broadcastor.WithUnsubscribeDiscard()); err != nil {
+		if err := b.Unsubscribe(t.Context(), id, subscriber.WithUnsubscribeDiscard()); err != nil {
 			t.Fatalf("Unsubscribe: %v", err)
 		}
 		for msg := range seq {
@@ -181,7 +181,7 @@ func TestSubscribeSeq_UnsubscribeDiscard(t *testing.T) {
 		synctest.Wait()
 
 		if got, want := closed.messages(), []int{1, 2, 3}; !slices.Equal(got, want) {
-			t.Errorf("error handler got *SubscriberClosedError for messages %v, want %v", got, want)
+			t.Errorf("error handler got *subscriber.ClosedError for messages %v, want %v", got, want)
 		}
 	})
 }
@@ -194,15 +194,15 @@ func TestSubscribeSeq_UnsubscribeDiscardSelf(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b := broadcastor.NewBroadcastor[int]()
 		closed := &recorder[int]{}
-		id, seq := subscribeSeq(t, b, broadcastor.WithSubscriberBuffer[int](2),
-			broadcastor.WithSubscriberErrorHandler[int](recordClosed(t, closed)))
+		id, seq := subscribeSeq(t, b, subscriber.WithBuffer[int](2),
+			subscriber.WithErrorHandler[int](recordClosed(t, closed)))
 
 		b.Broadcast(t.Context(), 1)
 		b.Broadcast(t.Context(), 2)
 		var yielded []int
 		for msg := range seq {
 			yielded = append(yielded, msg)
-			if err := b.Unsubscribe(t.Context(), id, broadcastor.WithUnsubscribeDiscard()); err != nil {
+			if err := b.Unsubscribe(t.Context(), id, subscriber.WithUnsubscribeDiscard()); err != nil {
 				t.Errorf("Unsubscribe: %v", err)
 			}
 		}
@@ -212,20 +212,20 @@ func TestSubscribeSeq_UnsubscribeDiscardSelf(t *testing.T) {
 			t.Errorf("loop got %v, want %v", yielded, want)
 		}
 		if got, want := closed.messages(), []int{2}; !slices.Equal(got, want) {
-			t.Errorf("error handler got *SubscriberClosedError for messages %v, want %v", got, want)
+			t.Errorf("error handler got *subscriber.ClosedError for messages %v, want %v", got, want)
 		}
 	})
 }
 
-// recordClosed returns an error handler that records the message of every *SubscriberClosedError it is given into r,
+// recordClosed returns an error handler that records the message of every *subscriber.ClosedError it is given into r,
 // and fails the test on any other error.
 func recordClosed(t *testing.T, r *recorder[int]) func(context.Context, error) {
 	t.Helper()
 
 	return func(_ context.Context, err error) {
-		var closedErr *broadcastor.SubscriberClosedError[int]
-		if !errors.As(err, &closedErr) || !errors.Is(err, broadcastor.ErrSubscriberClosed) {
-			t.Errorf("error handler got %v, want a *SubscriberClosedError", err)
+		var closedErr *subscriber.ClosedError[int]
+		if !errors.As(err, &closedErr) || !errors.Is(err, subscriber.ErrClosed) {
+			t.Errorf("error handler got %v, want a *subscriber.ClosedError", err)
 
 			return
 		}

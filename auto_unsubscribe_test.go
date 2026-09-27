@@ -9,18 +9,19 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/elojah/broadcastor"
+	"github.com/elojah/broadcastor/subscriber"
 )
 
-// Once its ctx is done, a subscriber with WithSubscriberAutoUnsubscribe is unsubscribed: Broadcast no longer reaches
+// Once its ctx is done, a subscriber with subscriber.WithAutoUnsubscribe is unsubscribed: Broadcast no longer reaches
 // it, and its goroutine ends.
-func TestWithSubscriberAutoUnsubscribe(t *testing.T) {
+func TestSubscriberWithAutoUnsubscribe(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		b := broadcastor.NewBroadcastor[int]()
 		handled := &recorder[int]{}
-		id, err := b.Subscribe(ctx, handled.handle, broadcastor.WithSubscriberAutoUnsubscribe[int]())
+		id, err := b.Subscribe(ctx, handled.handle, subscriber.WithAutoUnsubscribe[int]())
 		if err != nil {
 			t.Fatalf("Subscribe: %v", err)
 		}
@@ -44,7 +45,7 @@ func TestWithSubscriberAutoUnsubscribe(t *testing.T) {
 
 // A subscriber whose ctx is done while handle is running is unsubscribed right away, without waiting for handle, and
 // with its default unsubscribe options: here, it discards what is left in its buffer.
-func TestWithSubscriberAutoUnsubscribe_WhileHandling(t *testing.T) {
+func TestSubscriberWithAutoUnsubscribe_WhileHandling(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
@@ -52,10 +53,10 @@ func TestWithSubscriberAutoUnsubscribe_WhileHandling(t *testing.T) {
 		b := broadcastor.NewBroadcastor[int]()
 		handled := &recorder[int]{hold: make(chan struct{})}
 		closed := &recorder[int]{}
-		id, err := b.Subscribe(ctx, handled.handle, broadcastor.WithSubscriberAutoUnsubscribe[int](),
-			broadcastor.WithSubscriberBuffer[int](1),
-			broadcastor.WithSubscriberErrorHandler[int](recordClosed(t, closed)),
-			broadcastor.WithSubscriberDefaultUnsubscribeOptions[int](broadcastor.WithUnsubscribeDiscard()))
+		id, err := b.Subscribe(ctx, handled.handle, subscriber.WithAutoUnsubscribe[int](),
+			subscriber.WithBuffer[int](1),
+			subscriber.WithErrorHandler[int](recordClosed(t, closed)),
+			subscriber.WithDefaultUnsubscribeOptions[int](subscriber.WithUnsubscribeDiscard()))
 		if err != nil {
 			t.Fatalf("Subscribe: %v", err)
 		}
@@ -80,13 +81,13 @@ func TestWithSubscriberAutoUnsubscribe_WhileHandling(t *testing.T) {
 			t.Errorf("handle got %v, want %v", got, want)
 		}
 		if got, want := closed.messages(), []int{2}; !slices.Equal(got, want) {
-			t.Errorf("error handler got *SubscriberClosedError for messages %v, want %v", got, want)
+			t.Errorf("error handler got *subscriber.ClosedError for messages %v, want %v", got, want)
 		}
 	})
 }
 
 // A subscriber whose ctx is already done when it subscribes is unsubscribed right after.
-func TestWithSubscriberAutoUnsubscribe_ContextDoneFirst(t *testing.T) {
+func TestSubscriberWithAutoUnsubscribe_ContextDoneFirst(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
@@ -94,7 +95,7 @@ func TestWithSubscriberAutoUnsubscribe_ContextDoneFirst(t *testing.T) {
 		cancel()
 		b := broadcastor.NewBroadcastor[int]()
 		handled := &recorder[int]{}
-		if _, err := b.Subscribe(ctx, handled.handle, broadcastor.WithSubscriberAutoUnsubscribe[int]()); err != nil {
+		if _, err := b.Subscribe(ctx, handled.handle, subscriber.WithAutoUnsubscribe[int]()); err != nil {
 			t.Fatalf("Subscribe: %v", err)
 		}
 		synctest.Wait()
@@ -111,16 +112,16 @@ func TestWithSubscriberAutoUnsubscribe_ContextDoneFirst(t *testing.T) {
 
 // A SubscribeSeq subscriber whose ctx is done before its loop starts is unsubscribed without waiting for the loop, so
 // Broadcast no longer waits for it. The loop then yields nothing, and reports the message the subscriber took.
-func TestWithSubscriberAutoUnsubscribe_SubscribeSeq(t *testing.T) {
+func TestSubscriberWithAutoUnsubscribe_SubscribeSeq(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		b := broadcastor.NewBroadcastor[int]()
 		closed := &recorder[int]{}
-		_, seq, err := b.SubscribeSeq(ctx, broadcastor.WithSubscriberAutoUnsubscribe[int](),
-			broadcastor.WithSubscriberBuffer[int](1),
-			broadcastor.WithSubscriberErrorHandler[int](recordClosed(t, closed)))
+		_, seq, err := b.SubscribeSeq(ctx, subscriber.WithAutoUnsubscribe[int](),
+			subscriber.WithBuffer[int](1),
+			subscriber.WithErrorHandler[int](recordClosed(t, closed)))
 		if err != nil {
 			t.Fatalf("SubscribeSeq: %v", err)
 		}
@@ -138,14 +139,14 @@ func TestWithSubscriberAutoUnsubscribe_SubscribeSeq(t *testing.T) {
 		}
 		synctest.Wait()
 		if got, want := closed.messages(), []int{1}; !slices.Equal(got, want) {
-			t.Errorf("error handler got *SubscriberClosedError for messages %v, want %v", got, want)
+			t.Errorf("error handler got *subscriber.ClosedError for messages %v, want %v", got, want)
 		}
 	})
 }
 
-// A subscriber with WithSubscriberAutoUnsubscribe that is unsubscribed another way, while its ctx is never done, leaves
-// nothing waiting on that ctx. A goroutine left waiting would never end, and fail the synctest test.
-func TestWithSubscriberAutoUnsubscribe_NoLeak(t *testing.T) {
+// A subscriber with subscriber.WithAutoUnsubscribe that is unsubscribed another way, while its ctx is never done,
+// leaves nothing waiting on that ctx. A goroutine left waiting would never end, and fail the synctest test.
+func TestSubscriberWithAutoUnsubscribe_NoLeak(t *testing.T) {
 	t.Parallel()
 
 	for _, tt := range []struct {
@@ -170,7 +171,7 @@ func TestWithSubscriberAutoUnsubscribe_NoLeak(t *testing.T) {
 				ctx := neverDone{Context: context.Background(), done: make(chan struct{})}
 				b := broadcastor.NewBroadcastor[int]()
 				handled := &recorder[int]{}
-				id, err := b.Subscribe(ctx, handled.handle, broadcastor.WithSubscriberAutoUnsubscribe[int]())
+				id, err := b.Subscribe(ctx, handled.handle, subscriber.WithAutoUnsubscribe[int]())
 				if err != nil {
 					t.Fatalf("Subscribe: %v", err)
 				}
@@ -188,14 +189,14 @@ func TestWithSubscriberAutoUnsubscribe_NoLeak(t *testing.T) {
 }
 
 // Its ctx being done and Unsubscribe racing on one subscriber unsubscribe it once between them.
-func TestWithSubscriberAutoUnsubscribe_RacesUnsubscribe(t *testing.T) {
+func TestSubscriberWithAutoUnsubscribe_RacesUnsubscribe(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		b := broadcastor.NewBroadcastor[int]()
 		handled := &recorder[int]{}
-		id, err := b.Subscribe(ctx, handled.handle, broadcastor.WithSubscriberAutoUnsubscribe[int]())
+		id, err := b.Subscribe(ctx, handled.handle, subscriber.WithAutoUnsubscribe[int]())
 		if err != nil {
 			t.Fatalf("Subscribe: %v", err)
 		}

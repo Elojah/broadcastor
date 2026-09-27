@@ -20,7 +20,7 @@ when nobody reads it.
 
 ### Small options
 
-- `WithSubscriberFilter(func(T) bool)`: skip unwanted messages before sending, so they never take a reference or hold
+- `subscriber.WithFilter(func(T) bool)`: skip unwanted messages before sending, so they never take a reference or hold
   `Broadcast` up.
 
 ### Done
@@ -33,28 +33,40 @@ when nobody reads it.
 - CI (`.github/workflows/ci.yml`) running `make check` with a pinned golangci-lint, and a committed `.golangci.yml`
   (`default: all`, as in the other repos).
 - `SubscriberNotFoundError.SubscriberID` is exported.
-- Sentinels `ErrSubscriberNotFound`, `ErrSubscriberClosed`, `ErrTimeout`, plus `ErrDropped` and `ErrPanic` for the new
-  errors, matched by each typed error's `Is` method.
-- `WithMessageSync`. Sync, async and non-blocking are now one delivery mode per message, and the last option wins.
+- Sentinels `ErrSubscriberNotFound`, `subscriber.ErrClosed`, `subscriber.ErrTimeout`, plus `subscriber.ErrDropped` and
+  `subscriber.ErrPanic` for the new errors, matched by each typed error's `Is` method.
+- `message.WithSync`. Sync, async and non-blocking are now one delivery mode per message, and the last option wins.
 - `Broadcast` returns how many subscribers it handed the message to: sync and non-blocking sends taken, plus async sends
   started.
-- `WithSubscriberRecover`: a panic in `handle` is reported as a `*PanicError` (value and stack), and consuming goes on.
-- `WithMessageNonBlocking` (name kept over `WithMessageFireAndForget`, which reads like async): a busy subscriber misses
+- Recover (now `middleware.Recover`): a panic in `handle` is reported as a `*PanicError` (value and stack), and consuming
+  goes on.
+- `message.WithNonBlocking` (name kept over `WithFireAndForget`, which reads like async): a busy subscriber misses
   the message with a `*DroppedError`. Note that with a buffer this keeps the oldest messages and drops the newest, so
   it is not "latest value wins". That needs the `DropOldest` policy from "Ordered async" below.
 - `SubscribeSeq`, a pull-style variant returning `iter.Seq[T]`: the loop body takes the place of `handle`, reading the
   subscriber's channel directly. Breaking out of the loop, or its ctx being done, unsubscribes. Messages it took but
-  never yielded are reported as `*SubscriberClosedError`.
+  never yielded are reported as `*subscriber.ClosedError`.
 - `WithUnsubscribeDiscard` (not "drain", which in NATS means the opposite: process what is pending, then close): once
-  unsubscribed, the subscriber reports what it takes as `*SubscriberClosedError` instead of handling it, and a
-  `SubscribeSeq` loop ends. It can be the subscriber's default (`WithSubscriberDefaultUnsubscribeOptions`), which is how
-  `Close` applies it: `Close()` keeps its signature, and so still satisfies `io.Closer`. `WithUnsubscribeDeliver`
+  unsubscribed, the subscriber reports what it takes as `*subscriber.ClosedError` instead of handling it, and a
+  `SubscribeSeq` loop ends. It can be the subscriber's default (`subscriber.WithDefaultUnsubscribeOptions`), which is
+  how `Close` applies it: `Close()` keeps its signature, and so still satisfies `io.Closer`. `WithUnsubscribeDeliver`
   overrides that default.
-- `WithSubscriberAutoUnsubscribe`: the subscriber is unsubscribed as soon as the `Subscribe` or `SubscribeSeq` ctx is
+- `subscriber.WithAutoUnsubscribe`: the subscriber is unsubscribed as soon as the `Subscribe` or `SubscribeSeq` ctx is
   done, even while `handle` runs. It is a `context.AfterFunc` rather than a watcher goroutine, stopped by whichever
   removal comes first, so nothing is left waiting on a ctx that is never done.
-- Benchmarks (`bench_test.go`, `make bench`): `Broadcast` for 1 to 1000 subscribers × sync/async/buffered, and
-  `Subscribe`/`Unsubscribe` churn, serial and parallel.
+- Benchmarks (`bench_test.go`, `make bench`): `Broadcast` for 1 to 1000 subscribers × sync/async/buffered/middleware,
+  and `Subscribe`/`Unsubscribe` churn, serial and parallel.
+- `subscriber.WithMiddleware`: a `func(next Handler[T]) Handler[T]` chain around `handle`, first outermost. Breaking
+  changes since v0.1.0: `handle` takes the subscriber's ID (`func(ctx, id, msg) error`), so a middleware can build
+  errors about it and `handle` can unsubscribe itself without capturing the ID `Subscribe` returns. `WithSubscriberRecover`
+  became `middleware.Recover`, and `*HandleError` wrapping is opt-in with `middleware.WrapError`: without it, error
+  handlers get `handle`'s error as is.
+- Packages `subscriber` and `message`. Breaking change: the options moved next to what they configure and lost their
+  prefix (`WithSubscriberBuffer` is `subscriber.WithBuffer`, `WithMessageAsync` is `message.WithAsync`,
+  `SubscriberOption` is `subscriber.Option`, `MessageOptions` is `message.Option`). `Handler`, `Middleware` and every
+  error about a subscriber's messages moved to `subscriber` too, where `SubscriberClosedError` and
+  `ErrSubscriberClosed` became `ClosedError` and `ErrClosed`. `broadcastor` keeps `Broadcastor`, `ErrClosed` and
+  `SubscriberNotFoundError`. The subscriber's reference counting stays unexported inside `subscriber`.
 
 ## Mid-term: more delivery modes (v0.x)
 
@@ -77,7 +89,7 @@ when nobody reads it.
 
 ### Parallel but waiting
 
-- [x] `WithMessageParallel`: send to every subscriber at once, but return only after each one has taken the message or
+- [x] `message.WithParallel`: send to every subscriber at once, but return only after each one has taken the message or
   missed it. A slow subscriber stops holding up the ones after it, and successive `Broadcast`s from one goroutine still
   arrive in order. It sits between today's sync and async modes, and a ctx deadline would then apply to every
   subscriber equally instead of being used up one subscriber after another.
@@ -87,18 +99,12 @@ when nobody reads it.
 - Async gives up ordering to avoid blocking. A per-subscriber queue, discarded by one sender goroutine, keeps both:
   `Broadcast` enqueues and returns, and the subscriber gets messages in `Broadcast` order. The queue must be bounded,
   with an overflow policy (`Block`, `DropNewest`, `DropOldest`, `Error`), since an unbounded one just turns a slow
-  subscriber into a memory problem. This generalises `WithSubscriberBuffer` and `WithMessageNonBlocking`.
-
-### Middleware
-
-- Many planned options (recover, retry, filter, metrics, logging) wrap `handle`. A `func(next Handler[T]) Handler[T]`
-  chain (`WithSubscriberMiddleware`) lets users compose their own, keeps the list of options short, and gives the
-  built-in options one shared implementation.
+  subscriber into a memory problem. This generalises `subscriber.WithBuffer` and `message.WithNonBlocking`.
 
 ### Storage, retry, errors and groups (from the original list)
 
-- `WithRetry(RetryPolicy)`: run `handle` again after a `*HandleError`, with backoff (attempts, delay, jitter,
-  `IsRetryable(err)`). An in-memory retry holds the subscriber up during backoff, just like a slow `handle` does. That
+- `middleware.Retry(RetryPolicy)` (see `examples/12-middleware`): run `handle` again after an error, with backoff
+  (attempts, delay, jitter, `IsRetryable(err)`). An in-memory retry holds the subscriber up during backoff, just like a slow `handle` does. That
   is fine for a few quick attempts. Delayed or persistent retries need `WithStorage`.
 - `WithStorage(Storage[T])`: an interface (`Put`, `Next`, `Ack`) holding messages that failed or timed out, to be retried
   or replayed later. Ship an in-memory ring buffer first and add real backends later.
@@ -107,7 +113,7 @@ when nobody reads it.
   `TestSubscribe_ErrorsWithoutHandler`). It could simply be a ready-made error handler (`NewErrorBuffer(n)` returning the
   handler and a reader), so the library gains no new error path.
 - `WithGroup` has two plausible meanings, and both are probably worth having under separate names:
-  - **Consumer groups** (`WithSubscriberGroup(name)`): subscribers in the same group share the load. Each message goes
+  - **Consumer groups** (`subscriber.WithGroup(name)`): subscribers in the same group share the load. Each message goes
     to only one member of the group (round-robin, or the first one free), while every group and every ungrouped
     subscriber still gets every message. These are Kafka/NATS queue-group semantics, and they turn the fan-out into a
     fan-out plus a work queue.
@@ -122,21 +128,22 @@ when nobody reads it.
 
 ### Topics
 
-- Subscribing to a subset of messages: either `WithSubscriberFilter`, or a keyed `Topics[K comparable, T]` holding one
+- Subscribing to a subset of messages: either `subscriber.WithFilter`, or a keyed `Topics[K comparable, T]` holding one
   `Broadcastor[T]` per key, with prefix or wildcard matching later on.
 
 ### Performance
 
 - `Broadcast` walks a `sync.Map` through a closure on every call. For workloads that broadcast often but subscribe
-  rarely, a copy-on-write `atomic.Pointer[[]*subscriber[T]]` avoids both the map walk and the allocation.
-- `Broadcast` allocates once per subscriber (24 B), even in sync mode. The per-subscriber `messageConfig` is moved to
-  the heap because `option(&config)` in `newMessage` passes its address to an unknown func (`go build -gcflags=-m`). Applying the
+  rarely, a copy-on-write `atomic.Pointer[[]*subscriber.Subscriber[T]]` avoids both the map walk and the allocation.
+- `Broadcast` allocates once per subscriber (24 B), even in sync mode. The per-subscriber `message.Config` is moved to
+  the heap because `option(&config)` in `message.New` passes its address to an unknown func (`go build -gcflags=-m`). Applying the
   options once per `Broadcast`, recording which fields they set, and then merging those over each subscriber's
   defaults by value could avoid it.
 - Async starts one goroutine per subscriber per `Broadcast`. The per-subscriber sender from "Ordered async" would cap
   that.
-- Replace UUIDs with an atomic counter. That removes the only dependency and the only error `Subscribe` can return. The
-  distributed direction below would need IDs that are unique across processes, though, so decide on that first.
+- Replace UUIDs with an atomic counter. That removes the only dependency and the only error `Subscribe` can return, but
+  changes `handle`'s signature too, since it takes the ID. The distributed direction below would need IDs that are
+  unique across processes, though, so decide on that first.
 
 ## Long-term: beyond one process
 

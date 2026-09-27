@@ -1,5 +1,5 @@
-// A subscriber can unsubscribe itself from handle, since Unsubscribe never waits. Once it has, Broadcast no longer hands
-// it anything.
+// A subscriber can unsubscribe itself from handle, with the ID handle is given, since Unsubscribe never waits. Once it
+// has, Broadcast no longer hands it anything.
 package main
 
 import (
@@ -17,8 +17,7 @@ func main() {
 	b := broadcastor.NewBroadcastor[string]()
 
 	stopped := make(chan struct{})
-	var id uuid.UUID
-	id, err := b.Subscribe(ctx, func(ctx context.Context, msg string) error {
+	_, err := b.Subscribe(ctx, func(ctx context.Context, id uuid.UUID, msg string) error {
 		fmt.Println("got", msg)
 		if msg != "stop" {
 			return nil

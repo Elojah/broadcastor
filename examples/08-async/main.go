@@ -11,7 +11,10 @@ import (
 	"log"
 	"sync"
 
+	"github.com/google/uuid"
+
 	"github.com/elojah/broadcastor"
+	"github.com/elojah/broadcastor/message"
 )
 
 func main() {
@@ -20,7 +23,7 @@ func main() {
 
 	release := make(chan struct{})
 	var handled sync.WaitGroup
-	id, err := b.Subscribe(ctx, func(_ context.Context, msg string) error {
+	id, err := b.Subscribe(ctx, func(_ context.Context, _ uuid.UUID, msg string) error {
 		<-release
 		fmt.Println("got", msg)
 		handled.Done()
@@ -33,8 +36,8 @@ func main() {
 
 	handled.Add(2)
 	b.Broadcast(ctx, "first") // the subscriber takes it, then waits in handle
-	// Without WithMessageAsync, this would wait for handle, forever.
-	b.Broadcast(ctx, "second", broadcastor.WithMessageAsync[string]())
+	// Without message.WithAsync, this would wait for handle, forever.
+	b.Broadcast(ctx, "second", message.WithAsync[string]())
 	fmt.Println("both Broadcasts returned")
 	close(release)
 	handled.Wait()

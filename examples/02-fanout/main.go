@@ -22,7 +22,7 @@ func main() {
 	names := []string{"alice", "bob"}
 	ids := make([]uuid.UUID, 0, len(names))
 	for _, name := range names {
-		id, err := b.Subscribe(ctx, func(_ context.Context, msg string) error {
+		id, err := b.Subscribe(ctx, func(_ context.Context, _ uuid.UUID, msg string) error {
 			defer handled.Done()
 			fmt.Println(name, "got", msg)
 
