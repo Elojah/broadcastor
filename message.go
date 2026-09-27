@@ -30,6 +30,9 @@ type message[T any] struct {
 
 	// errorHandler is called with every error about this message, on top of the subscriber's own, or nil for none.
 	errorHandler func(ctx context.Context, err error)
+
+	// values is the Broadcast ctx, whose values a subscriber with WithSubscriberBroadcastValues processes m with, or nil.
+	values context.Context //nolint:containedctx // carries the Broadcast ctx's values to handle, the whole point
 }
 
 // with returns what a Broadcast sends to one subscriber, starting from m, that subscriber's defaults: value, with the
@@ -41,4 +44,34 @@ func (m message[T]) with(value T, options ...MessageOptions[T]) message[T] {
 	}
 
 	return m
+}
+
+// handleContext returns the ctx that the subscriber, which was given ctx by Subscribe or SubscribeSeq, processes m with:
+// ctx itself, or with WithSubscriberBroadcastValues a messageContext that adds the values of m's Broadcast ctx.
+func (m message[T]) handleContext(ctx context.Context) context.Context {
+	if m.values == nil {
+		return ctx
+	}
+
+	return messageContext{Context: ctx, values: context.WithoutCancel(m.values)}
+}
+
+// messageContext is the ctx a subscriber with WithSubscriberBroadcastValues processes a message with. Its deadline and
+// cancellation are those of the Subscribe ctx alone, since the Broadcast ctx may be done long before the subscriber
+// takes the message, and its values are those of the Broadcast ctx, then those of the Subscribe ctx.
+type messageContext struct {
+	context.Context //nolint:containedctx // the Subscribe ctx, which it extends
+
+	// values is the Broadcast ctx wrapped by context.WithoutCancel, which answers nil for the context package's own key
+	// under which a cancellable ctx returns itself. Value then looks that key up on the Subscribe ctx, so that
+	// context.Cause and the ctxs derived from this one follow the Subscribe ctx, never the Broadcast ctx.
+	values context.Context //nolint:containedctx // see message.values
+}
+
+func (c messageContext) Value(key any) any {
+	if v := c.values.Value(key); v != nil {
+		return v
+	}
+
+	return c.Context.Value(key)
 }

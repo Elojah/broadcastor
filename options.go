@@ -30,7 +30,7 @@ func WithSubscriberBuffer[T any](buffer int) SubscriberOption[T] {
 	}
 }
 
-// WithSubscriberErrorHandler sets the function called with every error handle returns, with the ctx passed to Subscribe.
+// WithSubscriberErrorHandler sets the function called with every error handle returns, with the same ctx as handle.
 // Without it, errors are discarded.
 func WithSubscriberErrorHandler[T any](handler func(ctx context.Context, err error)) SubscriberOption[T] {
 	return func(subscriber *subscriber[T]) {
@@ -40,7 +40,7 @@ func WithSubscriberErrorHandler[T any](handler func(ctx context.Context, err err
 
 // WithSubscriberRecover makes the subscriber recover when handle panics, instead of letting the panic crash the program.
 // Its error handlers are given a *PanicError with the value handle panicked with and the stack at that point, from the
-// subscriber's goroutine and with the ctx passed to Subscribe, like a *HandleError. The subscriber then goes on with the
+// subscriber's goroutine and with the same ctx as handle, like a *HandleError. The subscriber then goes on with the
 // next message. Only panics in handle are recovered, not those in error handlers. It has no effect on SubscribeSeq,
 // whose loop body runs in the caller's goroutine.
 func WithSubscriberRecover[T any]() SubscriberOption[T] {
@@ -61,6 +61,24 @@ func WithSubscriberRecover[T any]() SubscriberOption[T] {
 func WithSubscriberAutoUnsubscribe[T any]() SubscriberOption[T] {
 	return func(subscriber *subscriber[T]) {
 		subscriber.autoUnsubscribe = true
+	}
+}
+
+// WithSubscriberBroadcastValues makes the values of the ctx passed to Broadcast reach handle, such as a trace ID or a
+// request-scoped logger. Without it, handle gets the ctx passed to Subscribe, and nothing from Broadcast. With it, handle
+// gets a ctx that has the values of the Broadcast ctx of its message, then those of the Subscribe ctx: a key set on both
+// is looked up on the Broadcast ctx.
+//
+// Its deadline and cancellation are still those of the Subscribe ctx alone, and so is context.Cause. By the time handle
+// runs, Broadcast may have returned and its ctx be done, which handle does not see.
+//
+// Every error reported once the subscriber has taken the message is reported with that same ctx: a *HandleError, a
+// *PanicError, or a *SubscriberClosedError when the subscriber discards it or a SubscribeSeq loop ends before yielding
+// it. Broadcast still reports the errors about handing the message over with its own ctx. A SubscribeSeq loop body is
+// given no ctx, so there only the error handlers get the Broadcast ctx's values.
+func WithSubscriberBroadcastValues[T any]() SubscriberOption[T] {
+	return func(subscriber *subscriber[T]) {
+		subscriber.broadcastValues = true
 	}
 }
 
@@ -129,12 +147,13 @@ func WithMessageNonBlocking[T any]() MessageOptions[T] {
 }
 
 // WithMessageErrorHandler sets a function called with every error about this message, on top of the error handler of
-// the subscriber it failed on: a *HandleError or a *PanicError when handle fails, with the ctx passed to Subscribe and
-// from the subscriber's goroutine, so a slow handler holds the subscriber up; a *TimeoutError, a *DroppedError or a
+// the subscriber it failed on: a *HandleError or a *PanicError when handle fails, with the same ctx as handle and from
+// the subscriber's goroutine, so a slow handler holds the subscriber up; a *TimeoutError, a *DroppedError or a
 // *SubscriberClosedError when Broadcast could not hand the message over, with the ctx passed to Broadcast; a
 // *SubscriberClosedError when a SubscribeSeq loop ended before yielding it, with the ctx passed to SubscribeSeq, or when
 // the subscriber took it after being unsubscribed with WithUnsubscribeDiscard, with the ctx passed to Subscribe or
-// SubscribeSeq. Every subscriber shares it, so it may be called concurrently, and after Broadcast has returned.
+// SubscribeSeq. With WithSubscriberBroadcastValues, those last two also have the values of the Broadcast ctx, as
+// handle's does. Every subscriber shares it, so it may be called concurrently, and after Broadcast has returned.
 func WithMessageErrorHandler[T any](handler func(ctx context.Context, err error)) MessageOptions[T] {
 	return func(message *message[T]) {
 		message.errorHandler = handler
@@ -155,11 +174,12 @@ func WithMessageTimeout[T any](timeout time.Duration) MessageOptions[T] {
 
 // WithUnsubscribeDiscard makes the subscriber stop processing messages once it is unsubscribed. Every message it takes
 // from then on, from its buffer or from a Broadcast that was already sending to it, is reported to its error handlers
-// as a *SubscriberClosedError instead of being passed to handle, with the ctx passed to Subscribe. A SubscribeSeq loop
-// ends instead of yielding it, and reports it with the ctx passed to SubscribeSeq. Unsubscribe still does not wait:
-// handle, or the loop body, may be running or about to start for one message when it returns, but for no other one.
-// It has no effect when the subscriber was already unsubscribed, by another Unsubscribe or by Close, whose options
-// applied instead. WithUnsubscribeDiscard and WithUnsubscribeDeliver exclude each other: the last one given wins.
+// as a *SubscriberClosedError instead of being passed to handle, with the same ctx as handle. A SubscribeSeq loop ends
+// instead of yielding it, and reports it with the ctx passed to SubscribeSeq, plus the values of the Broadcast ctx with
+// WithSubscriberBroadcastValues. Unsubscribe still does not wait: handle, or the loop body, may be running or about to
+// start for one message when it returns, but for no other one. It has no effect when the subscriber was already
+// unsubscribed, by another Unsubscribe or by Close, whose options applied instead. WithUnsubscribeDiscard and
+// WithUnsubscribeDeliver exclude each other: the last one given wins.
 func WithUnsubscribeDiscard() UnsubscribeOption {
 	return func(unsubscription *unsubscription) {
 		unsubscription.discard = true

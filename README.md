@@ -62,6 +62,8 @@ for msg := range seq {
 9. [`09-non-blocking`](examples/09-non-blocking/main.go): `WithMessageNonBlocking` and `*DroppedError`.
 10. [`10-defaults`](examples/10-defaults/main.go): `WithSubscriberDefaultMessageOptions`, overridden by `WithMessageSync`.
 11. [`11-iterator`](examples/11-iterator/main.go): `SubscribeSeq` and a `for range` loop instead of `handle`.
+12. [`12-broadcast-values`](examples/12-broadcast-values/main.go): `WithSubscriberBroadcastValues`, a trace ID from the
+    `Broadcast` ctx reaching `handle`.
 
 ## Delivery
 
@@ -81,6 +83,21 @@ In every mode, a subscriber that is unsubscribed while `Broadcast` is running ma
 `WithMessageTimeout(d)` bounds the wait for each subscriber separately, while a ctx deadline is used up across all of
 them. `WithSubscriberTimeout(d)` sets a default timeout for every message sent to one subscriber.
 
+## Context
+
+`handle` gets the ctx passed to `Subscribe`, not the one passed to `Broadcast`, which may be done by the time the
+subscriber takes the message. So by default, the values on the `Broadcast` ctx (a trace ID, a request-scoped logger)
+never reach `handle`. With `WithSubscriberBroadcastValues`, they do: `handle` gets a ctx with the values of its
+message's `Broadcast` ctx, then those of the `Subscribe` ctx, but with the deadline and cancellation of the `Subscribe`
+ctx alone.
+
+```go
+id, err := b.Subscribe(ctx, func(ctx context.Context, msg string) error {
+	log.Println(ctx.Value(traceIDKey{}), msg) // the trace ID of the request that broadcast msg
+	return nil
+}, broadcastor.WithSubscriberBroadcastValues[string]())
+```
+
 ## Errors
 
 Errors go to error handlers, and are discarded when there are none:
@@ -91,13 +108,16 @@ Errors go to error handlers, and are discarded when there are none:
 
 | Error | When | ctx given to the handler |
 | --- | --- | --- |
-| `*HandleError` | `handle` returned an error. | `Subscribe`'s |
-| `*PanicError` | `handle` panicked, in a subscriber with `WithSubscriberRecover`. Without it, the panic crashes the program. | `Subscribe`'s |
+| `*HandleError` | `handle` returned an error. | `handle`'s |
+| `*PanicError` | `handle` panicked, in a subscriber with `WithSubscriberRecover`. Without it, the panic crashes the program. | `handle`'s |
 | `*TimeoutError` | `Broadcast` gave up waiting. | `Broadcast`'s |
 | `*DroppedError` | A non-blocking `Broadcast` found the subscriber busy. | `Broadcast`'s |
 | `*SubscriberClosedError` | The subscriber was unsubscribed while `Broadcast` was running. | `Broadcast`'s |
-| `*SubscriberClosedError` | A `SubscribeSeq` loop ended before yielding a message its subscriber took. | `SubscribeSeq`'s |
-| `*SubscriberClosedError` | A subscriber unsubscribed with `WithUnsubscribeDiscard` took a message. | `Subscribe`'s or `SubscribeSeq`'s |
+| `*SubscriberClosedError` | A `SubscribeSeq` loop ended before yielding a message its subscriber took. | `SubscribeSeq`'s* |
+| `*SubscriberClosedError` | A subscriber unsubscribed with `WithUnsubscribeDiscard` took a message. | `Subscribe`'s or `SubscribeSeq`'s* |
+
+\* With `WithSubscriberBroadcastValues`, `handle`'s ctx and the ones marked with a star also have the values of the
+message's `Broadcast` ctx.
 
 Each error type matches a sentinel with `errors.Is` (`ErrTimeout`, `ErrDropped`, `ErrPanic`, `ErrSubscriberClosed`,
 `ErrSubscriberNotFound`), without needing to know the message type.
@@ -106,9 +126,9 @@ Each error type matches a sentinel with `errors.Is` (`ErrTimeout`, `ErrDropped`,
 
 `Unsubscribe` never waits, so `handle` can unsubscribe its own subscriber. A subscriber may still get messages after
 `Unsubscribe` returns: whatever is in its buffer, and the message of a `Broadcast` that was already sending to it. Its
-goroutine ends once it has processed them. `handle` gets the ctx passed to `Subscribe`, and cancelling that ctx does not
-unsubscribe it, unless the subscriber has `WithSubscriberAutoUnsubscribe`. That option unsubscribes it as soon as the ctx
-passed to `Subscribe` or `SubscribeSeq` is done, even while `handle` or the loop body is running, or before the loop
+goroutine ends once it has processed them. Cancelling the ctx passed to `Subscribe` cancels `handle`'s, but does not
+unsubscribe the subscriber, unless it has `WithSubscriberAutoUnsubscribe`. That option unsubscribes it as soon as the
+ctx passed to `Subscribe` or `SubscribeSeq` is done, even while `handle` or the loop body is running, or before the loop
 starts.
 
 A `SubscribeSeq` loop ends once its subscriber is unsubscribed and has yielded those messages. When it ends another way,

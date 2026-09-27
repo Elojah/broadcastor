@@ -45,13 +45,20 @@
 //
 // Broadcast returns how many subscribers it handed the message to.
 //
+// # Context
+//
+// handle gets the ctx given to Subscribe, not the one given to Broadcast, which may be done by the time the subscriber
+// takes the message. With WithSubscriberBroadcastValues, it gets a ctx that also has the values of its message's
+// Broadcast ctx, such as a trace ID or a request-scoped logger, which take precedence over those of the Subscribe ctx.
+// Its deadline and cancellation are still those of the Subscribe ctx alone.
+//
 // # Unsubscribing
 //
 // Unsubscribe never waits for anything, so handle can unsubscribe its own subscriber. A subscriber may still get
 // messages after Unsubscribe returns: whatever is in its buffer, and the message of a Broadcast that was already
-// sending to it. Its goroutine ends once it has processed them. Cancelling the ctx given to Subscribe, which is the one
-// handle gets, does not unsubscribe it, unless the subscriber has WithSubscriberAutoUnsubscribe: it is then unsubscribed
-// as soon as that ctx is done, even while handle is running.
+// sending to it. Its goroutine ends once it has processed them. Cancelling the ctx given to Subscribe, which cancels
+// handle's, does not unsubscribe it, unless the subscriber has WithSubscriberAutoUnsubscribe: it is then unsubscribed as
+// soon as that ctx is done, even while handle is running.
 //
 // A SubscribeSeq loop ends once its subscriber is unsubscribed and has yielded those messages. The loop unsubscribes
 // the subscriber itself when it ends another way: when it breaks, or once the ctx given to SubscribeSeq is done. The
@@ -74,12 +81,12 @@
 //
 //   - *HandleError when handle returns an error, and *PanicError when it panics in a subscriber with
 //     WithSubscriberRecover (without it, the panic crashes the program). The handlers are called from the subscriber's
-//     goroutine, right after handle, with the ctx given to Subscribe.
+//     goroutine, right after handle, with the same ctx as handle.
 //   - *TimeoutError, *DroppedError or *SubscriberClosedError when Broadcast could not hand the message over. The
 //     handlers are called with the ctx given to Broadcast.
 //   - *SubscriberClosedError when a SubscribeSeq loop ended before yielding a message its subscriber took, or when a
 //     subscriber unsubscribed with WithUnsubscribeDiscard took a message. The handlers are called with the ctx given to
-//     Subscribe or SubscribeSeq.
+//     Subscribe or SubscribeSeq, plus the values of the Broadcast ctx with WithSubscriberBroadcastValues.
 //
 // Each error type matches a sentinel (ErrTimeout, ErrDropped, and so on) with errors.Is, which does not need to know T.
 package broadcastor

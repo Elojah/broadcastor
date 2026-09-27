@@ -32,6 +32,9 @@ type subscriber[T any] struct {
 	// autoUnsubscribe makes add remove the subscriber once the ctx passed to Subscribe or SubscribeSeq is done.
 	autoUnsubscribe bool
 
+	// broadcastValues makes Broadcast send the values of its ctx along with every message, for handle.
+	broadcastValues bool
+
 	// stopWatching undoes the context.AfterFunc that add set up on that ctx, once the subscriber was removed another way.
 	// It is nil without autoUnsubscribe.
 	stopWatching func() bool
@@ -141,7 +144,7 @@ func (s *subscriber[T]) pull(ctx context.Context, yield func(T) bool) {
 				return
 			}
 			if s.discarding.Load() {
-				s.report(ctx, m, &SubscriberClosedError[T]{SubscriberID: s.id, Message: m.value})
+				s.report(m.handleContext(ctx), m, &SubscriberClosedError[T]{SubscriberID: s.id, Message: m.value})
 
 				return
 			}
@@ -158,7 +161,7 @@ func (s *subscriber[T]) pull(ctx context.Context, yield func(T) bool) {
 // sending to it waits for nothing. Every message it reads was taken but never yielded, and is reported as such.
 func (s *subscriber[T]) discard(ctx context.Context) {
 	for m := range s.ch {
-		s.report(ctx, m, &SubscriberClosedError[T]{SubscriberID: s.id, Message: m.value})
+		s.report(m.handleContext(ctx), m, &SubscriberClosedError[T]{SubscriberID: s.id, Message: m.value})
 	}
 }
 
@@ -169,14 +172,15 @@ func (s *subscriber[T]) discard(ctx context.Context) {
 
 func (s *subscriber[T]) consume(ctx context.Context, handle func(ctx context.Context, msg T) error) {
 	for m := range s.ch {
+		mctx := m.handleContext(ctx)
 		if s.discarding.Load() {
-			s.report(ctx, m, &SubscriberClosedError[T]{SubscriberID: s.id, Message: m.value})
+			s.report(mctx, m, &SubscriberClosedError[T]{SubscriberID: s.id, Message: m.value})
 
 			continue
 		}
 		// Reported here rather than from process, so that a panic in an error handler is not recovered.
-		if err := s.process(ctx, handle, m.value); err != nil {
-			s.report(ctx, m, err)
+		if err := s.process(mctx, handle, m.value); err != nil {
+			s.report(mctx, m, err)
 		}
 	}
 }

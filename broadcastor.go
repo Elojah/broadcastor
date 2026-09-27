@@ -29,7 +29,8 @@ func NewBroadcastor[T any]() *Broadcastor[T] {
 // Subscribe adds a subscriber and returns its ID, for Unsubscribe. The subscriber gets its own goroutine, which calls
 // handle with ctx for every message it is sent, one at a time and in the order it takes them, until it is unsubscribed
 // and has processed everything it took. Cancelling ctx does not unsubscribe it, unless WithSubscriberAutoUnsubscribe is
-// given. It returns ErrClosed once Close has been called, and otherwise fails only to generate the ID.
+// given. With WithSubscriberBroadcastValues, the ctx handle gets also has the values of the ctx passed to Broadcast. It
+// returns ErrClosed once Close has been called, and otherwise fails only to generate the ID.
 func (b *Broadcastor[T]) Subscribe(ctx context.Context, handle func(ctx context.Context, msg T) error, options ...SubscriberOption[T]) (uuid.UUID, error) {
 	s, err := b.add(ctx, options)
 	if err != nil {
@@ -137,6 +138,9 @@ func (b *Broadcastor[T]) Close() error {
 //
 // Every subscriber that misses the message has its error handlers given the reason, with ctx: a *TimeoutError, a
 // *DroppedError, or a *SubscriberClosedError when it was unsubscribed since Broadcast picked it up.
+//
+// handle is not given ctx, which may be done by the time the subscriber takes the message, but with
+// WithSubscriberBroadcastValues it is given the values of ctx.
 func (b *Broadcastor[T]) Broadcast(ctx context.Context, msg T, options ...MessageOptions[T]) int {
 	var n int
 	b.subscribers.Range(func(_, value any) bool {
@@ -146,6 +150,9 @@ func (b *Broadcastor[T]) Broadcast(ctx context.Context, msg T, options ...Messag
 		}
 
 		m := s.defaults.with(msg, options...)
+		if s.broadcastValues {
+			m.values = ctx
+		}
 
 		if !s.acquire() {
 			s.report(ctx, m, &SubscriberClosedError[T]{SubscriberID: s.id, Message: msg})

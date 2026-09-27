@@ -53,6 +53,11 @@ when nobody reads it.
 - `WithSubscriberAutoUnsubscribe`: the subscriber is unsubscribed as soon as the `Subscribe` or `SubscribeSeq` ctx is
   done, even while `handle` runs. It is a `context.AfterFunc` rather than a watcher goroutine, stopped by whichever
   removal comes first, so nothing is left waiting on a ctx that is never done.
+- `WithSubscriberBroadcastValues`: `handle` gets a ctx with the values of its message's `Broadcast` ctx (trace IDs,
+  request-scoped loggers), then those of the `Subscribe` ctx, but the deadline and cancellation of the `Subscribe` ctx
+  alone, so a `Broadcast` ctx that is done by the time `handle` runs does not cancel it. The error handlers get the
+  same ctx for whatever is reported once the subscriber has taken the message. A `SubscribeSeq` loop body gets no ctx,
+  so there only the error handlers see the values; an `iter.Seq2[context.Context, T]` variant would close that gap.
 - Benchmarks (`bench_test.go`, `make bench`): `Broadcast` for 1 to 1000 subscribers × sync/async/buffered, and
   `Subscribe`/`Unsubscribe` churn, serial and parallel.
 
@@ -67,13 +72,6 @@ when nobody reads it.
   after it reaches nobody and returns 0), and never waits. Still missing: a way to wait until the subscribers have
   discarded, bounded by a ctx (`Close(ctx)`, or a separate `Wait(ctx)`). Called from `handle`, that would end up waiting
   on itself, so it has to either detect that case or be documented as off-limits there.
-
-### Broadcast ctx reaching `handle`
-
-- [x] `handle` gets the `Subscribe` ctx, so values on the `Broadcast` ctx (trace IDs, request-scoped loggers) never reach it.
-  Carry the `Broadcast` ctx's values on the message, and give `handle` a ctx that combines those values with the
-  subscriber's cancellation. This needs a small custom `context.Context`. Offer it as an option, or make it the default
-  before v1.
 
 ### Parallel but waiting
 
@@ -129,7 +127,7 @@ when nobody reads it.
 
 - `Broadcast` walks a `sync.Map` through a closure on every call. For workloads that broadcast often but subscribe
   rarely, a copy-on-write `atomic.Pointer[[]*subscriber[T]]` avoids both the map walk and the allocation.
-- `Broadcast` allocates once per subscriber (32 B for `T = int`), even in sync mode. The per-subscriber `message` `m` is
+- `Broadcast` allocates once per subscriber (48 B for `T = int`), even in sync mode. The per-subscriber `message` `m` is
   moved to the heap because `option(&m)` passes its address to an unknown func (`go build -gcflags=-m`). Applying the
   options once per `Broadcast`, recording which fields they set, and then merging those over each subscriber's
   defaults by value could avoid it.
@@ -163,6 +161,8 @@ when nobody reads it.
 
 ### Toward v1.0
 
+- Decide whether `WithSubscriberBroadcastValues` becomes the default, with an option to opt out, if a trace ID on the
+  `Broadcast` ctx reaching `handle` turns out to be what users expect.
 - Freeze the API once the subscription handle, the error sentinels and the ctx semantics are settled. Write the delivery
   guarantees down as a contract with one test per guarantee, and follow semver from then on.
 - Fuzz or property tests over random interleavings of `Subscribe`, `Unsubscribe` and `Broadcast`, checking the
