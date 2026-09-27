@@ -25,10 +25,37 @@ if err != nil {
 	return err
 }
 
-n := b.Broadcast(ctx, "hello") // how many subscribers it was handed to
+n, err := b.Broadcast(ctx, "hello") // how many subscribers it was handed to
+if err != nil {
+	return err // ErrClosed, once Close has been called
+}
 
 if err := b.Unsubscribe(ctx, id); err != nil {
 	return err
+}
+```
+
+Or hand the messages to a range loop instead of a `handle` function. The loop body runs in the caller's goroutine, and
+the subscription ends with the loop:
+
+```go
+_, msgs, err := b.SubscribeSeq(ctx)
+if err != nil {
+	return err
+}
+for msg := range msgs { // ends once ctx is done, or on Unsubscribe or Close
+	fmt.Println("got", msg)
+	if msg == "stop" {
+		break // unsubscribes
+	}
+}
+```
+
+When you are done, `Close` unsubscribes everyone and waits until they have handled what they were sent:
+
+```go
+if err := b.Close(ctx); err != nil {
+	return err // ctx was done first
 }
 ```
 
@@ -47,6 +74,8 @@ if err := b.Unsubscribe(ctx, id); err != nil {
 8. [`08-async`](examples/08-async/main.go): `WithMessageAsync`.
 9. [`09-non-blocking`](examples/09-non-blocking/main.go): `WithMessageNonBlocking` and `*DroppedError`.
 10. [`10-defaults`](examples/10-defaults/main.go): `WithSubscriberDefaultMessageOptions`, overridden by `WithMessageSync`.
+11. [`11-seq`](examples/11-seq/main.go): `SubscribeSeq`, a range loop instead of `handle`.
+12. [`12-close`](examples/12-close/main.go): `Close` and `ErrClosed`.
 
 ## Delivery
 
@@ -85,12 +114,32 @@ Errors go to error handlers, and are discarded when there are none:
 Each error type matches a sentinel with `errors.Is` (`ErrTimeout`, `ErrDropped`, `ErrPanic`, `ErrSubscriberClosed`,
 `ErrSubscriberNotFound`), without needing to know the message type.
 
+Errors about a call itself are returned instead: `ErrClosed` from `Subscribe`, `SubscribeSeq`, `Broadcast` and `Close`
+once `Close` has been called, `*SubscriberNotFoundError` from `Unsubscribe`, and ctx's error from `Close` when it gives
+up waiting.
+
 ## Unsubscribing
 
 `Unsubscribe` never waits, so `handle` can unsubscribe its own subscriber. A subscriber may still get messages after
 `Unsubscribe` returns: whatever is in its buffer, and the message of a `Broadcast` that was already sending to it. Its
-goroutine ends once it has processed them. `handle` gets the ctx passed to `Subscribe`, and cancelling that ctx does not
-unsubscribe it.
+goroutine ends once it has processed them. `handle` gets a ctx derived from the one passed to `Subscribe`, and
+cancelling that ctx does not unsubscribe it.
+
+A range loop over `SubscribeSeq` unsubscribes when the loop body breaks out of it, returns or panics, or when the ctx
+passed to `SubscribeSeq` is done. The messages it had taken but not yielded yet are dropped. `Unsubscribe` and `Close`
+end the loop too, but only once it has yielded those messages.
+
+## Closing
+
+`Close(ctx)` unsubscribes every subscriber, then waits until each one's goroutine has processed what it was sent and
+ended, or until ctx is done. From then on, `Subscribe`, `SubscribeSeq`, `Broadcast` and `Close` fail with `ErrClosed`.
+It only waits for the subscribers it unsubscribes, not for those unsubscribed before, which may still be draining.
+
+`Close` does not wait for range loops over `SubscribeSeq`, which run in your goroutines: each ends once it has yielded
+what its subscriber had already taken. It cannot wait for the goroutine it is called from either, so from `handle` (or
+an error handler called with a `*HandleError` or a `*PanicError`), pass it the ctx that `handle` was given: `Close` then
+waits for every subscriber but that one. With any other ctx, it waits for `handle` to return, which it cannot do before
+`Close` returns, until that ctx is done.
 
 ## Development
 

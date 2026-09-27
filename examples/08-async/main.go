@@ -32,9 +32,14 @@ func main() {
 	}
 
 	handled.Add(2)
-	b.Broadcast(ctx, "first") // the subscriber takes it, then waits in handle
+	// The subscriber takes it, then waits in handle.
+	if _, err := b.Broadcast(ctx, "first"); err != nil {
+		log.Fatal(err)
+	}
 	// Without WithMessageAsync, this would wait for handle, forever.
-	b.Broadcast(ctx, "second", broadcastor.WithMessageAsync[string]())
+	if _, err := b.Broadcast(ctx, "second", broadcastor.WithMessageAsync[string]()); err != nil {
+		log.Fatal(err)
+	}
 	fmt.Println("both Broadcasts returned")
 	close(release)
 	handled.Wait()

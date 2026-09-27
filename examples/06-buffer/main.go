@@ -33,7 +33,9 @@ func main() {
 	// Broadcast would wait for handle, forever.
 	for _, n := range []int{1, 2, 3} {
 		handled.Add(1)
-		b.Broadcast(ctx, n)
+		if _, err := b.Broadcast(ctx, n); err != nil {
+			log.Fatal(err)
+		}
 	}
 	fmt.Println("3 Broadcasts returned")
 	close(release)

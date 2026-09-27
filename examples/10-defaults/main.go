@@ -60,10 +60,19 @@ func main() {
 		log.Fatal(err)
 	}
 
-	b.Broadcast(ctx, "started", broadcastor.WithMessageSync[string]()) // the dashboard takes it, then waits in handle
-	b.Broadcast(ctx, "50%")                                            // the dashboard is busy, so it misses it
+	// The dashboard takes it, then waits in handle.
+	if _, err := b.Broadcast(ctx, "started", broadcastor.WithMessageSync[string]()); err != nil {
+		log.Fatal(err)
+	}
+	// The dashboard is busy, so it misses it.
+	if _, err := b.Broadcast(ctx, "50%"); err != nil {
+		log.Fatal(err)
+	}
 	close(release)
-	b.Broadcast(ctx, "done", broadcastor.WithMessageSync[string]()) // waits for the dashboard
+	// Waits for the dashboard.
+	if _, err := b.Broadcast(ctx, "done", broadcastor.WithMessageSync[string]()); err != nil {
+		log.Fatal(err)
+	}
 	finished.Wait()
 
 	for _, id := range []uuid.UUID{logID, dashboardID} {

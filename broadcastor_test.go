@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
 	"maps"
 	"slices"
 	"strings"
@@ -44,7 +45,7 @@ func TestBroadcast_DeliversAllMessagesInOrder(t *testing.T) {
 		}
 
 		for msg := 1; msg <= 4; msg++ {
-			b.Broadcast(t.Context(), msg)
+			broadcast(t, b, t.Context(), msg)
 		}
 		unsubscribeAll(t, b, ids...)
 		synctest.Wait()
@@ -61,11 +62,11 @@ func TestBroadcast_NoSubscribers(t *testing.T) {
 	t.Parallel()
 
 	b := broadcastor.NewBroadcastor[int]()
-	b.Broadcast(t.Context(), 1)
+	broadcast(t, b, t.Context(), 1)
 }
 
 // The error handler is given every error handle returns, in order, with the subscriber and the message it failed on,
-// and both handle and the error handler are given the ctx that was passed to Subscribe.
+// and both handle and the error handler are given a ctx derived from the one passed to Subscribe.
 func TestWithErrorHandler(t *testing.T) {
 	t.Parallel()
 
@@ -74,7 +75,7 @@ func TestWithErrorHandler(t *testing.T) {
 		ctx := context.WithValue(t.Context(), key{}, "subscribe")
 		checkCtx := func(ctx context.Context, what string) {
 			if v := ctx.Value(key{}); v != "subscribe" {
-				t.Errorf("%s got a ctx with value %v, want the one passed to Subscribe", what, v)
+				t.Errorf("%s got a ctx with value %v, want one derived from the one passed to Subscribe", what, v)
 			}
 		}
 		b := broadcastor.NewBroadcastor[int]()
@@ -101,7 +102,7 @@ func TestWithErrorHandler(t *testing.T) {
 		}
 
 		for msg := 1; msg <= 4; msg++ {
-			b.Broadcast(t.Context(), msg)
+			broadcast(t, b, t.Context(), msg)
 		}
 		unsubscribe(t, b, id)
 		synctest.Wait()
@@ -143,7 +144,7 @@ func TestSubscribe_ErrorsWithoutHandler(t *testing.T) {
 		defer cancel()
 		start := time.Now()
 		for msg := range 3 {
-			b.Broadcast(ctx, msg)
+			broadcast(t, b, ctx, msg)
 		}
 		if elapsed := time.Since(start); elapsed != 0 {
 			t.Errorf("Broadcasts returned after %v, want no wait", elapsed)
@@ -192,16 +193,16 @@ func TestUnsubscribe_Twice(t *testing.T) {
 		if err := b.Unsubscribe(t.Context(), id); !isNotFound(err) {
 			t.Errorf("second Unsubscribe = %v, want *SubscriberNotFoundError", err)
 		}
-		if p := broadcast(t.Context(), b, 1); p != nil {
-			t.Fatalf("Broadcast panicked: %v", p)
+		if err := tryBroadcast(t.Context(), b, 1); err != nil {
+			t.Fatalf("Broadcast: %v", err)
 		}
 
 		// ...or after one.
 		if err := b.Unsubscribe(t.Context(), id); !isNotFound(err) {
 			t.Errorf("third Unsubscribe = %v, want *SubscriberNotFoundError", err)
 		}
-		if p := broadcast(t.Context(), b, 2); p != nil {
-			t.Errorf("Broadcast after a repeated Unsubscribe panicked: %v", p)
+		if err := tryBroadcast(t.Context(), b, 2); err != nil {
+			t.Errorf("Broadcast after a repeated Unsubscribe: %v", err)
 		}
 
 		synctest.Wait()
@@ -221,7 +222,7 @@ func TestUnsubscribe_StopsDelivery(t *testing.T) {
 		stay, stayID := record(t, b)
 
 		unsubscribe(t, b, goneID)
-		b.Broadcast(t.Context(), 1) // panics if gone's channel is closed but still sent to
+		broadcast(t, b, t.Context(), 1) // panics if gone's channel is closed but still sent to
 
 		unsubscribeAll(t, b, stayID)
 		synctest.Wait()
@@ -242,18 +243,18 @@ func TestBroadcast_ContextUnblocksStuckSubscriber(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b := broadcastor.NewBroadcastor[int]()
 		stuck, stuckID := hold(t, b)
-		b.Broadcast(t.Context(), 0) // stuck is now processing 0 and not reading
+		broadcast(t, b, t.Context(), 0) // stuck is now processing 0 and not reading
 
 		cancelled, cancel := context.WithCancel(t.Context())
 		cancel()
-		b.Broadcast(cancelled, 1) // deadlocks if the cancelled ctx is ignored
+		broadcast(t, b, cancelled, 1) // deadlocks if the cancelled ctx is ignored
 
 		reader, readerID := record(t, b)
 
 		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 		defer cancel()
 		start := time.Now()
-		b.Broadcast(ctx, 2)
+		broadcast(t, b, ctx, 2)
 		if elapsed := time.Since(start); elapsed != time.Second {
 			t.Errorf("Broadcast returned after %v, want it to give up at the %v deadline", elapsed, time.Second)
 		}
@@ -281,7 +282,7 @@ func TestBroadcast_ContextDoneAfterUnsubscribe(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b := broadcastor.NewBroadcastor[int]()
 		stuck, id := hold(t, b)
-		b.Broadcast(t.Context(), 0) // stuck is now processing 0 and not reading
+		broadcast(t, b, t.Context(), 0) // stuck is now processing 0 and not reading
 
 		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 		defer cancel()
@@ -289,7 +290,7 @@ func TestBroadcast_ContextDoneAfterUnsubscribe(t *testing.T) {
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			b.Broadcast(ctx, 1)
+			broadcast(t, b, ctx, 1)
 		}()
 		synctest.Wait() // the Broadcast of 1 is waiting on stuck
 
@@ -333,17 +334,17 @@ func TestUnsubscribe_SelfDuringBroadcast(t *testing.T) {
 			return nil
 		})
 
-		b.Broadcast(ctx, 1) // self is now processing 1 and not reading
+		broadcast(t, b, ctx, 1) // self is now processing 1 and not reading
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			b.Broadcast(ctx, 2)
+			broadcast(t, b, ctx, 2)
 		}()
 		synctest.Wait() // the Broadcast of 2 is waiting on self
 		close(proceed)
 		waitClosed(t, done, "Broadcast during which the subscriber unsubscribed itself")
 
-		b.Broadcast(ctx, 3)
+		broadcast(t, b, ctx, 3)
 		unsubscribeAll(t, b, otherID)
 		synctest.Wait()
 
@@ -366,12 +367,12 @@ func TestUnsubscribe_OtherSubscriberDuringBroadcast(t *testing.T) {
 		b := broadcastor.NewBroadcastor[int]()
 		gate, gateID := hold(t, b)
 		victim, victimID := record(t, b)
-		b.Broadcast(ctx, 0) // gate is now processing 0 and not reading
+		broadcast(t, b, ctx, 0) // gate is now processing 0 and not reading
 
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			b.Broadcast(ctx, 1)
+			broadcast(t, b, ctx, 1)
 		}()
 		synctest.Wait() // the Broadcast of 1 is waiting on gate, with victim either already served or still to come
 
@@ -379,7 +380,7 @@ func TestUnsubscribe_OtherSubscriberDuringBroadcast(t *testing.T) {
 		gate.release()
 		waitClosed(t, done, "Broadcast of 1")
 
-		b.Broadcast(ctx, 2)
+		broadcast(t, b, ctx, 2)
 		unsubscribeAll(t, b, gateID)
 		synctest.Wait()
 
@@ -401,12 +402,12 @@ func TestSubscribe_DuringBroadcast(t *testing.T) {
 		ctx := t.Context()
 		b := broadcastor.NewBroadcastor[int]()
 		gate, gateID := hold(t, b)
-		b.Broadcast(ctx, 0) // gate is now processing 0 and not reading
+		broadcast(t, b, ctx, 0) // gate is now processing 0 and not reading
 
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			b.Broadcast(ctx, 1)
+			broadcast(t, b, ctx, 1)
 		}()
 		synctest.Wait() // the Broadcast of 1 is waiting on gate
 
@@ -414,7 +415,7 @@ func TestSubscribe_DuringBroadcast(t *testing.T) {
 		gate.release()
 		waitClosed(t, done, "Broadcast of 1")
 
-		b.Broadcast(ctx, 2)
+		broadcast(t, b, ctx, 2)
 		unsubscribeAll(t, b, gateID, lateID)
 		synctest.Wait()
 
@@ -437,19 +438,19 @@ func TestWithSubscriberBuffer(t *testing.T) {
 		b := broadcastor.NewBroadcastor[int]()
 		stuck := &recorder[int]{hold: make(chan struct{})}
 		id := subscribe(t, b, stuck.handle, broadcastor.WithSubscriberBuffer[int](buffer))
-		b.Broadcast(t.Context(), 0)
+		broadcast(t, b, t.Context(), 0)
 		synctest.Wait() // stuck is now processing 0 and not reading
 
 		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 		defer cancel()
 		start := time.Now()
 		for msg := 1; msg <= buffer; msg++ {
-			b.Broadcast(ctx, msg)
+			broadcast(t, b, ctx, msg)
 		}
 		if elapsed := time.Since(start); elapsed != 0 {
 			t.Errorf("Broadcasts that fit in the buffer returned after %v, want no wait", elapsed)
 		}
-		b.Broadcast(ctx, buffer+1)
+		broadcast(t, b, ctx, buffer+1)
 		if elapsed := time.Since(start); elapsed != time.Second {
 			t.Errorf("Broadcast to a full buffer returned after %v, want it to give up at the %v deadline",
 				elapsed, time.Second)
@@ -474,12 +475,12 @@ func TestWithMessageAsync(t *testing.T) {
 		b := broadcastor.NewBroadcastor[int]()
 		stuck, stuckID := hold(t, b)
 		reader, readerID := record(t, b)
-		b.Broadcast(t.Context(), 0) // stuck is now processing 0 and not reading
+		broadcast(t, b, t.Context(), 0) // stuck is now processing 0 and not reading
 
 		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 		defer cancel()
 		start := time.Now()
-		b.Broadcast(ctx, 1, broadcastor.WithMessageAsync[int]())
+		broadcast(t, b, ctx, 1, broadcastor.WithMessageAsync[int]())
 		if elapsed := time.Since(start); elapsed != 0 {
 			t.Errorf("async Broadcast returned after %v, want no wait", elapsed)
 		}
@@ -510,12 +511,12 @@ func TestWithMessageAsync_ContextDone(t *testing.T) {
 		id := subscribe(t, b, stuck.handle, broadcastor.WithSubscriberErrorHandler[int](func(_ context.Context, err error) {
 			errs.record(err)
 		}))
-		b.Broadcast(t.Context(), 0)
+		broadcast(t, b, t.Context(), 0)
 		synctest.Wait() // stuck is now processing 0 and not reading
 
 		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 		defer cancel()
-		b.Broadcast(ctx, 1, broadcastor.WithMessageAsync[int]())
+		broadcast(t, b, ctx, 1, broadcastor.WithMessageAsync[int]())
 		time.Sleep(time.Second)
 		synctest.Wait() // the Broadcast has given up on stuck
 
@@ -536,7 +537,7 @@ func TestWithMessageAsync_ContextDone(t *testing.T) {
 	})
 }
 
-// A message's error handler is given the errors about that message only, with the ctx passed to Subscribe, and the
+// A message's error handler is given the errors about that message only, with the ctx handle is given, and the
 // failing subscriber's own error handler still gets them too.
 func TestWithMessageErrorHandler(t *testing.T) {
 	t.Parallel()
@@ -555,13 +556,13 @@ func TestWithMessageErrorHandler(t *testing.T) {
 		_, okID := record(t, b)
 
 		messageErrs := &recorder[error]{}
-		b.Broadcast(t.Context(), 1, broadcastor.WithMessageErrorHandler[int](func(ctx context.Context, err error) {
+		broadcast(t, b, t.Context(), 1, broadcastor.WithMessageErrorHandler[int](func(ctx context.Context, err error) {
 			if v := ctx.Value(key{}); v != "subscribe" {
-				t.Errorf("message error handler got a ctx with value %v, want the one passed to Subscribe", v)
+				t.Errorf("message error handler got a ctx with value %v, want one derived from the one passed to Subscribe", v)
 			}
 			messageErrs.record(err)
 		}))
-		b.Broadcast(t.Context(), 2)
+		broadcast(t, b, t.Context(), 2)
 		unsubscribeAll(t, b, failingID, okID)
 		synctest.Wait()
 
@@ -586,12 +587,12 @@ func TestWithMessageErrorHandler_ContextDone(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b := broadcastor.NewBroadcastor[int]()
 		stuck, id := hold(t, b)
-		b.Broadcast(t.Context(), 0) // stuck is now processing 0 and not reading
+		broadcast(t, b, t.Context(), 0) // stuck is now processing 0 and not reading
 
 		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 		defer cancel()
 		errs := &recorder[error]{}
-		b.Broadcast(ctx, 1, broadcastor.WithMessageErrorHandler[int](func(_ context.Context, err error) {
+		broadcast(t, b, ctx, 1, broadcastor.WithMessageErrorHandler[int](func(_ context.Context, err error) {
 			errs.record(err)
 		}))
 
@@ -623,13 +624,13 @@ func TestWithSubscriberDefaultMessageOptions_Async(t *testing.T) {
 		stuckID := subscribe(t, b, stuck.handle,
 			broadcastor.WithSubscriberDefaultMessageOptions(broadcastor.WithMessageAsync[int]()))
 		reader, readerID := record(t, b)
-		b.Broadcast(t.Context(), 0)
+		broadcast(t, b, t.Context(), 0)
 		synctest.Wait() // stuck is now processing 0 and not reading
 
 		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 		defer cancel()
 		start := time.Now()
-		b.Broadcast(ctx, 1)
+		broadcast(t, b, ctx, 1)
 		if elapsed := time.Since(start); elapsed != 0 {
 			t.Errorf("Broadcast returned after %v, want no wait for the async subscriber", elapsed)
 		}
@@ -660,9 +661,9 @@ func TestWithSubscriberDefaultMessageOptions_ErrorHandlerOverridden(t *testing.T
 		}, broadcastor.WithSubscriberDefaultMessageOptions(
 			broadcastor.WithMessageErrorHandler[int](recordFailures(t, defaults))))
 
-		b.Broadcast(t.Context(), 1)
-		b.Broadcast(t.Context(), 2, broadcastor.WithMessageErrorHandler[int](recordFailures(t, override)))
-		b.Broadcast(t.Context(), 3)
+		broadcast(t, b, t.Context(), 1)
+		broadcast(t, b, t.Context(), 2, broadcastor.WithMessageErrorHandler[int](recordFailures(t, override)))
+		broadcast(t, b, t.Context(), 3)
 		unsubscribe(t, b, id)
 		synctest.Wait()
 
@@ -685,12 +686,12 @@ func TestWithMessageTimeout(t *testing.T) {
 		b := broadcastor.NewBroadcastor[int]()
 		first, firstID := hold(t, b)
 		second, secondID := hold(t, b)
-		b.Broadcast(t.Context(), 0) // both are now processing 0 and not reading
+		broadcast(t, b, t.Context(), 0) // both are now processing 0 and not reading
 
 		timeouts := &recorder[int]{}
 		recordTimeout := recordTimeouts(t, timeouts)
 		start := time.Now()
-		b.Broadcast(t.Context(), 1, broadcastor.WithMessageTimeout[int](time.Second),
+		broadcast(t, b, t.Context(), 1, broadcastor.WithMessageTimeout[int](time.Second),
 			broadcastor.WithMessageErrorHandler[int](func(ctx context.Context, err error) {
 				if ctx.Err() != nil {
 					t.Errorf("error handler got a ctx that is done (%v), want the Broadcast's", ctx.Err())
@@ -727,17 +728,17 @@ func TestWithSubscriberTimeout(t *testing.T) {
 		timeouts := &recorder[int]{}
 		id := subscribe(t, b, stuck.handle, broadcastor.WithSubscriberTimeout[int](time.Second),
 			broadcastor.WithSubscriberErrorHandler[int](recordTimeouts(t, timeouts)))
-		b.Broadcast(t.Context(), 0) // stuck is now processing 0 and not reading
+		broadcast(t, b, t.Context(), 0) // stuck is now processing 0 and not reading
 
 		start := time.Now()
-		b.Broadcast(t.Context(), 1)
+		broadcast(t, b, t.Context(), 1)
 		if elapsed := time.Since(start); elapsed != time.Second {
 			t.Errorf("Broadcast returned after %v, want it to give up at the subscriber's %v timeout",
 				elapsed, time.Second)
 		}
 
 		start = time.Now()
-		b.Broadcast(t.Context(), 2, broadcastor.WithMessageTimeout[int](3*time.Second))
+		broadcast(t, b, t.Context(), 2, broadcastor.WithMessageTimeout[int](3*time.Second))
 		if elapsed := time.Since(start); elapsed != 3*time.Second {
 			t.Errorf("Broadcast returned after %v, want it to give up at the message's %v timeout",
 				elapsed, 3*time.Second)
@@ -746,7 +747,7 @@ func TestWithSubscriberTimeout(t *testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 		defer cancel()
 		start = time.Now()
-		b.Broadcast(ctx, 3, broadcastor.WithMessageTimeout[int](0))
+		broadcast(t, b, ctx, 3, broadcastor.WithMessageTimeout[int](0))
 		if elapsed := time.Since(start); elapsed != 5*time.Second {
 			t.Errorf("Broadcast with no timeout returned after %v, want it to give up at the %v ctx deadline",
 				elapsed, 5*time.Second)
@@ -786,8 +787,8 @@ func TestBroadcast_Concurrent(t *testing.T) {
 		for from := range broadcasters {
 			wg.Go(func() {
 				for seq := range perBroadcaster {
-					if p := broadcast(ctx, b, msg{from, seq}); p != nil {
-						t.Errorf("Broadcast panicked: %v", p)
+					if err := tryBroadcast(ctx, b, msg{from, seq}); err != nil {
+						t.Errorf("Broadcast: %v", err)
 
 						return
 					}
@@ -826,23 +827,23 @@ func TestBroadcast_ConcurrentWithUnsubscribe(t *testing.T) {
 		ctx := t.Context()
 		b := broadcastor.NewBroadcastor[int]()
 		stuck, id := hold(t, b)
-		b.Broadcast(ctx, 0) // stuck is now processing 0 and not reading
+		broadcast(t, b, ctx, 0) // stuck is now processing 0 and not reading
 
-		first := make(chan any, 1)
-		go func() { first <- broadcast(ctx, b, 1) }()
+		first := make(chan error, 1)
+		go func() { first <- tryBroadcast(ctx, b, 1) }()
 		synctest.Wait() // the first Broadcast is now blocked sending 1 to stuck
 
 		unsubscribe(t, b, id)
-		second := make(chan any, 1)
-		go func() { second <- broadcast(ctx, b, 2) }()
+		second := make(chan error, 1)
+		go func() { second <- tryBroadcast(ctx, b, 2) }()
 		synctest.Wait() // let the second Broadcast get as far as it can before stuck reads 1
 
 		stuck.release()
-		if p := <-first; p != nil {
-			t.Errorf("first Broadcast panicked: %v", p)
+		if err := <-first; err != nil {
+			t.Errorf("first Broadcast: %v", err)
 		}
-		if p := <-second; p != nil {
-			t.Errorf("second Broadcast panicked: %v", p)
+		if err := <-second; err != nil {
+			t.Errorf("second Broadcast: %v", err)
 		}
 		synctest.Wait()
 		if got, want := stuck.messages(), []int{0, 1}; !slices.Equal(got, want) {
@@ -868,8 +869,8 @@ func TestUnsubscribe_RacesBroadcastPickingUpChannel(t *testing.T) {
 			var wg sync.WaitGroup
 			wg.Go(func() {
 				<-start
-				if p := broadcast(ctx, b, 1); p != nil {
-					t.Errorf("iteration %d: Broadcast panicked: %v", i, p)
+				if err := tryBroadcast(ctx, b, 1); err != nil {
+					t.Errorf("iteration %d: Broadcast: %v", i, err)
 				}
 			})
 			wg.Go(func() {
@@ -877,8 +878,8 @@ func TestUnsubscribe_RacesBroadcastPickingUpChannel(t *testing.T) {
 				if err := b.Unsubscribe(ctx, id); err != nil {
 					t.Errorf("iteration %d: Unsubscribe(%s): %v", i, id, err)
 				}
-				if p := broadcast(ctx, b, 2); p != nil {
-					t.Errorf("iteration %d: Broadcast after Unsubscribe panicked: %v", i, p)
+				if err := tryBroadcast(ctx, b, 2); err != nil {
+					t.Errorf("iteration %d: Broadcast after Unsubscribe: %v", i, err)
 				}
 			})
 			close(start)
@@ -918,7 +919,7 @@ func TestUnsubscribe_SeveralThenDrain(t *testing.T) {
 		}
 		go func() {
 			defer close(secondBroadcastDone)
-			b.Broadcast(ctx, 3)
+			broadcast(t, b, ctx, 3)
 		}()
 		time.Sleep(10 * time.Millisecond) // let the second Broadcast get as far as it can
 		if err := b.Unsubscribe(ctx, secondID); err != nil {
@@ -927,13 +928,13 @@ func TestUnsubscribe_SeveralThenDrain(t *testing.T) {
 
 		return nil
 	})
-	b.Broadcast(ctx, 1) // first is now processing 1 and not reading
+	broadcast(t, b, ctx, 1) // first is now processing 1 and not reading
 	_, secondID = record(t, b)
 
 	firstBroadcastDone := make(chan struct{})
 	go func() {
 		defer close(firstBroadcastDone)
-		b.Broadcast(ctx, 2)
+		broadcast(t, b, ctx, 2)
 	}()
 	time.Sleep(10 * time.Millisecond) // let the first Broadcast get to first and wait on it
 	close(proceed)
@@ -972,15 +973,15 @@ func TestUnsubscribe_ParallelSameID(t *testing.T) {
 			}
 			wg.Go(func() {
 				<-start
-				if p := broadcast(ctx, b, 1); p != nil {
-					t.Errorf("Broadcast during parallel Unsubscribe panicked: %v", p)
+				if err := tryBroadcast(ctx, b, 1); err != nil {
+					t.Errorf("Broadcast during parallel Unsubscribe: %v", err)
 				}
 			})
 			close(start)
 			waitGroup(t, &wg, "parallel Unsubscribe")
 
-			if p := broadcast(ctx, b, 2); p != nil {
-				t.Fatalf("iteration %d: Broadcast after parallel Unsubscribe panicked: %v", i, p)
+			if err := tryBroadcast(ctx, b, 2); err != nil {
+				t.Fatalf("iteration %d: Broadcast after parallel Unsubscribe: %v", i, err)
 			}
 			if n := succeeded.Load(); n != 1 {
 				t.Fatalf("iteration %d: %d of %d parallel Unsubscribe calls succeeded, want exactly 1", i, n, callers)
@@ -1013,7 +1014,7 @@ func TestUnsubscribe_ParallelDistinctIDs(t *testing.T) {
 		}
 		waitGroup(t, &wg, "parallel Unsubscribe")
 
-		b.Broadcast(ctx, 1)
+		broadcast(t, b, ctx, 1)
 		synctest.Wait()
 		for i, r := range recorders {
 			if got := r.messages(); len(got) != 0 {
@@ -1054,7 +1055,7 @@ func TestSubscribe_Parallel(t *testing.T) {
 		}
 		waitGroup(t, &wg, "parallel Subscribe")
 
-		b.Broadcast(ctx, 1)
+		broadcast(t, b, ctx, 1)
 		unsubscribeAll(t, b, slices.Collect(maps.Keys(recorders))...)
 		synctest.Wait()
 		for id, r := range recorders {
@@ -1087,8 +1088,8 @@ func TestSubscribeUnsubscribe_ChurnDuringBroadcasts(t *testing.T) {
 					return
 				default:
 				}
-				if p := broadcast(ctx, b, seq); p != nil {
-					t.Errorf("Broadcast panicked: %v", p)
+				if err := tryBroadcast(ctx, b, seq); err != nil {
+					t.Errorf("Broadcast: %v", err)
 
 					return
 				}
@@ -1205,11 +1206,11 @@ func TestWithMessageSync(t *testing.T) {
 			stuck = append(stuck, r)
 		}
 		synctest.Wait() // both are idle, so that the non-blocking one takes 0
-		b.Broadcast(t.Context(), 0)
+		broadcast(t, b, t.Context(), 0)
 		synctest.Wait() // both are now processing 0 and not reading
 
 		start := time.Now()
-		n := b.Broadcast(t.Context(), 1, broadcastor.WithMessageSync[int](), broadcastor.WithMessageTimeout[int](time.Second))
+		n := broadcast(t, b, t.Context(), 1, broadcastor.WithMessageSync[int](), broadcastor.WithMessageTimeout[int](time.Second))
 		if elapsed := time.Since(start); elapsed != 2*time.Second {
 			t.Errorf("sync Broadcast returned after %v, want %v: the whole timeout for each subscriber", elapsed, 2*time.Second)
 		}
@@ -1243,19 +1244,19 @@ func TestBroadcast_Count(t *testing.T) {
 		stuck, stuckID := hold(t, b)
 		_, firstID := record(t, b)
 		_, secondID := record(t, b)
-		if n := b.Broadcast(t.Context(), 0); n != 3 { // stuck is now processing 0 and not reading
+		if n := broadcast(t, b, t.Context(), 0); n != 3 { // stuck is now processing 0 and not reading
 			t.Errorf("Broadcast to idle subscribers handed the message to %d, want 3", n)
 		}
 
-		if n := b.Broadcast(t.Context(), 1, broadcastor.WithMessageTimeout[int](time.Second)); n != 2 {
+		if n := broadcast(t, b, t.Context(), 1, broadcastor.WithMessageTimeout[int](time.Second)); n != 2 {
 			t.Errorf("sync Broadcast handed the message to %d subscribers, want 2: all but the stuck one", n)
 		}
-		if n := b.Broadcast(t.Context(), 2, broadcastor.WithMessageAsync[int]()); n != 3 {
+		if n := broadcast(t, b, t.Context(), 2, broadcastor.WithMessageAsync[int]()); n != 3 {
 			t.Errorf("async Broadcast handed the message to %d subscribers, want 3: all of them, stuck or not", n)
 		}
 
 		unsubscribeAll(t, b, stuckID, firstID, secondID)
-		if n := b.Broadcast(t.Context(), 3); n != 0 {
+		if n := broadcast(t, b, t.Context(), 3); n != 0 {
 			t.Errorf("Broadcast with no subscribers handed the message to %d, want 0", n)
 		}
 
@@ -1276,12 +1277,12 @@ func TestWithMessageNonBlocking(t *testing.T) {
 		b := broadcastor.NewBroadcastor[int]()
 		stuck, stuckID := hold(t, b)
 		reader, readerID := record(t, b)
-		b.Broadcast(t.Context(), 0)
+		broadcast(t, b, t.Context(), 0)
 		synctest.Wait() // stuck is now processing 0 and not reading, and reader is idle
 
 		errs := &recorder[error]{}
 		start := time.Now()
-		n := b.Broadcast(t.Context(), 1, broadcastor.WithMessageNonBlocking[int](),
+		n := broadcast(t, b, t.Context(), 1, broadcastor.WithMessageNonBlocking[int](),
 			broadcastor.WithMessageErrorHandler[int](func(_ context.Context, err error) {
 				errs.record(err)
 			}))
@@ -1331,7 +1332,7 @@ func TestWithMessageNonBlocking_Buffer(t *testing.T) {
 				}
 				dropped.record(droppedErr.Message)
 			}))
-		b.Broadcast(t.Context(), 0)
+		broadcast(t, b, t.Context(), 0)
 		synctest.Wait() // stuck is now processing 0 and not reading, with an empty buffer
 
 		for msg := 1; msg <= buffer+1; msg++ {
@@ -1339,7 +1340,7 @@ func TestWithMessageNonBlocking_Buffer(t *testing.T) {
 			if msg > buffer {
 				want = 0
 			}
-			if n := b.Broadcast(t.Context(), msg); n != want {
+			if n := broadcast(t, b, t.Context(), msg); n != want {
 				t.Errorf("Broadcast of %d handed it to %d subscribers, want %d", msg, n, want)
 			}
 		}
@@ -1377,7 +1378,7 @@ func TestWithSubscriberRecover(t *testing.T) {
 		}))
 
 		for msg := 1; msg <= 3; msg++ {
-			b.Broadcast(t.Context(), msg)
+			broadcast(t, b, t.Context(), msg)
 		}
 		unsubscribe(t, b, id)
 		synctest.Wait()
@@ -1401,6 +1402,552 @@ func TestWithSubscriberRecover(t *testing.T) {
 			t.Errorf("stack does not go through handle:\n%s", panicErr.Stack)
 		}
 	})
+}
+
+// A range loop over SubscribeSeq gets every message in order, and breaking out of it unsubscribes the subscriber.
+func TestSubscribeSeq(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := broadcastor.NewBroadcastor[int]()
+		id, msgs := subscribeSeq(t, b, t.Context())
+
+		r := &recorder[int]{}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for msg := range msgs {
+				r.record(msg)
+				if msg == 3 {
+					break
+				}
+			}
+		}()
+
+		for msg := 1; msg <= 3; msg++ {
+			if n := broadcast(t, b, t.Context(), msg); n != 1 {
+				t.Errorf("Broadcast of %d handed it to %d subscribers, want 1", msg, n)
+			}
+		}
+		waitClosed(t, done, "range loop")
+
+		if got, want := r.messages(), []int{1, 2, 3}; !slices.Equal(got, want) {
+			t.Errorf("loop got %v, want %v", got, want)
+		}
+		if n := broadcast(t, b, t.Context(), 4); n != 0 {
+			t.Errorf("Broadcast after the loop ended handed the message to %d subscribers, want 0", n)
+		}
+		if err := b.Unsubscribe(t.Context(), id); !isNotFound(err) {
+			t.Errorf("Unsubscribe after the loop ended = %v, want *SubscriberNotFoundError", err)
+		}
+	})
+}
+
+// Breaking out of the loop while a Broadcast is waiting for it lets that Broadcast go at once: its message is taken and
+// dropped, like those still in the buffer, instead of being left for the Broadcast to give up on.
+func TestSubscribeSeq_BreakDropsTheRest(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		const buffer = 2
+		b := broadcastor.NewBroadcastor[int]()
+		_, msgs := subscribeSeq(t, b, t.Context(), broadcastor.WithSubscriberBuffer[int](buffer))
+
+		r := &recorder[int]{}
+		proceed := make(chan struct{})
+		loopDone := make(chan struct{})
+		go func() {
+			defer close(loopDone)
+			for msg := range msgs {
+				r.record(msg)
+				if msg == 0 {
+					<-proceed
+
+					break
+				}
+			}
+		}()
+		for msg := range buffer + 1 {
+			broadcast(t, b, t.Context(), msg)
+		}
+		// The loop body is now holding on to 0, with the buffer full.
+
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		defer cancel()
+		start := time.Now()
+		var n int
+		broadcastDone := make(chan struct{})
+		go func() {
+			defer close(broadcastDone)
+			n = broadcast(t, b, ctx, buffer+1)
+		}()
+		synctest.Wait() // the Broadcast is waiting for room in the buffer
+
+		close(proceed)
+		waitClosed(t, loopDone, "range loop")
+		waitClosed(t, broadcastDone, "Broadcast waiting on the loop")
+		if elapsed := time.Since(start); elapsed != 0 {
+			t.Errorf("Broadcast returned after %v, want no wait once the loop ended", elapsed)
+		}
+		if n != 1 {
+			t.Errorf("Broadcast handed the message to %d subscribers, want 1: taken, then dropped", n)
+		}
+		if got, want := r.messages(), []int{0}; !slices.Equal(got, want) {
+			t.Errorf("loop got %v, want %v", got, want)
+		}
+	})
+}
+
+// Once ctx is done, the loop ends, even while it is waiting for a message, and the subscriber is unsubscribed.
+func TestSubscribeSeq_ContextDone(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := broadcastor.NewBroadcastor[int]()
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		_, msgs := subscribeSeq(t, b, ctx)
+
+		r := &recorder[int]{}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for msg := range msgs {
+				r.record(msg)
+			}
+		}()
+		broadcast(t, b, t.Context(), 1)
+		synctest.Wait() // the loop is waiting for the next message
+
+		cancel()
+		waitClosed(t, done, "range loop")
+		if n := broadcast(t, b, t.Context(), 2); n != 0 {
+			t.Errorf("Broadcast after ctx was done handed the message to %d subscribers, want 0", n)
+		}
+		if got, want := r.messages(), []int{1}; !slices.Equal(got, want) {
+			t.Errorf("loop got %v, want %v", got, want)
+		}
+	})
+}
+
+// A loop started once ctx is done yields nothing, not even what the subscriber already holds.
+func TestSubscribeSeq_ContextDoneBeforeLoop(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := broadcastor.NewBroadcastor[int]()
+		ctx, cancel := context.WithCancel(t.Context())
+		id, msgs := subscribeSeq(t, b, ctx, broadcastor.WithSubscriberBuffer[int](1))
+		broadcast(t, b, t.Context(), 1)
+
+		cancel()
+		if got := slices.Collect(msgs); len(got) != 0 {
+			t.Errorf("loop got %v, want nothing once ctx is done", got)
+		}
+		if err := b.Unsubscribe(t.Context(), id); !isNotFound(err) {
+			t.Errorf("Unsubscribe after the loop ended = %v, want *SubscriberNotFoundError", err)
+		}
+	})
+}
+
+// Unsubscribing ends the loop, once it has yielded what the subscriber had already taken.
+func TestSubscribeSeq_Unsubscribe(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := broadcastor.NewBroadcastor[int]()
+		id, msgs := subscribeSeq(t, b, t.Context(), broadcastor.WithSubscriberBuffer[int](2))
+		broadcast(t, b, t.Context(), 1)
+		broadcast(t, b, t.Context(), 2)
+
+		unsubscribe(t, b, id)
+		if got, want := slices.Collect(msgs), []int{1, 2}; !slices.Equal(got, want) {
+			t.Errorf("loop got %v, want %v", got, want)
+		}
+	})
+}
+
+// msgs can be ranged over once only: a second loop yields nothing, even while the first one is still running.
+func TestSubscribeSeq_RangeOnce(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := broadcastor.NewBroadcastor[int]()
+		id, msgs := subscribeSeq(t, b, t.Context())
+
+		first := &recorder[int]{}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for msg := range msgs {
+				first.record(msg)
+			}
+		}()
+		synctest.Wait() // the first loop is waiting for a message
+
+		if got := slices.Collect(msgs); len(got) != 0 {
+			t.Errorf("second loop got %v, want nothing", got)
+		}
+		broadcast(t, b, t.Context(), 1)
+		unsubscribe(t, b, id)
+		waitClosed(t, done, "first loop")
+		if got, want := first.messages(), []int{1}; !slices.Equal(got, want) {
+			t.Errorf("first loop got %v, want %v", got, want)
+		}
+	})
+}
+
+// A panic in the loop body goes up through the range statement, even with WithSubscriberRecover, and unsubscribes the
+// subscriber.
+func TestSubscribeSeq_Panic(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := broadcastor.NewBroadcastor[int]()
+		_, msgs := subscribeSeq(t, b, t.Context(), broadcastor.WithSubscriberRecover[int]())
+
+		panicked := make(chan any, 1)
+		go func() {
+			panicked <- recovered(func() {
+				for msg := range msgs {
+					if msg == 1 {
+						panic(handleError(msg))
+					}
+				}
+			})
+		}()
+		broadcast(t, b, t.Context(), 1)
+
+		select {
+		case p := <-panicked:
+			if p != handleError(1) {
+				t.Errorf("loop panicked with %v, want %v", p, handleError(1))
+			}
+		case <-time.After(deadlockTimeout):
+			t.Fatalf("still waiting for the loop to panic after %v: deadlock", deadlockTimeout)
+		}
+		if n := broadcast(t, b, t.Context(), 2); n != 0 {
+			t.Errorf("Broadcast after the loop panicked handed the message to %d subscribers, want 0", n)
+		}
+	})
+}
+
+// Until its loop starts, a subscriber from SubscribeSeq holds Broadcast up like a busy one, and its error handler gets
+// Broadcast's errors.
+func TestSubscribeSeq_BeforeLoop(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := broadcastor.NewBroadcastor[int]()
+		timeouts := &recorder[int]{}
+		id, _ := subscribeSeq(t, b, t.Context(), broadcastor.WithSubscriberTimeout[int](time.Second),
+			broadcastor.WithSubscriberErrorHandler[int](recordTimeouts(t, timeouts)))
+
+		start := time.Now()
+		if n := broadcast(t, b, t.Context(), 1); n != 0 {
+			t.Errorf("Broadcast handed the message to %d subscribers, want 0", n)
+		}
+		if elapsed := time.Since(start); elapsed != time.Second {
+			t.Errorf("Broadcast returned after %v, want it to give up at the subscriber's %v timeout", elapsed, time.Second)
+		}
+		if got, want := timeouts.messages(), []int{1}; !slices.Equal(got, want) {
+			t.Errorf("error handler got timeouts for messages %v, want %v", got, want)
+		}
+		unsubscribe(t, b, id)
+	})
+}
+
+// Close unsubscribes everyone, returns once they have processed what they were sent, and makes every later call fail
+// with ErrClosed.
+func TestClose(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		const buffer = 2
+		b := broadcastor.NewBroadcastor[int]()
+		stuck := &recorder[int]{hold: make(chan struct{})}
+		subscribe(t, b, stuck.handle, broadcastor.WithSubscriberBuffer[int](buffer))
+		idle, _ := record(t, b)
+		for msg := range buffer + 1 {
+			broadcast(t, b, t.Context(), msg)
+		}
+		// stuck is now processing 0, with the rest in its buffer.
+
+		closed := closeInBackground(t.Context(), b)
+		synctest.Wait()
+		select {
+		case err := <-closed:
+			t.Fatalf("Close returned %v while a subscriber was still processing", err)
+		default:
+		}
+
+		stuck.release()
+		if err := waitResult(t, closed, "Close"); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+		for name, r := range map[string]*recorder[int]{"stuck": stuck, "idle": idle} {
+			if got, want := r.messages(), []int{0, 1, 2}; !slices.Equal(got, want) {
+				t.Errorf("%s subscriber had processed %v when Close returned, want %v", name, got, want)
+			}
+		}
+
+		if _, err := b.Subscribe(t.Context(), idle.handle); !errors.Is(err, broadcastor.ErrClosed) {
+			t.Errorf("Subscribe after Close = %v, want ErrClosed", err)
+		}
+		if _, _, err := b.SubscribeSeq(t.Context()); !errors.Is(err, broadcastor.ErrClosed) {
+			t.Errorf("SubscribeSeq after Close = %v, want ErrClosed", err)
+		}
+		if n, err := b.Broadcast(t.Context(), 3); n != 0 || !errors.Is(err, broadcastor.ErrClosed) {
+			t.Errorf("Broadcast after Close = %d, %v, want 0, ErrClosed", n, err)
+		}
+		if err := b.Close(t.Context()); !errors.Is(err, broadcastor.ErrClosed) {
+			t.Errorf("second Close = %v, want ErrClosed", err)
+		}
+	})
+}
+
+// Close only waits for the subscribers it unsubscribes, not for one unsubscribed before that is still processing its
+// buffer.
+func TestClose_DoesNotWaitForUnsubscribed(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := broadcastor.NewBroadcastor[int]()
+		stuck := &recorder[int]{hold: make(chan struct{})}
+		id := subscribe(t, b, stuck.handle, broadcastor.WithSubscriberBuffer[int](1))
+		broadcast(t, b, t.Context(), 0)
+		broadcast(t, b, t.Context(), 1)
+		unsubscribe(t, b, id) // stuck is still processing 0, with 1 in its buffer
+
+		if err := waitResult(t, closeInBackground(t.Context(), b), "Close"); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+
+		stuck.release()
+		synctest.Wait()
+		if got, want := stuck.messages(), []int{0, 1}; !slices.Equal(got, want) {
+			t.Errorf("subscriber processed %v, want %v", got, want)
+		}
+	})
+}
+
+// Close gives up waiting once ctx is done, and the subscriber still drains afterwards.
+func TestClose_ContextDone(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := broadcastor.NewBroadcastor[int]()
+		stuck, _ := hold(t, b)
+		broadcast(t, b, t.Context(), 0) // stuck is now processing 0
+
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		defer cancel()
+		start := time.Now()
+		if err := b.Close(ctx); !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("Close = %v, want %v", err, context.DeadlineExceeded)
+		}
+		if elapsed := time.Since(start); elapsed != time.Second {
+			t.Errorf("Close returned after %v, want it to give up at the %v deadline", elapsed, time.Second)
+		}
+
+		stuck.release()
+		synctest.Wait()
+		if got, want := stuck.messages(), []int{0}; !slices.Equal(got, want) {
+			t.Errorf("subscriber processed %v, want %v", got, want)
+		}
+	})
+}
+
+// handle calls Close with its own ctx: Close waits for every other subscriber, but not for handle's own, which could
+// not end before Close returns.
+func TestClose_FromHandle(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := broadcastor.NewBroadcastor[int]()
+		other := &recorder[int]{hold: make(chan struct{})}
+		subscribe(t, b, other.handle, broadcastor.WithSubscriberBuffer[int](1))
+
+		self := &recorder[int]{}
+		closed := make(chan error, 1)
+		subscribe(t, b, func(ctx context.Context, msg int) error {
+			self.record(msg)
+			if msg == 1 {
+				closed <- b.Close(ctx)
+			}
+
+			return nil
+		})
+
+		broadcast(t, b, t.Context(), 0) // other is now processing 0
+		broadcast(t, b, t.Context(), 1) // other holds 1 in its buffer, and self calls Close
+		synctest.Wait()
+		select {
+		case err := <-closed:
+			t.Fatalf("Close returned %v while another subscriber was still processing", err)
+		default:
+		}
+
+		other.release()
+		if err := waitResult(t, closed, "Close from handle"); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+		if got, want := other.messages(), []int{0, 1}; !slices.Equal(got, want) {
+			t.Errorf("other subscriber had processed %v when Close returned, want %v", got, want)
+		}
+		synctest.Wait()
+		if got, want := self.messages(), []int{0, 1}; !slices.Equal(got, want) {
+			t.Errorf("subscriber calling Close processed %v, want %v", got, want)
+		}
+	})
+}
+
+// Given a ctx other than its own, handle's call to Close waits for handle's own subscriber, and so gives up only once
+// that ctx is done.
+func TestClose_FromHandleWithOtherContext(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := broadcastor.NewBroadcastor[int]()
+		closed := make(chan error, 1)
+		subscribe(t, b, func(context.Context, int) error {
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			closed <- b.Close(ctx) //nolint:contextcheck // Deliberately not handle's ctx, which Close would recognise.
+
+			return nil
+		})
+
+		start := time.Now()
+		broadcast(t, b, t.Context(), 0)
+		if err := waitResult(t, closed, "Close from handle"); !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("Close = %v, want %v", err, context.DeadlineExceeded)
+		}
+		if elapsed := time.Since(start); elapsed != time.Second {
+			t.Errorf("Close returned after %v, want it to give up at the %v deadline", elapsed, time.Second)
+		}
+	})
+}
+
+// A message's error handler calls Close when Broadcast gives up on a subscriber. Broadcast no longer holds on to that
+// subscriber by then, so Close does not wait for Broadcast, which is waiting for Close.
+func TestClose_FromErrorHandler(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := broadcastor.NewBroadcastor[int]()
+		stuck, _ := hold(t, b)
+		broadcast(t, b, t.Context(), 0) // stuck is now processing 0
+
+		closed := make(chan error, 1)
+		go broadcast(t, b, t.Context(), 1, broadcastor.WithMessageTimeout[int](time.Second),
+			broadcastor.WithMessageErrorHandler[int](func(ctx context.Context, _ error) {
+				closed <- b.Close(ctx)
+			}))
+		time.Sleep(time.Second)
+		synctest.Wait() // Close is now waiting for stuck
+
+		stuck.release()
+		if err := waitResult(t, closed, "Close from an error handler"); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+		if got, want := stuck.messages(), []int{0}; !slices.Equal(got, want) {
+			t.Errorf("subscriber processed %v, want %v", got, want)
+		}
+	})
+}
+
+// Close does not wait for a loop over SubscribeSeq, even one that has not started: the loop yields what its subscriber
+// already holds, then ends.
+func TestClose_SubscribeSeq(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := broadcastor.NewBroadcastor[int]()
+		_, msgs := subscribeSeq(t, b, t.Context(), broadcastor.WithSubscriberBuffer[int](2))
+		broadcast(t, b, t.Context(), 1)
+		broadcast(t, b, t.Context(), 2)
+
+		if err := b.Close(t.Context()); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+		if got, want := slices.Collect(msgs), []int{1, 2}; !slices.Equal(got, want) {
+			t.Errorf("loop got %v, want %v", got, want)
+		}
+	})
+}
+
+// Close called from a loop over SubscribeSeq does not wait for that loop, which then ends.
+func TestClose_FromSubscribeSeqLoop(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := broadcastor.NewBroadcastor[int]()
+		_, msgs := subscribeSeq(t, b, t.Context())
+
+		closed := make(chan error, 1)
+		go func() {
+			for range msgs {
+				closed <- b.Close(t.Context())
+			}
+		}()
+		broadcast(t, b, t.Context(), 1)
+		if err := waitResult(t, closed, "Close from a range loop"); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	})
+}
+
+// Subscribe and SubscribeSeq racing Close either fail with ErrClosed, or add a subscriber that is unsubscribed right
+// away, by Close or by themselves, never one that is left subscribed.
+func TestClose_RacesSubscribe(t *testing.T) {
+	t.Parallel()
+
+	const iterations = 2000
+
+	for i := range iterations {
+		synctest.Test(t, func(t *testing.T) {
+			ctx := t.Context()
+			b := broadcastor.NewBroadcastor[int]()
+
+			start := make(chan struct{})
+			var wg sync.WaitGroup
+			wg.Go(func() {
+				<-start
+				if err := b.Close(ctx); err != nil {
+					t.Errorf("iteration %d: Close: %v", i, err)
+				}
+			})
+			ids := make(chan uuid.UUID, 2)
+			wg.Go(func() {
+				<-start
+				switch id, err := b.Subscribe(ctx, func(context.Context, int) error { return nil }); {
+				case err == nil:
+					ids <- id
+				case !errors.Is(err, broadcastor.ErrClosed):
+					t.Errorf("iteration %d: Subscribe = %v, want nil or ErrClosed", i, err)
+				}
+			})
+			wg.Go(func() {
+				<-start
+				switch id, _, err := b.SubscribeSeq(ctx); {
+				case err == nil:
+					ids <- id
+				case !errors.Is(err, broadcastor.ErrClosed):
+					t.Errorf("iteration %d: SubscribeSeq = %v, want nil or ErrClosed", i, err)
+				}
+			})
+			close(start)
+			waitGroup(t, &wg, "Subscribe racing Close")
+
+			close(ids)
+			for id := range ids {
+				if err := b.Unsubscribe(ctx, id); !isNotFound(err) {
+					t.Errorf("iteration %d: Unsubscribe after Close = %v, want *SubscriberNotFoundError", i, err)
+				}
+			}
+		})
+	}
 }
 
 // recorder is a handle function that records every message it is given, in order. If hold is set, handle does not
@@ -1512,6 +2059,19 @@ func hold[T any](t *testing.T, b *broadcastor.Broadcastor[T]) (*recorder[T], uui
 	return r, id
 }
 
+// subscribeSeq calls b.SubscribeSeq, and fails the test if it returns an error.
+func subscribeSeq[T any](
+	t *testing.T, b *broadcastor.Broadcastor[T], ctx context.Context, options ...broadcastor.SubscriberOption[T],
+) (uuid.UUID, iter.Seq[T]) {
+	t.Helper()
+	id, msgs, err := b.SubscribeSeq(ctx, options...)
+	if err != nil {
+		t.Fatalf("SubscribeSeq: %v", err)
+	}
+
+	return id, msgs
+}
+
 func unsubscribe[T any](t *testing.T, b *broadcastor.Broadcastor[T], id uuid.UUID) {
 	t.Helper()
 	if err := b.Unsubscribe(t.Context(), id); err != nil {
@@ -1526,9 +2086,30 @@ func unsubscribeAll[T any](t *testing.T, b *broadcastor.Broadcastor[T], ids ...u
 	}
 }
 
-// broadcast calls b.Broadcast and returns whatever it panicked with.
-func broadcast[T any](ctx context.Context, b *broadcastor.Broadcastor[T], msg T) any {
-	return recovered(func() { b.Broadcast(ctx, msg) })
+// broadcast calls b.Broadcast, fails the test if it returns an error, and returns how many subscribers it handed msg
+// to. It only calls t.Errorf, so it can be called from any goroutine.
+func broadcast[T any](
+	t *testing.T, b *broadcastor.Broadcastor[T], ctx context.Context, msg T, options ...broadcastor.MessageOptions[T],
+) int {
+	t.Helper()
+	n, err := b.Broadcast(ctx, msg, options...)
+	if err != nil {
+		t.Errorf("Broadcast(%v): %v", msg, err)
+	}
+
+	return n
+}
+
+var errPanicked = errors.New("panicked")
+
+// tryBroadcast calls b.Broadcast, and returns its error, or an error saying what it panicked with.
+func tryBroadcast[T any](ctx context.Context, b *broadcastor.Broadcastor[T], msg T) error {
+	var err error
+	if p := recovered(func() { _, err = b.Broadcast(ctx, msg) }); p != nil {
+		return fmt.Errorf("%w: %v", errPanicked, p)
+	}
+
+	return err
 }
 
 // recovered runs f and returns whatever it panicked with, so that a panic fails only the test that caused it instead
@@ -1555,6 +2136,27 @@ func waitClosed(t *testing.T, done <-chan struct{}, what string) {
 	case <-done:
 	case <-time.After(deadlockTimeout):
 		t.Fatalf("still waiting for %s after %v: deadlock", what, deadlockTimeout)
+	}
+}
+
+// closeInBackground calls b.Close from a goroutine of its own, and returns the channel its result is sent on.
+func closeInBackground[T any](ctx context.Context, b *broadcastor.Broadcastor[T]) <-chan error {
+	result := make(chan error, 1)
+	go func() { result <- b.Close(ctx) }()
+
+	return result
+}
+
+// waitResult returns the error sent on result, or fails the test if none is sent within deadlockTimeout.
+func waitResult(t *testing.T, result <-chan error, what string) error {
+	t.Helper()
+	select {
+	case err := <-result:
+		return err
+	case <-time.After(deadlockTimeout):
+		t.Fatalf("still waiting for %s after %v: deadlock", what, deadlockTimeout)
+
+		return nil
 	}
 }
 

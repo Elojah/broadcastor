@@ -9,9 +9,17 @@
 //		return nil
 //	})
 //	...
-//	b.Broadcast(ctx, "hello")
+//	n, err := b.Broadcast(ctx, "hello") // n is how many subscribers it was handed to
 //	...
 //	err = b.Unsubscribe(ctx, id)
+//
+// SubscribeSeq hands the messages to a range loop instead, in the caller's goroutine:
+//
+//	id, msgs, err := b.SubscribeSeq(ctx)
+//	...
+//	for msg := range msgs {
+//		fmt.Println(msg)
+//	}
 //
 // # Delivery
 //
@@ -34,14 +42,26 @@
 // (WithMessageTimeout, or WithSubscriberTimeout for every message sent to a subscriber) runs out. The timeout is counted
 // separately for each subscriber, from when Broadcast gets to it, while a ctx deadline is used up across all of them.
 //
-// Broadcast returns how many subscribers it handed the message to.
+// Broadcast returns how many subscribers it handed the message to, or ErrClosed once Close has been called.
 //
 // # Unsubscribing
 //
 // Unsubscribe never waits for anything, so handle can unsubscribe its own subscriber. A subscriber may still get
 // messages after Unsubscribe returns: whatever is in its buffer, and the message of a Broadcast that was already
-// sending to it. Its goroutine ends once it has processed them. Cancelling the ctx given to Subscribe, which is the one
-// handle gets, does not unsubscribe it.
+// sending to it. Its goroutine ends once it has processed them. Cancelling the ctx given to Subscribe, from which the
+// one handle gets is derived, does not unsubscribe it.
+//
+// A range loop over SubscribeSeq unsubscribes when it ends: when the loop body breaks out of it, returns or panics, or
+// when the ctx given to SubscribeSeq is done. Unsubscribe ends the loop, once it has yielded what the subscriber had
+// already taken.
+//
+// # Closing
+//
+// Close unsubscribes every subscriber, and waits until each has processed what it was sent and its goroutine has
+// ended, or until its ctx is done. Every later Subscribe, SubscribeSeq, Broadcast and Close then fails with ErrClosed.
+// Close does not wait for subscribers unsubscribed before it was called, for range loops over SubscribeSeq, which run
+// in the caller's goroutines, nor for the goroutine it is called from: from handle, pass it the ctx handle was given,
+// which lets it tell.
 //
 // # Errors
 //
@@ -51,9 +71,11 @@
 //
 //   - *HandleError when handle returns an error, and *PanicError when it panics in a subscriber with
 //     WithSubscriberRecover (without it, the panic crashes the program). The handlers are called from the subscriber's
-//     goroutine, right after handle, with the ctx given to Subscribe.
+//     goroutine, right after handle, with the ctx handle is given.
 //   - *TimeoutError, *DroppedError or *SubscriberClosedError when Broadcast could not hand the message over. The
 //     handlers are called with the ctx given to Broadcast.
 //
 // Each error type matches a sentinel (ErrTimeout, ErrDropped, and so on) with errors.Is, which does not need to know T.
+// Errors about a call itself are returned instead: ErrClosed once Close has been called, a *SubscriberNotFoundError
+// from Unsubscribe, and ctx's error from Close when it gives up waiting.
 package broadcastor

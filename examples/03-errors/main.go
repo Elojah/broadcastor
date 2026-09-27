@@ -43,7 +43,9 @@ func main() {
 
 	for _, n := range []int{1, -2, 3, -4} {
 		done.Add(1)
-		b.Broadcast(ctx, n)
+		if _, err := b.Broadcast(ctx, n); err != nil {
+			log.Fatal(err)
+		}
 	}
 	done.Wait()
 

@@ -37,8 +37,14 @@ func main() {
 	}
 
 	handled.Add(1)
-	b.Broadcast(ctx, "first") // the subscriber takes it, then waits in handle
-	n := b.Broadcast(ctx, "second", broadcastor.WithMessageNonBlocking[string]())
+	// The subscriber takes it, then waits in handle.
+	if _, err := b.Broadcast(ctx, "first"); err != nil {
+		log.Fatal(err)
+	}
+	n, err := b.Broadcast(ctx, "second", broadcastor.WithMessageNonBlocking[string]())
+	if err != nil {
+		log.Fatal(err)
+	}
 	fmt.Println("second handed to", n, "subscribers")
 	close(release)
 	handled.Wait()

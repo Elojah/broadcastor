@@ -7,6 +7,9 @@ import (
 	"github.com/google/uuid"
 )
 
+// ErrClosed is what Subscribe, SubscribeSeq, Broadcast and Close return once Close has been called.
+var ErrClosed = errors.New("broadcastor closed")
+
 // Sentinels matched by the typed errors below, so that errors.Is can tell them apart without knowing T.
 var (
 	// ErrSubscriberNotFound is matched by *SubscriberNotFoundError.
