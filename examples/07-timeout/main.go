@@ -29,13 +29,19 @@ func main() {
 		log.Fatal(err)
 	}
 
-	b.Broadcast(ctx, "first") // the subscriber takes it, then waits in handle
-	n := b.Broadcast(ctx, "second",
+	// The subscriber takes it, then waits in handle.
+	if _, err := b.Broadcast(ctx, "first"); err != nil {
+		log.Fatal(err)
+	}
+	n, err := b.Broadcast(ctx, "second",
 		broadcastor.WithMessageTimeout[string](10*time.Millisecond),
 		broadcastor.WithMessageErrorHandler[string](func(_ context.Context, err error) {
 			fmt.Println("timed out:", errors.Is(err, broadcastor.ErrTimeout))
 		}),
 	)
+	if err != nil {
+		log.Fatal(err)
+	}
 	fmt.Println("second handed to", n, "subscribers")
 	close(release)
 

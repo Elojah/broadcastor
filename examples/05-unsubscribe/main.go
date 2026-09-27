@@ -31,8 +31,16 @@ func main() {
 		log.Fatal(err)
 	}
 
-	b.Broadcast(ctx, "hello")
-	b.Broadcast(ctx, "stop")
+	for _, msg := range []string{"hello", "stop"} {
+		if _, err := b.Broadcast(ctx, msg); err != nil {
+			log.Fatal(err)
+		}
+	}
 	<-stopped
-	fmt.Println("handed to", b.Broadcast(ctx, "anyone?"), "subscribers")
+
+	n, err := b.Broadcast(ctx, "anyone?")
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println("handed to", n, "subscribers")
 }

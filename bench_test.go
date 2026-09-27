@@ -48,7 +48,9 @@ func BenchmarkBroadcast(b *testing.B) {
 				b.ReportAllocs()
 				for b.Loop() {
 					handled.Add(subscribers)
-					bc.Broadcast(b.Context(), 0, mode.broadcast...)
+					if _, err := bc.Broadcast(b.Context(), 0, mode.broadcast...); err != nil {
+						b.Fatalf("Broadcast: %v", err)
+					}
 					handled.Wait()
 				}
 			})

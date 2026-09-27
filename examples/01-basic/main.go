@@ -30,7 +30,9 @@ func main() {
 
 	for _, msg := range []string{"hello", "world"} {
 		handled.Add(1)
-		b.Broadcast(ctx, msg)
+		if _, err := b.Broadcast(ctx, msg); err != nil {
+			log.Fatal(err)
+		}
 	}
 	handled.Wait()
 

@@ -8,9 +8,16 @@ import (
 	"github.com/google/uuid"
 )
 
+// subscriberKey is the key under which the ctx given to handle holds its subscriber, for Close to tell it is called
+// from handle.
+type subscriberKey struct{}
+
 type subscriber[T any] struct {
 	id uuid.UUID
 	ch chan message[T]
+
+	// done is closed once consume returns, or nil for a subscriber from SubscribeSeq, which has no goroutine.
+	done chan struct{}
 
 	// defaults is what every message sent to this subscriber starts from, before the Broadcast's own options.
 	defaults message[T]
@@ -57,18 +64,28 @@ func (s *subscriber[T]) report(ctx context.Context, m message[T], err error) {
 }
 
 // send hands m to the subscriber and reports whether it took it. It gives up once ctx is done or m's timeout runs out,
-// or right away for a non-blocking message, then drops the reference the caller acquired.
+// or right away for a non-blocking message. It drops the reference the caller acquired before reporting why it gave
+// up, so that an error handler can call Close without Close waiting for this send.
 func (s *subscriber[T]) send(ctx context.Context, m message[T]) bool {
-	defer s.release()
+	err := s.handover(ctx, m)
+	s.release()
+	if err != nil {
+		s.report(ctx, m, err)
 
+		return false
+	}
+
+	return true
+}
+
+// handover hands m to the subscriber, or returns a *DroppedError or a *TimeoutError saying why it could not.
+func (s *subscriber[T]) handover(ctx context.Context, m message[T]) error {
 	if m.delivery == deliveryNonBlocking {
 		select {
 		case s.ch <- m:
-			return true
+			return nil
 		default:
-			s.report(ctx, m, &DroppedError[T]{SubscriberID: s.id, Message: m.value})
-
-			return false
+			return &DroppedError[T]{SubscriberID: s.id, Message: m.value}
 		}
 	}
 
@@ -81,16 +98,18 @@ func (s *subscriber[T]) send(ctx context.Context, m message[T]) bool {
 
 	select {
 	case s.ch <- m:
-		return true
+		return nil
 	case <-sendCtx.Done():
-		// ctx, not sendCtx, so that the error handler is not handed a ctx that the timeout alone has ended.
-		s.report(ctx, m, &TimeoutError[T]{SubscriberID: s.id, Message: m.value, Err: sendCtx.Err()})
-
-		return false
+		return &TimeoutError[T]{SubscriberID: s.id, Message: m.value, Err: sendCtx.Err()}
 	}
 }
 
+// consume calls handle for every message on the channel until it is closed, then closes done. handle and the error
+// handlers are given ctx with the subscriber in it, for Close to find.
 func (s *subscriber[T]) consume(ctx context.Context, handle func(ctx context.Context, msg T) error) {
+	defer close(s.done)
+
+	ctx = context.WithValue(ctx, subscriberKey{}, s)
 	for m := range s.ch {
 		// Reported here rather than from process, so that a panic in an error handler is not recovered.
 		if err := s.process(ctx, handle, m.value); err != nil {

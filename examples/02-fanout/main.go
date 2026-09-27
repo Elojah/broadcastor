@@ -36,7 +36,10 @@ func main() {
 
 	for _, msg := range []string{"hello", "bye"} {
 		handled.Add(len(names))
-		n := b.Broadcast(ctx, msg)
+		n, err := b.Broadcast(ctx, msg)
+		if err != nil {
+			log.Fatal(err)
+		}
 		fmt.Println(msg, "handed to", n, "subscribers")
 	}
 	handled.Wait()
