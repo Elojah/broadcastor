@@ -31,3 +31,14 @@ type message[T any] struct {
 	// errorHandler is called with every error about this message, on top of the subscriber's own, or nil for none.
 	errorHandler func(ctx context.Context, err error)
 }
+
+// with returns what a Broadcast sends to one subscriber, starting from m, that subscriber's defaults: value, with the
+// Broadcast's options applied on top, so that they override the defaults. m itself is left as it was.
+func (m message[T]) with(value T, options ...MessageOptions[T]) message[T] {
+	m.value = value
+	for _, option := range options {
+		option(&m)
+	}
+
+	return m
+}

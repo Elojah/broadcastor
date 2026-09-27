@@ -22,9 +22,6 @@ when nobody reads it.
 
 - `WithSubscriberFilter(func(T) bool)`: skip unwanted messages before sending, so they never take a reference or hold
   `Broadcast` up.
-- `WithSubscriberAutoUnsubscribe`: end the subscription when the `Subscribe` ctx is done. Right now cancelling that ctx
-  does nothing, which is surprising. A watcher goroutine can call `Unsubscribe` safely, since `Unsubscribe` never waits.
-  The watcher also has to exit after a normal `Unsubscribe`, or it leaks (and synctest tests will catch it).
 
 ### Done
 
@@ -48,6 +45,14 @@ when nobody reads it.
 - `SubscribeSeq`, a pull-style variant returning `iter.Seq[T]`: the loop body takes the place of `handle`, reading the
   subscriber's channel directly. Breaking out of the loop, or its ctx being done, unsubscribes. Messages it took but
   never yielded are reported as `*SubscriberClosedError`.
+- `WithUnsubscribeDiscard` (not "drain", which in NATS means the opposite: process what is pending, then close): once
+  unsubscribed, the subscriber reports what it takes as `*SubscriberClosedError` instead of handling it, and a
+  `SubscribeSeq` loop ends. It can be the subscriber's default (`WithSubscriberDefaultUnsubscribeOptions`), which is how
+  `Close` applies it: `Close()` keeps its signature, and so still satisfies `io.Closer`. `WithUnsubscribeDeliver`
+  overrides that default.
+- `WithSubscriberAutoUnsubscribe`: the subscriber is unsubscribed as soon as the `Subscribe` or `SubscribeSeq` ctx is
+  done, even while `handle` runs. It is a `context.AfterFunc` rather than a watcher goroutine, stopped by whichever
+  removal comes first, so nothing is left waiting on a ctx that is never done.
 - Benchmarks (`bench_test.go`, `make bench`): `Broadcast` for 1 to 1000 subscribers × sync/async/buffered, and
   `Subscribe`/`Unsubscribe` churn, serial and parallel.
 
@@ -56,29 +61,30 @@ when nobody reads it.
 ### Subscription handle and lifecycle
 
 - `Subscribe` returns a `*Subscription` (`ID()`, `Unsubscribe()`, `Done() <-chan struct{}` closed once `consume`
-  returns) instead of a bare `uuid.UUID`. With `Done()`, a caller outside `handle` can wait for the drain themselves,
+  returns) instead of a bare `uuid.UUID`. With `Done()`, a caller outside `handle` can wait for the discard themselves,
   and the library still never waits.
-- `Broadcastor.Close(ctx)`: unsubscribe everyone, refuse new `Subscribe` and `Broadcast` calls (`ErrClosed`), and wait
-  for subscribers to drain, bounded by `ctx`. Called from `handle`, it would end up waiting on itself, so it has to
-  either detect that case or be documented as off-limits there.
+- `Broadcastor.Close()` exists: it unsubscribes everyone, refuses new `Subscribe` calls with `ErrClosed` (a `Broadcast`
+  after it reaches nobody and returns 0), and never waits. Still missing: a way to wait until the subscribers have
+  discarded, bounded by a ctx (`Close(ctx)`, or a separate `Wait(ctx)`). Called from `handle`, that would end up waiting
+  on itself, so it has to either detect that case or be documented as off-limits there.
 
 ### Broadcast ctx reaching `handle`
 
-- `handle` gets the `Subscribe` ctx, so values on the `Broadcast` ctx (trace IDs, request-scoped loggers) never reach it.
+- [x] `handle` gets the `Subscribe` ctx, so values on the `Broadcast` ctx (trace IDs, request-scoped loggers) never reach it.
   Carry the `Broadcast` ctx's values on the message, and give `handle` a ctx that combines those values with the
   subscriber's cancellation. This needs a small custom `context.Context`. Offer it as an option, or make it the default
   before v1.
 
 ### Parallel but waiting
 
-- `WithMessageParallel`: send to every subscriber at once, but return only after each one has taken the message or
+- [x] `WithMessageParallel`: send to every subscriber at once, but return only after each one has taken the message or
   missed it. A slow subscriber stops holding up the ones after it, and successive `Broadcast`s from one goroutine still
   arrive in order. It sits between today's sync and async modes, and a ctx deadline would then apply to every
   subscriber equally instead of being used up one subscriber after another.
 
 ### Ordered async and overflow policies
 
-- Async gives up ordering to avoid blocking. A per-subscriber queue, drained by one sender goroutine, keeps both:
+- Async gives up ordering to avoid blocking. A per-subscriber queue, discarded by one sender goroutine, keeps both:
   `Broadcast` enqueues and returns, and the subscriber gets messages in `Broadcast` order. The queue must be bounded,
   with an overflow policy (`Block`, `DropNewest`, `DropOldest`, `Error`), since an unbounded one just turns a slow
   subscriber into a memory problem. This generalises `WithSubscriberBuffer` and `WithMessageNonBlocking`.

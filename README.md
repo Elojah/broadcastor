@@ -97,6 +97,7 @@ Errors go to error handlers, and are discarded when there are none:
 | `*DroppedError` | A non-blocking `Broadcast` found the subscriber busy. | `Broadcast`'s |
 | `*SubscriberClosedError` | The subscriber was unsubscribed while `Broadcast` was running. | `Broadcast`'s |
 | `*SubscriberClosedError` | A `SubscribeSeq` loop ended before yielding a message its subscriber took. | `SubscribeSeq`'s |
+| `*SubscriberClosedError` | A subscriber unsubscribed with `WithUnsubscribeDiscard` took a message. | `Subscribe`'s or `SubscribeSeq`'s |
 
 Each error type matches a sentinel with `errors.Is` (`ErrTimeout`, `ErrDropped`, `ErrPanic`, `ErrSubscriberClosed`,
 `ErrSubscriberNotFound`), without needing to know the message type.
@@ -106,12 +107,24 @@ Each error type matches a sentinel with `errors.Is` (`ErrTimeout`, `ErrDropped`,
 `Unsubscribe` never waits, so `handle` can unsubscribe its own subscriber. A subscriber may still get messages after
 `Unsubscribe` returns: whatever is in its buffer, and the message of a `Broadcast` that was already sending to it. Its
 goroutine ends once it has processed them. `handle` gets the ctx passed to `Subscribe`, and cancelling that ctx does not
-unsubscribe it.
+unsubscribe it, unless the subscriber has `WithSubscriberAutoUnsubscribe`. That option unsubscribes it as soon as the ctx
+passed to `Subscribe` or `SubscribeSeq` is done, even while `handle` or the loop body is running, or before the loop
+starts.
 
 A `SubscribeSeq` loop ends once its subscriber is unsubscribed and has yielded those messages. When it ends another way,
 because it breaks or because the ctx passed to `SubscribeSeq` is done, it unsubscribes the subscriber itself. The
 messages the subscriber took but did not yield are then reported as `*SubscriberClosedError`. The iterator can be ranged
 over once.
+
+`Close` unsubscribes every subscriber the same way, and from then on `Subscribe` and `SubscribeSeq` return `ErrClosed`,
+so `Broadcast` reaches nobody. It never waits either, so `handle` can call it too, and it is safe to call concurrently
+with anything, including another `Close`: the first returns nil, and every later one `ErrClosed`.
+
+To stop a subscriber from processing what it takes after being unsubscribed, pass `WithUnsubscribeDiscard` to
+`Unsubscribe`. Those messages are then reported as `*SubscriberClosedError` instead of being passed to `handle`, and a
+`SubscribeSeq` loop ends right away. `WithSubscriberDefaultUnsubscribeOptions(WithUnsubscribeDiscard())` makes it the
+subscriber's default, which is the only way `Close` applies it. `WithUnsubscribeDeliver` overrides that default for one
+`Unsubscribe`.
 
 ## Development
 

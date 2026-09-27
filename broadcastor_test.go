@@ -894,7 +894,7 @@ func TestUnsubscribe_RacesBroadcastPickingUpChannel(t *testing.T) {
 }
 
 // handle leaves both of its consumer's subscriptions while a Broadcast is waiting to send to the first one, then
-// the subscriber drains that Broadcast's message. The subscriber is not reading while handle runs, so Unsubscribe must
+// the subscriber discards that Broadcast's message. The subscriber is not reading while handle runs, so Unsubscribe must
 // never wait on a Broadcast, not even indirectly through a lock held by another Broadcast that is waiting on this one.
 // This runs in real time rather than in a synctest bubble: a goroutine stuck on a sync.Mutex is not durably blocked, so
 // the bubble would hang instead of failing.
@@ -1691,6 +1691,200 @@ func TestSubscribeSeq_Panic(t *testing.T) {
 		}
 		synctest.Wait()
 	})
+}
+
+// Close unsubscribes every subscriber: each still processes what it took, a SubscribeSeq loop ends once it has yielded
+// it, and Broadcast then hands messages to nobody. Every later Subscribe, SubscribeSeq and Close returns ErrClosed.
+func TestClose(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := broadcastor.NewBroadcastor[int]()
+		buffered := &recorder[int]{hold: make(chan struct{})}
+		bufferedID := subscribe(t, b, buffered.handle, broadcastor.WithSubscriberBuffer[int](2))
+		unbuffered, unbufferedID := record(t, b)
+		seqID, seq := subscribeSeq(t, b)
+
+		yielded := &recorder[int]{}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for msg := range seq {
+				yielded.record(msg)
+			}
+		}()
+		for msg := 1; msg <= 3; msg++ {
+			b.Broadcast(t.Context(), msg)
+		}
+		// buffered is processing 1, with 2 and 3 in its buffer.
+		if err := b.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		waitClosed(t, done, "the loop to end once the Broadcastor is closed")
+		buffered.release()
+		synctest.Wait()
+
+		for name, r := range map[string]*recorder[int]{"buffered": buffered, "unbuffered": unbuffered, "seq": yielded} {
+			if got, want := r.messages(), []int{1, 2, 3}; !slices.Equal(got, want) {
+				t.Errorf("%s subscriber received %v, want %v", name, got, want)
+			}
+		}
+
+		if n := b.Broadcast(t.Context(), 4); n != 0 {
+			t.Errorf("Broadcast after Close handed the message to %d subscribers, want 0", n)
+		}
+		for _, id := range []uuid.UUID{bufferedID, unbufferedID, seqID} {
+			if err := b.Unsubscribe(t.Context(), id); !isNotFound(err) {
+				t.Errorf("Unsubscribe(%s) after Close = %v, want *SubscriberNotFoundError", id, err)
+			}
+		}
+		if _, err := b.Subscribe(t.Context(), unbuffered.handle); !errors.Is(err, broadcastor.ErrClosed) {
+			t.Errorf("Subscribe after Close = %v, want ErrClosed", err)
+		}
+		if _, _, err := b.SubscribeSeq(t.Context()); !errors.Is(err, broadcastor.ErrClosed) {
+			t.Errorf("SubscribeSeq after Close = %v, want ErrClosed", err)
+		}
+		if err := b.Close(); !errors.Is(err, broadcastor.ErrClosed) {
+			t.Errorf("second Close = %v, want ErrClosed", err)
+		}
+	})
+}
+
+// handle closes the Broadcastor while a Broadcast is waiting to send to its subscriber. The subscriber only reads again
+// once handle returns, so Close must not wait for that Broadcast, which then delivers its message and closes the
+// channel.
+func TestClose_FromHandle(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx := t.Context()
+		b := broadcastor.NewBroadcastor[int]()
+		other, _ := record(t, b)
+
+		self := &recorder[int]{}
+		proceed := make(chan struct{})
+		subscribe(t, b, func(_ context.Context, msg int) error {
+			self.record(msg)
+			if msg == 1 {
+				<-proceed
+				if err := b.Close(); err != nil {
+					t.Errorf("Close: %v", err)
+				}
+			}
+
+			return nil
+		})
+
+		b.Broadcast(ctx, 1) // self is now processing 1 and not reading
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			b.Broadcast(ctx, 2)
+		}()
+		synctest.Wait() // the Broadcast of 2 is waiting on self
+		close(proceed)
+		waitClosed(t, done, "Broadcast during which handle closed the Broadcastor")
+		synctest.Wait()
+
+		if got, want := self.messages(), []int{1, 2}; !slices.Equal(got, want) {
+			t.Errorf("closing subscriber received %v, want %v", got, want)
+		}
+		// other is visited before or after self depending on map order, and after self it is already unsubscribed.
+		if got := other.messages(); !slices.Equal(got, []int{1}) && !slices.Equal(got, []int{1, 2}) {
+			t.Errorf("other subscriber received %v, want [1] or [1 2]", got)
+		}
+	})
+}
+
+// Close races with Subscribe, SubscribeSeq, Unsubscribe, Broadcast and other Close calls. Exactly one Close succeeds,
+// every subscription is either refused with ErrClosed or ended by Close, which synctest checks by failing on any
+// goroutine left behind, and once any Close has returned there is no subscriber left.
+func TestClose_Parallel(t *testing.T) {
+	t.Parallel()
+
+	const closers, subscribers = 4, 60
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx := t.Context()
+		b := broadcastor.NewBroadcastor[int]()
+
+		stop := make(chan struct{})
+		broadcasterDone := make(chan struct{})
+		go func() {
+			defer close(broadcasterDone)
+			for seq := 0; ; seq++ {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				if p := broadcast(ctx, b, seq); p != nil {
+					t.Errorf("Broadcast panicked: %v", p)
+
+					return
+				}
+			}
+		}()
+
+		var subscribersWG, closersWG sync.WaitGroup
+		for i := range subscribers {
+			subscribersWG.Go(func() { subscribeUntilClosed(t, b, i%3) })
+		}
+		var succeeded atomic.Int32
+		for range closers {
+			closersWG.Go(func() {
+				switch err := b.Close(); {
+				case err == nil:
+					succeeded.Add(1)
+				case !errors.Is(err, broadcastor.ErrClosed):
+					t.Errorf("Close = %v, want nil or ErrClosed", err)
+				}
+				if n := b.Broadcast(ctx, -1); n != 0 {
+					t.Errorf("Broadcast after Close handed the message to %d subscribers, want 0", n)
+				}
+			})
+		}
+		waitGroup(t, &closersWG, "closers")
+		// Stopped before waiting for the subscribers: while it spins, the fake clock never advances, so a SubscribeSeq
+		// loop that Close missed would hang the test instead of failing it at deadlockTimeout.
+		close(stop)
+		waitClosed(t, broadcasterDone, "broadcaster")
+		waitGroup(t, &subscribersWG, "subscribers")
+		synctest.Wait()
+
+		if n := succeeded.Load(); n != 1 {
+			t.Errorf("%d Close calls succeeded, want 1", n)
+		}
+	})
+}
+
+// subscribeUntilClosed subscribes to b, which a concurrent Close may refuse, then, depending on kind: unsubscribes
+// right away, racing with Close for the same subscriber; leaves the subscriber for Close to end; or ranges over
+// SubscribeSeq until Close ends the loop.
+func subscribeUntilClosed(t *testing.T, b *broadcastor.Broadcastor[int], kind int) {
+	t.Helper()
+
+	var err error
+	switch kind {
+	case 0:
+		var id uuid.UUID
+		if id, err = b.Subscribe(t.Context(), (&recorder[int]{}).handle); err == nil {
+			if err := b.Unsubscribe(t.Context(), id); err != nil && !isNotFound(err) {
+				t.Errorf("Unsubscribe(%s) = %v, want nil or *SubscriberNotFoundError", id, err)
+			}
+		}
+	case 1:
+		_, err = b.Subscribe(t.Context(), (&recorder[int]{}).handle)
+	default:
+		var seq iter.Seq[int]
+		if _, seq, err = b.SubscribeSeq(t.Context()); err == nil {
+			for range seq { // until Close ends the loop
+			}
+		}
+	}
+	if err != nil && !errors.Is(err, broadcastor.ErrClosed) {
+		t.Errorf("subscribing = %v, want nil or ErrClosed", err)
+	}
 }
 
 // recorder is a handle function that records every message it is given, in order. If hold is set, handle does not

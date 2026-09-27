@@ -7,6 +7,9 @@ import (
 	"github.com/google/uuid"
 )
 
+// ErrClosed is returned by Subscribe and SubscribeSeq once Close has been called, and by every Close after the first.
+var ErrClosed = errors.New("broadcastor closed")
+
 // Sentinels matched by the typed errors below, so that errors.Is can tell them apart without knowing T.
 var (
 	// ErrSubscriberNotFound is matched by *SubscriberNotFoundError.
@@ -113,7 +116,8 @@ func (e *DroppedError[T]) Is(target error) bool {
 
 // SubscriberClosedError is what an error handler is given when a subscriber misses a message because it was
 // unsubscribed: either Broadcast skips it, because its channel was closed between Broadcast picking it up and sending
-// to it, or it took the message but its SubscribeSeq loop ended before yielding it. It matches ErrSubscriberClosed.
+// to it, or it took the message but its SubscribeSeq loop ended before yielding it, or it took the message after being
+// unsubscribed with WithUnsubscribeDiscard. It matches ErrSubscriberClosed.
 type SubscriberClosedError[T any] struct {
 	SubscriberID uuid.UUID
 	Message      T
