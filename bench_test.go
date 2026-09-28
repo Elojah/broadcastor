@@ -24,6 +24,7 @@ func BenchmarkBroadcast(b *testing.B) {
 		broadcast []message.Option[int]
 	}{
 		{name: "sync"},
+		{name: "parallel", broadcast: []message.Option[int]{message.WithParallel[int]()}},
 		{name: "async", broadcast: []message.Option[int]{message.WithAsync[int]()}},
 		{name: "buffered", subscribe: []subscriber.Option[int]{subscriber.WithBuffer[int](64)}},
 		{name: "middleware", subscribe: []subscriber.Option[int]{subscriber.WithMiddleware(

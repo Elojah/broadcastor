@@ -54,7 +54,7 @@ when nobody reads it.
 - `subscriber.WithAutoUnsubscribe`: the subscriber is unsubscribed as soon as the `Subscribe` or `SubscribeSeq` ctx is
   done, even while `handle` runs. It is a `context.AfterFunc` rather than a watcher goroutine, stopped by whichever
   removal comes first, so nothing is left waiting on a ctx that is never done.
-- Benchmarks (`bench_test.go`, `make bench`): `Broadcast` for 1 to 1000 subscribers × sync/async/buffered/middleware,
+- Benchmarks (`bench_test.go`, `make bench`): `Broadcast` for 1 to 1000 subscribers × sync/parallel/async/buffered/middleware,
   and `Subscribe`/`Unsubscribe` churn, serial and parallel.
 - `subscriber.WithMiddleware`: a `func(next Handler[T]) Handler[T]` chain around `handle`, first outermost. Breaking
   changes since v0.1.0: `handle` takes the subscriber's ID (`func(ctx, id, msg) error`), so a middleware can build
@@ -67,6 +67,11 @@ when nobody reads it.
   error about a subscriber's messages moved to `subscriber` too, where `SubscriberClosedError` and
   `ErrSubscriberClosed` became `ClosedError` and `ErrClosed`. `broadcastor` keeps `Broadcastor`, `ErrClosed` and
   `SubscriberNotFoundError`. The subscriber's reference counting stays unexported inside `subscriber`.
+- `message.WithParallel`, between sync and async: `Broadcast` sends to every subscriber at once, each from its own
+  goroutine, and returns once each has taken the message or missed it. A slow subscriber holds up nobody else,
+  successive `Broadcast`s from one goroutine still arrive in order, and the ctx deadline and the timeout apply to every
+  subscriber from the same moment. `Broadcast` counts the parallel sends that were taken. `Subscriber.Deliver` now also
+  returns a channel for a parallel send, so the other modes allocate nothing more.
 
 ## Mid-term: more delivery modes (v0.x)
 
@@ -86,13 +91,6 @@ when nobody reads it.
   Carry the `Broadcast` ctx's values on the message, and give `handle` a ctx that combines those values with the
   subscriber's cancellation. This needs a small custom `context.Context`. Offer it as an option, or make it the default
   before v1.
-
-### Parallel but waiting
-
-- [x] `message.WithParallel`: send to every subscriber at once, but return only after each one has taken the message or
-  missed it. A slow subscriber stops holding up the ones after it, and successive `Broadcast`s from one goroutine still
-  arrive in order. It sits between today's sync and async modes, and a ctx deadline would then apply to every
-  subscriber equally instead of being used up one subscriber after another.
 
 ### Ordered async and overflow policies
 

@@ -121,20 +121,40 @@ func (b *Broadcastor[T]) Close() error {
 // subscriber only takes its next message once handle has returned, unless it has room in its buffer, so a slow
 // subscriber holds up Broadcast and every subscriber after it. Broadcast stops waiting once ctx is done, or once the
 // message's timeout runs out, counted separately for each subscriber: that subscriber misses the message, and so may
-// every later one once ctx is done. message.WithAsync and message.WithNonBlocking change how Broadcast waits.
+// every later one once ctx is done. message.WithParallel, message.WithAsync and message.WithNonBlocking change how
+// Broadcast waits.
 //
 // Every subscriber that misses the message has its error handlers given the reason, with ctx: a
 // *subscriber.TimeoutError, a *subscriber.DroppedError, or a *subscriber.ClosedError when it was unsubscribed since
 // Broadcast picked it up.
 func (b *Broadcastor[T]) Broadcast(ctx context.Context, msg T, options ...message.Option[T]) int {
-	var n int
+	var (
+		n int
+		// pending holds a channel for each parallel send, which yields whether the subscriber took the message.
+		pending []<-chan bool
+	)
 	b.subscribers.Range(func(_, value any) bool {
-		if s, ok := value.(*subscriber.Subscriber[T]); ok && s.Deliver(ctx, msg, options...) {
+		s, ok := value.(*subscriber.Subscriber[T])
+		if !ok {
+			return true
+		}
+		taken, parallel := s.Deliver(ctx, msg, options...)
+		if taken {
 			n++
+		}
+		if parallel != nil {
+			pending = append(pending, parallel)
 		}
 
 		return true
 	})
+
+	// Each gives up once ctx is done or its timeout runs out, like a sync send, so this waits for no other Broadcast.
+	for _, taken := range pending {
+		if <-taken {
+			n++
+		}
+	}
 
 	return n
 }

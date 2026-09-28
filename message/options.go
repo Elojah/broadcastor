@@ -10,12 +10,25 @@ import (
 type Option[T any] func(config *Config)
 
 // WithSync makes Broadcast wait for each subscriber in turn to take the message, until ctx is done or the message's
-// timeout runs out. It is the default, so it is only needed to override a subscriber's default of WithAsync or
-// WithNonBlocking for one Broadcast. WithSync, WithAsync and WithNonBlocking exclude each other: the last one given
-// wins.
+// timeout runs out. It is the default, so it is only needed to override a subscriber's default of WithParallel,
+// WithAsync or WithNonBlocking for one Broadcast. WithSync, WithParallel, WithAsync and WithNonBlocking exclude each
+// other: the last one given wins.
 func WithSync[T any]() Option[T] {
 	return func(config *Config) {
 		config.Delivery = DeliverySync
+	}
+}
+
+// WithParallel makes Broadcast send the message to every subscriber at once, each from its own goroutine, and return
+// once each has taken it or missed it, when ctx is done or the message's timeout runs out. A slow subscriber then
+// holds up nobody else, but still holds up Broadcast, and a subscriber gets the messages of successive Broadcasts from
+// one goroutine in order. ctx and the timeout apply to every subscriber from the same moment, so Broadcast takes at
+// most the timeout, not the timeout for each subscriber, and every subscriber that misses the message has its error
+// handlers told before Broadcast returns, possibly concurrently. A subscriber that WithSync applies to in the same
+// Broadcast is still waited for in turn, and holds up every send Broadcast starts after it.
+func WithParallel[T any]() Option[T] {
+	return func(config *Config) {
+		config.Delivery = DeliveryParallel
 	}
 }
 
@@ -59,8 +72,9 @@ func WithErrorHandler[T any](handler func(ctx context.Context, err error)) Optio
 // that subscriber misses the message, and its error handlers are given a *subscriber.TimeoutError wrapping
 // context.DeadlineExceeded, with the ctx passed to Broadcast. Unlike a ctx deadline, which a synchronous Broadcast uses
 // up across all subscribers, each subscriber gets the whole timeout, counted from when Broadcast gets to it: a
-// synchronous Broadcast can then take up to the timeout for each subscriber. A timeout of 0 or less means none, which
-// overrides subscriber.WithTimeout.
+// synchronous Broadcast can then take up to the timeout for each subscriber, while a parallel one (WithParallel) gets
+// to them all at once, and takes up to the timeout overall. A timeout of 0 or less means none, which overrides
+// subscriber.WithTimeout.
 func WithTimeout[T any](timeout time.Duration) Option[T] {
 	return func(config *Config) {
 		config.Timeout = timeout

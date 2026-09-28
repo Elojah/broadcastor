@@ -15,6 +15,9 @@ type Delivery int
 const (
 	// DeliverySync makes Broadcast wait for the subscriber to take the message. It is the default.
 	DeliverySync Delivery = iota
+	// DeliveryParallel makes Broadcast wait for the subscriber from a goroutine of its own, and return once every such
+	// goroutine is done.
+	DeliveryParallel
 	// DeliveryAsync makes Broadcast wait for the subscriber from a goroutine of its own, and return right away.
 	DeliveryAsync
 	// DeliveryNonBlocking makes Broadcast drop the message if the subscriber cannot take it right away.

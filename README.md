@@ -73,6 +73,8 @@ for msg := range seq {
 11. [`11-iterator`](examples/11-iterator/main.go): `SubscribeSeq` and a `for range` loop instead of `handle`.
 12. [`12-middleware`](examples/12-middleware/main.go): `subscriber.WithMiddleware`, a retry middleware and
     `middleware.WrapError`.
+13. [`13-parallel`](examples/13-parallel/main.go): `message.WithParallel`, where a slow subscriber holds up nobody else
+    but `Broadcast` still waits for it.
 
 ## Delivery
 
@@ -83,6 +85,7 @@ a mode with a message option, and a subscriber can set its own default with `sub
 | --- | --- | --- | --- |
 | **Sync** (default, `message.WithSync`) | In `Broadcast` order, for `Broadcast`s from one goroutine. | Each subscriber in turn, until it takes the message. A subscriber takes its next message only once `handle` returns, so a slow subscriber holds up `Broadcast` and every subscriber after it. | The `Broadcast` ctx is done, or the message's timeout runs out, before it takes the message (`*subscriber.TimeoutError`). |
 | **Buffered** (`subscriber.WithBuffer(n)`) | Same as sync. | Nothing while the subscriber's buffer has room, then the same as sync. | Same as sync, once the buffer is full. |
+| **Parallel** (`message.WithParallel`) | Same as sync. | Every subscriber at once, each from a goroutine of its own, until each takes the message or misses it. A slow subscriber holds up `Broadcast`, but nobody else. | Same as sync, reported before `Broadcast` returns. |
 | **Async** (`message.WithAsync`) | None: successive `Broadcast`s may arrive out of order. | Nothing. Each subscriber is sent the message from a goroutine of its own, so a slow subscriber holds up nobody else. | Same as sync, but reported after `Broadcast` has returned. |
 | **Non-blocking** (`message.WithNonBlocking`) | Same as sync, for the messages it takes. | Nothing. | It is busy in `handle`, or its buffer is full (`*subscriber.DroppedError`). |
 
@@ -90,7 +93,9 @@ In every mode, a subscriber that is unsubscribed while `Broadcast` is running ma
 (`*subscriber.ClosedError`).
 
 `message.WithTimeout(d)` bounds the wait for each subscriber separately, while a ctx deadline is used up across all of
-them. `subscriber.WithTimeout(d)` sets a default timeout for every message sent to one subscriber.
+them. A parallel `Broadcast` gets to every subscriber at once, so it waits at most `d` in all, and a ctx deadline gives
+every subscriber the same time. `subscriber.WithTimeout(d)` sets a default timeout for every message sent to one
+subscriber.
 
 ## Middleware
 

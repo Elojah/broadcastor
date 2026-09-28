@@ -1161,8 +1161,8 @@ func TestErrors_Is(t *testing.T) {
 	}
 }
 
-// A Broadcast passing message.WithSync waits for subscribers whose default is message.WithAsync or
-// message.WithNonBlocking, as if they had none.
+// A Broadcast passing message.WithSync waits for subscribers whose default is message.WithParallel, message.WithAsync or
+// message.WithNonBlocking, one at a time, as if they had none.
 func TestMessageWithSync(t *testing.T) {
 	t.Parallel()
 
@@ -1170,7 +1170,7 @@ func TestMessageWithSync(t *testing.T) {
 		b := broadcastor.NewBroadcastor[int]()
 		timeouts := &recorder[int]{}
 		defaults := []message.Option[int]{
-			message.WithAsync[int](), message.WithNonBlocking[int](),
+			message.WithParallel[int](), message.WithAsync[int](), message.WithNonBlocking[int](),
 		}
 		ids := make([]uuid.UUID, 0, len(defaults))
 		stuck := make([]*recorder[int], 0, len(defaults))
@@ -1181,19 +1181,19 @@ func TestMessageWithSync(t *testing.T) {
 				subscriber.WithErrorHandler[int](recordTimeouts(t, timeouts))))
 			stuck = append(stuck, r)
 		}
-		synctest.Wait() // both are idle, so that the non-blocking one takes 0
+		synctest.Wait() // all are idle, so that the non-blocking one takes 0
 		b.Broadcast(t.Context(), 0)
-		synctest.Wait() // both are now processing 0 and not reading
+		synctest.Wait() // all are now processing 0 and not reading
 
 		start := time.Now()
 		n := b.Broadcast(t.Context(), 1, message.WithSync[int](), message.WithTimeout[int](time.Second))
-		if elapsed := time.Since(start); elapsed != 2*time.Second {
-			t.Errorf("sync Broadcast returned after %v, want %v: the whole timeout for each subscriber", elapsed, 2*time.Second)
+		if elapsed, want := time.Since(start), time.Duration(len(defaults))*time.Second; elapsed != want {
+			t.Errorf("sync Broadcast returned after %v, want %v: the whole timeout for each subscriber", elapsed, want)
 		}
 		if n != 0 {
 			t.Errorf("Broadcast handed the message to %d subscribers, want 0", n)
 		}
-		if got, want := timeouts.messages(), []int{1, 1}; !slices.Equal(got, want) {
+		if got, want := timeouts.messages(), slices.Repeat([]int{1}, len(defaults)); !slices.Equal(got, want) {
 			t.Errorf("error handler got timeouts for messages %v, want %v", got, want)
 		}
 
@@ -1227,18 +1227,21 @@ func TestBroadcast_Count(t *testing.T) {
 		if n := b.Broadcast(t.Context(), 1, message.WithTimeout[int](time.Second)); n != 2 {
 			t.Errorf("sync Broadcast handed the message to %d subscribers, want 2: all but the stuck one", n)
 		}
-		if n := b.Broadcast(t.Context(), 2, message.WithAsync[int]()); n != 3 {
+		if n := b.Broadcast(t.Context(), 2, message.WithParallel[int](), message.WithTimeout[int](time.Second)); n != 2 {
+			t.Errorf("parallel Broadcast handed the message to %d subscribers, want 2: all but the stuck one", n)
+		}
+		if n := b.Broadcast(t.Context(), 3, message.WithAsync[int]()); n != 3 {
 			t.Errorf("async Broadcast handed the message to %d subscribers, want 3: all of them, stuck or not", n)
 		}
 
 		unsubscribeAll(t, b, stuckID, firstID, secondID)
-		if n := b.Broadcast(t.Context(), 3); n != 0 {
+		if n := b.Broadcast(t.Context(), 4); n != 0 {
 			t.Errorf("Broadcast with no subscribers handed the message to %d, want 0", n)
 		}
 
 		stuck.release()
 		synctest.Wait()
-		if got, want := stuck.messages(), []int{0, 2}; !slices.Equal(got, want) {
+		if got, want := stuck.messages(), []int{0, 3}; !slices.Equal(got, want) {
 			t.Errorf("stuck subscriber received %v, want %v", got, want)
 		}
 	})
@@ -1329,6 +1332,176 @@ func TestMessageWithNonBlocking_Buffer(t *testing.T) {
 		synctest.Wait()
 		if got, want := stuck.messages(), []int{0, 1, 2}; !slices.Equal(got, want) {
 			t.Errorf("stuck subscriber received %v, want %v", got, want)
+		}
+	})
+}
+
+// A parallel Broadcast reaches the other subscribers without waiting for a stuck one, and returns only once the stuck
+// one has taken the message too.
+func TestMessageWithParallel(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := broadcastor.NewBroadcastor[int]()
+		stuck, stuckID := hold(t, b)
+		reader, readerID := record(t, b)
+		b.Broadcast(t.Context(), 0)
+		synctest.Wait() // stuck is now processing 0 and not reading, and reader is idle
+
+		done := make(chan struct{})
+		var n int
+		go func() {
+			defer close(done)
+			n = b.Broadcast(t.Context(), 1, message.WithParallel[int]())
+		}()
+		synctest.Wait()
+		if got, want := reader.messages(), []int{0, 1}; !slices.Equal(got, want) {
+			t.Errorf("reader received %v while stuck was still processing, want %v", got, want)
+		}
+		select {
+		case <-done:
+			t.Error("parallel Broadcast returned before the stuck subscriber took the message")
+		default:
+		}
+
+		stuck.release()
+		waitClosed(t, done, "parallel Broadcast")
+		if n != 2 {
+			t.Errorf("parallel Broadcast handed the message to %d subscribers, want 2", n)
+		}
+
+		unsubscribeAll(t, b, stuckID, readerID)
+		synctest.Wait()
+		if got, want := stuck.messages(), []int{0, 1}; !slices.Equal(got, want) {
+			t.Errorf("stuck subscriber received %v, want %v", got, want)
+		}
+	})
+}
+
+// A parallel Broadcast gets to every subscriber at once, so the message's timeout runs out for all of them at the same
+// time: it waits for the timeout once, where a sync Broadcast waits for it once per subscriber (TestMessageWithTimeout).
+// The error handlers are told before it returns.
+func TestMessageWithParallel_Timeout(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := broadcastor.NewBroadcastor[int]()
+		first, firstID := hold(t, b)
+		second, secondID := hold(t, b)
+		reader, readerID := record(t, b)
+		b.Broadcast(t.Context(), 0) // first and second are now processing 0 and not reading
+
+		timeouts := &recorder[int]{}
+		start := time.Now()
+		n := b.Broadcast(t.Context(), 1, message.WithParallel[int](), message.WithTimeout[int](time.Second),
+			message.WithErrorHandler[int](recordTimeouts(t, timeouts)))
+		if elapsed := time.Since(start); elapsed != time.Second {
+			t.Errorf("parallel Broadcast returned after %v, want %v: the timeout once for all subscribers", elapsed, time.Second)
+		}
+		if n != 1 {
+			t.Errorf("parallel Broadcast handed the message to %d subscribers, want 1: the idle one", n)
+		}
+		if got, want := timeouts.messages(), []int{1, 1}; !slices.Equal(got, want) {
+			t.Errorf("error handler got timeouts for messages %v by the time Broadcast returned, want %v", got, want)
+		}
+
+		unsubscribeAll(t, b, firstID, secondID, readerID)
+		first.release()
+		second.release()
+		synctest.Wait()
+		for i, r := range []*recorder[int]{first, second} {
+			if got, want := r.messages(), []int{0}; !slices.Equal(got, want) {
+				t.Errorf("stuck subscriber %d received %v, want %v", i, got, want)
+			}
+		}
+		if got, want := reader.messages(), []int{0, 1}; !slices.Equal(got, want) {
+			t.Errorf("reader received %v, want %v", got, want)
+		}
+	})
+}
+
+// Once ctx is done, a parallel Broadcast gives up on a stuck subscriber, but every idle one has already taken the
+// message, since it got to them all at once. A sync Broadcast that gets to an idle subscriber after the stuck one may
+// give up on it too.
+func TestMessageWithParallel_ContextDone(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := broadcastor.NewBroadcastor[int]()
+		stuck := &recorder[int]{hold: make(chan struct{})}
+		errs := &recorder[error]{}
+		stuckID := subscribe(t, b, stuck.handle, subscriber.WithErrorHandler[int](func(_ context.Context, err error) {
+			errs.record(err)
+		}))
+		reader, readerID := record(t, b)
+		b.Broadcast(t.Context(), 0) // stuck is now processing 0 and not reading
+
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		defer cancel()
+		start := time.Now()
+		n := b.Broadcast(ctx, 1, message.WithParallel[int]())
+		if elapsed := time.Since(start); elapsed != time.Second {
+			t.Errorf("parallel Broadcast returned after %v, want it to give up at the %v ctx deadline", elapsed, time.Second)
+		}
+		if n != 1 {
+			t.Errorf("parallel Broadcast handed the message to %d subscribers, want 1: the idle one", n)
+		}
+		got := errs.messages()
+		var timeout *subscriber.TimeoutError[int]
+		if len(got) != 1 || !errors.As(got[0], &timeout) || timeout.SubscriberID != stuckID || timeout.Message != 1 ||
+			!errors.Is(timeout, context.DeadlineExceeded) {
+			t.Errorf("error handler got %v by the time Broadcast returned, want a *TimeoutError for subscriber %s and message 1 wrapping %v",
+				got, stuckID, context.DeadlineExceeded)
+		}
+
+		unsubscribeAll(t, b, stuckID, readerID)
+		stuck.release()
+		synctest.Wait()
+		if got, want := stuck.messages(), []int{0}; !slices.Equal(got, want) {
+			t.Errorf("stuck subscriber received %v, want %v", got, want)
+		}
+		if got, want := reader.messages(), []int{0, 1}; !slices.Equal(got, want) {
+			t.Errorf("reader received %v, want %v", got, want)
+		}
+	})
+}
+
+// Successive parallel Broadcasts from one goroutine reach every subscriber in order, however slow it is, since each
+// returns only once every subscriber has taken its message.
+func TestMessageWithParallel_Order(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		const messages = 50
+		b := broadcastor.NewBroadcastor[int]()
+		delays := []time.Duration{time.Millisecond, 3 * time.Millisecond}
+		ids := make([]uuid.UUID, 0, len(delays))
+		recorders := make([]*recorder[int], 0, len(delays))
+		for _, delay := range delays {
+			r := &recorder[int]{}
+			ids = append(ids, subscribe(t, b, func(ctx context.Context, id uuid.UUID, msg int) error {
+				time.Sleep(delay)
+
+				return r.handle(ctx, id, msg)
+			}))
+			recorders = append(recorders, r)
+		}
+
+		want := make([]int, 0, messages)
+		for msg := range messages {
+			if n := b.Broadcast(t.Context(), msg, message.WithParallel[int]()); n != len(delays) {
+				t.Errorf("parallel Broadcast of %d handed it to %d subscribers, want %d", msg, n, len(delays))
+			}
+			want = append(want, msg)
+		}
+		unsubscribeAll(t, b, ids...)
+		time.Sleep(slices.Max(delays)) // for each subscriber to be done with the last message, which it may have just taken
+		synctest.Wait()
+
+		for i, r := range recorders {
+			if got := r.messages(); !slices.Equal(got, want) {
+				t.Errorf("subscriber %d received %v, want %v", i, got, want)
+			}
 		}
 	})
 }

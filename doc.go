@@ -37,6 +37,9 @@
 //     up Broadcast and every subscriber after it. A subscriber gets the messages of successive Broadcasts from one
 //     goroutine in order.
 //   - Buffered (subscriber.WithBuffer): as above, but Broadcast only waits for the subscriber once its buffer is full.
+//   - Parallel (message.WithParallel): Broadcast sends the message to every subscriber at once, each from its own
+//     goroutine, and returns once each has taken it or missed it. A slow subscriber then holds up Broadcast but nobody
+//     else, and a subscriber still gets the messages of successive Broadcasts from one goroutine in order.
 //   - Async (message.WithAsync): Broadcast sends the message to each subscriber from its own goroutine, and returns
 //     right away. A slow subscriber then holds up nobody else, but may get the messages of successive Broadcasts out of
 //     order.
@@ -46,7 +49,7 @@
 // While waiting, Broadcast gives up on a subscriber once the Broadcast ctx is done, or once the message's timeout
 // (message.WithTimeout, or subscriber.WithTimeout for every message sent to a subscriber) runs out. The timeout is
 // counted separately for each subscriber, from when Broadcast gets to it, while a ctx deadline is used up across all
-// of them.
+// of them. A parallel Broadcast gets to every subscriber at once, so both apply to all of them from the same moment.
 //
 // Broadcast returns how many subscribers it handed the message to.
 //

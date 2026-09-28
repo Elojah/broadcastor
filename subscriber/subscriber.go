@@ -90,26 +90,36 @@ func (s *Subscriber[T]) AutoUnsubscribe(ctx context.Context, unsubscribe func())
 }
 
 // Deliver hands value to the subscriber, as set up by its default message options and then options, and reports
-// whether it took it, or whether a send was started for an async message. Once ctx is done, the message's timeout runs
-// out, or right away for a non-blocking message the subscriber cannot take, it gives up, and the subscriber's error
-// handlers are given a *TimeoutError or a *DroppedError, with ctx. If the subscriber was unsubscribed and its channel
-// closed since the caller picked it up, they are given a *ClosedError instead.
-func (s *Subscriber[T]) Deliver(ctx context.Context, value T, options ...message.Option[T]) bool {
+// whether it took it, or whether a send was started for an async message. A parallel message is sent from a goroutine
+// of its own, and Deliver returns right away with a channel that yields whether the subscriber took it once the send is
+// done, and nil otherwise. Once ctx is done, the message's timeout runs out, or right away for a non-blocking message
+// the subscriber cannot take, it gives up, and the subscriber's error handlers are given a *TimeoutError or a
+// *DroppedError, with ctx. If the subscriber was unsubscribed and its channel closed since the caller picked it up,
+// they are given a *ClosedError instead.
+func (s *Subscriber[T]) Deliver(ctx context.Context, value T, options ...message.Option[T]) (bool, <-chan bool) {
 	m := message.New(value, s.config.defaults, options...)
 
 	if !s.acquire() {
 		s.report(ctx, m, &ClosedError[T]{SubscriberID: s.id, Message: value})
 
-		return false
+		return false, nil
 	}
 
 	if m.Config.Delivery == message.DeliveryAsync {
 		go s.send(ctx, m)
 
-		return true
+		return true, nil
 	}
 
-	return s.send(ctx, m)
+	if m.Config.Delivery == message.DeliveryParallel {
+		// Buffered, so that the goroutine ends without waiting for the caller to read it.
+		taken := make(chan bool, 1)
+		go func() { taken <- s.send(ctx, m) }()
+
+		return false, taken
+	}
+
+	return s.send(ctx, m), nil
 }
 
 // Unsubscribe drops the subscription's reference, and first makes the subscriber discard if its unsubscribe defaults,
