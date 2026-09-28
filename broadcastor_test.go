@@ -1137,7 +1137,7 @@ func TestErrors_Is(t *testing.T) {
 	id := uuid.New()
 	targets := []error{
 		broadcastor.ErrSubscriberNotFound, subscriber.ErrClosed, subscriber.ErrTimeout,
-		subscriber.ErrDropped, subscriber.ErrPanic, context.DeadlineExceeded, handleError(1),
+		subscriber.ErrDropped, subscriber.ErrPanic, subscriber.ErrStore, context.DeadlineExceeded, handleError(1),
 	}
 	for _, tc := range []struct {
 		err     error
@@ -1156,6 +1156,13 @@ func TestErrors_Is(t *testing.T) {
 		},
 		{&subscriber.PanicError[int]{SubscriberID: id, Message: 1, Value: "not an error"}, []error{subscriber.ErrPanic}},
 		{&subscriber.HandleError[int]{SubscriberID: id, Message: 1, Err: handleError(1)}, []error{handleError(1)}},
+		{
+			&subscriber.StoreError[int]{
+				SubscriberID: id, Message: 1, Err: handleError(1),
+				Cause: &subscriber.DroppedError[int]{SubscriberID: id, Message: 1},
+			},
+			[]error{subscriber.ErrStore, handleError(1), subscriber.ErrDropped},
+		},
 	} {
 		for _, target := range targets {
 			if got, want := errors.Is(tc.err, target), slices.Contains(tc.matches, target); got != want {

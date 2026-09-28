@@ -28,7 +28,8 @@
 //
 // # Delivery
 //
-// Delivery is at most once: a subscriber gets a message once or misses it, and a missed message is never sent again.
+// Delivery is at most once: a subscriber gets a message once or misses it, and a missed message is never sent again,
+// although subscriber.WithStore keeps it so that it can be handled later (see Storing lost messages below).
 // How Broadcast hands a message over depends on the message options, which apply to every subscriber, and on each
 // subscriber's defaults (subscriber.WithDefaultMessageOptions):
 //
@@ -133,6 +134,8 @@
 //     message over.
 //   - *subscriber.ClosedError when a SubscribeSeq loop ended before yielding a message its subscriber took, or when a
 //     subscriber unsubscribed with subscriber.WithUnsubscribeDiscard took a message.
+//   - *subscriber.StoreError instead of any of the above when the subscriber's store failed to store the message (see
+//     below). It still matches the error it replaces with errors.Is and errors.As.
 //
 // Both handlers get every error with the ctx the message is handled with: the one message.WithContext gave it, or else
 // the subscription's, never the one given to Broadcast. Unless the message has its own, that ctx is done only once the
@@ -140,4 +143,22 @@
 //
 // Each error type the library makes matches a sentinel (subscriber.ErrTimeout, subscriber.ErrDropped, and so on) with
 // errors.Is, which does not need to know T.
+//
+// # Storing lost messages
+//
+// subscriber.WithStore gives a subscriber.Store every message the subscriber loses, as a subscriber.Record: the
+// subscriber's ID, the message, and the error about it, whatever it is among the above. So every message a Broadcast
+// picks the subscriber up for is either handled or stored, once, and the store can be read later to handle the stored
+// ones again. With subscriber.WithUnsubscribeDiscard as the subscriber's default, Close then stores whatever the
+// subscriber had not handled yet:
+//
+//	id, err := b.Subscribe(ctx, handle,
+//		subscriber.WithStore[string](store),
+//		subscriber.WithDefaultUnsubscribeOptions[string](subscriber.WithUnsubscribeDiscard()),
+//	)
+//
+// The store's Put is called right before the error handlers, from wherever they are, including from Broadcast for the
+// messages it could not hand over. So a slow Put holds things up like a slow error handler, and it may be called from
+// several goroutines at once. Its ctx has the values of the ctx the message is handled with, but is never done, since
+// that ctx being done is often why the message was lost.
 package broadcastor

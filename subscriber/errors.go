@@ -17,6 +17,8 @@ var (
 	ErrDropped = errors.New("message dropped")
 	// ErrPanic is matched by *PanicError.
 	ErrPanic = errors.New("panic in handle")
+	// ErrStore is matched by *StoreError.
+	ErrStore = errors.New("store failed")
 )
 
 // HandleError is what middleware.WrapError makes of an error returned by the handler it wraps: the subscriber and the
@@ -110,4 +112,26 @@ func (e *ClosedError[T]) Error() string {
 
 func (e *ClosedError[T]) Is(target error) bool {
 	return target == ErrClosed
+}
+
+// StoreError is what an error handler is given about a message the subscriber lost when its Store (WithStore) failed to
+// store it: Err is the error Put returned, and Cause the error about the message that the handlers would otherwise have
+// been given. It matches ErrStore, and unwraps to both Err and Cause, so errors.Is and errors.As still find Cause.
+type StoreError[T any] struct {
+	SubscriberID uuid.UUID
+	Message      T
+	Err          error
+	Cause        error
+}
+
+func (e *StoreError[T]) Error() string {
+	return "subscriber " + e.SubscriberID.String() + ": storing a lost message: " + e.Err.Error() + " (lost: " + e.Cause.Error() + ")"
+}
+
+func (e *StoreError[T]) Unwrap() []error {
+	return []error{e.Err, e.Cause}
+}
+
+func (e *StoreError[T]) Is(target error) bool {
+	return target == ErrStore
 }

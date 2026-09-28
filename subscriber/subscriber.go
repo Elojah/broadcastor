@@ -55,6 +55,9 @@ type config[T any] struct {
 	// errorHandler is called with every error handle returns, or nil to discard them.
 	errorHandler func(ctx context.Context, err error)
 
+	// store is given every message the subscriber loses, or nil for none.
+	store Store[T]
+
 	// middlewares wrap handle, the first one outermost.
 	middlewares []Middleware[T]
 
@@ -253,9 +256,16 @@ func (s *Subscriber[T]) context(m message.Message[T]) context.Context {
 	return s.ctx
 }
 
-// report passes err to the subscriber's error handler, then to m's, skipping whichever is not set, both with m's ctx.
+// report gives m to the subscriber's store, then passes err to the subscriber's error handler, then to m's, skipping
+// whichever is not set, both with m's ctx. If the store fails, they are given a *StoreError wrapping err instead.
 func (s *Subscriber[T]) report(m message.Message[T], err error) {
 	ctx := s.context(m)
+	if s.config.store != nil {
+		// Never done, since ctx being done is often why m was lost.
+		if putErr := s.config.store.Put(context.WithoutCancel(ctx), Record[T]{SubscriberID: s.id, Message: m.Value, Err: err}); putErr != nil {
+			err = &StoreError[T]{SubscriberID: s.id, Message: m.Value, Err: putErr, Cause: err}
+		}
+	}
 	if s.config.errorHandler != nil {
 		s.config.errorHandler(ctx, err)
 	}

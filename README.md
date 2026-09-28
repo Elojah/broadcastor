@@ -79,11 +79,15 @@ for msg := range seq {
     but `Broadcast` still waits for it.
 14. [`14-context`](examples/14-context/main.go): `message.WithContext`, carrying a request's values to `handle` and the
     error handlers, and an async `Broadcast` that outlives the request.
+15. [`15-store`](examples/15-store/main.go): `subscriber.WithStore`, keeping the messages `handle` fails on and those
+    `Close` discards.
 
 ## Delivery
 
-Delivery is at most once: a subscriber gets a message once, or misses it and never gets it later. Each `Broadcast` picks
-a mode with a message option, and a subscriber can set its own default with `subscriber.WithDefaultMessageOptions`.
+Delivery is at most once: a subscriber gets a message once, or misses it and never gets it later, although
+`subscriber.WithStore` keeps it so that it can be handled again (see [Storing lost messages](#storing-lost-messages)).
+Each `Broadcast` picks a mode with a message option, and a subscriber can set its own default with
+`subscriber.WithDefaultMessageOptions`.
 
 | Mode | Ordering per subscriber | What `Broadcast` waits for | When a subscriber misses a message |
 | --- | --- | --- | --- |
@@ -171,14 +175,49 @@ Errors go to error handlers, and are discarded when there are none:
 | `*subscriber.ClosedError` | The subscriber was unsubscribed while `Broadcast` was running. |
 | `*subscriber.ClosedError` | A `SubscribeSeq` loop ended before yielding a message its subscriber took. |
 | `*subscriber.ClosedError` | A subscriber unsubscribed with `subscriber.WithUnsubscribeDiscard` took a message. |
+| `*subscriber.StoreError` | Instead of any of the above, the subscriber's store failed to store the message. It still matches the error it replaces with `errors.Is` and `errors.As`. |
 
 Both handlers get every error with the ctx the message is handled with: its own from `message.WithContext`, or else the
 subscription's, never the `Broadcast` one (see [Contexts](#contexts)). Unless the message has its own, that ctx is done
 only once the subscription is over, even when the error is `Broadcast` giving up because its own ctx is done.
 
 Each error type matches a sentinel with `errors.Is` (`subscriber.ErrTimeout`, `subscriber.ErrDropped`,
-`subscriber.ErrPanic`, `subscriber.ErrClosed`, and `ErrSubscriberNotFound` for `Unsubscribe`), without needing to know
-the message type.
+`subscriber.ErrPanic`, `subscriber.ErrClosed`, `subscriber.ErrStore`, and `ErrSubscriberNotFound` for `Unsubscribe`),
+without needing to know the message type.
+
+## Storing lost messages
+
+`subscriber.WithStore` gives a `subscriber.Store` every message the subscriber loses, as a `subscriber.Record`: the
+subscriber's ID, the message, and the error about it, whatever it is in the table above. So every message a `Broadcast`
+picks the subscriber up for is either handled or stored, once, and the store can be read later to handle the stored
+ones again. Make `subscriber.WithUnsubscribeDiscard` the subscriber's default, and `Close` stores whatever it had not
+handled yet:
+
+```go
+type deadLetters struct {
+	mu      sync.Mutex
+	records []subscriber.Record[string]
+}
+
+func (d *deadLetters) Put(_ context.Context, r subscriber.Record[string]) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.records = append(d.records, r)
+
+	return nil
+}
+
+id, err := b.Subscribe(ctx, handle,
+	subscriber.WithStore[string](&deadLetters{}),
+	subscriber.WithDefaultUnsubscribeOptions[string](subscriber.WithUnsubscribeDiscard()),
+)
+```
+
+`Put` is called right before the error handlers, from wherever they are, including from `Broadcast` for the messages it
+could not hand over. So a slow `Put` holds things up like a slow error handler (and makes a non-blocking `Broadcast`
+wait), and it may be called from several goroutines at once. Its ctx has the values of the ctx the message is handled
+with, but is never done, since that ctx being done is often why the message was lost: `Put` must bound itself. When it
+fails, the error handlers get a `*subscriber.StoreError` instead, and the message is not given to the store again.
 
 ## Unsubscribing
 

@@ -39,6 +39,24 @@ func WithErrorHandler[T any](handler func(ctx context.Context, err error)) Optio
 	}
 }
 
+// WithStore gives store every message the subscriber loses, as a Record, right before its error handlers are given
+// why: every message handle or its middlewares fail on, every message Broadcast could not hand it (*TimeoutError,
+// *DroppedError, *ClosedError), and every message it took but discarded, because a SubscribeSeq loop ended or because
+// it was unsubscribed with WithUnsubscribeDiscard. So every message a Broadcast picks the subscriber up for is either
+// handled or stored, once, and store can be read later to handle them again. With WithUnsubscribeDiscard as a default
+// (WithDefaultUnsubscribeOptions), Close stores whatever the subscriber had not handled yet.
+//
+// store.Put is called from wherever the error handlers are, including from Broadcast for the messages it could not
+// hand over, so a slow Put holds Broadcast up like a slow error handler, and makes message.WithNonBlocking wait. It may
+// be called from several goroutines at once. When it fails, the error handlers are given a *StoreError, which still
+// matches the error about the message with errors.Is and errors.As, and the message is not given to store again. A nil
+// store means none.
+func WithStore[T any](store Store[T]) Option[T] {
+	return func(config *config[T]) {
+		config.store = store
+	}
+}
+
 // WithMiddleware wraps handle in middlewares, the first one outermost: it is called with each message, and calls the
 // next one or not. Several of these options add up, in order. Middlewares run in the subscriber's goroutine, with the
 // ctx handle is given, the message's own (message.WithContext) or else the one passed to Subscribe, so a slow one holds
