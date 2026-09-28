@@ -142,11 +142,6 @@ func (s *Subscriber[T]) Unsubscribe(options ...UnsubscribeOption) {
 	s.release()
 }
 
-/*
-	Subscribe with callback methods
-	#MARK: Callback methods
-*/
-
 // Consume calls handle, wrapped in the subscriber's middlewares, with ctx and the subscriber's ID for every message the
 // subscriber takes, and reports the errors it returns, until the channel is closed. It is what the goroutine Subscribe
 // starts runs.
@@ -164,11 +159,6 @@ func (s *Subscriber[T]) Consume(ctx context.Context, handle Handler[T]) {
 		}
 	}
 }
-
-/*
-	Subscribe with iterator methods
-	#MARK: Iterator methods
-*/
 
 // Seq returns the iterator SubscribeSeq returns, over the messages the subscriber takes. Once the loop ends, it calls
 // unsubscribe, and reports every message the subscriber took but did not yield, from a goroutine of its own. It can be

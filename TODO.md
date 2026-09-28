@@ -131,13 +131,13 @@ when nobody reads it.
 
 ### Performance
 
-- `Broadcast` walks a `sync.Map` through a closure on every call. For workloads that broadcast often but subscribe
+- [-] `Broadcast` walks a `sync.Map` through a closure on every call. For workloads that broadcast often but subscribe
   rarely, a copy-on-write `atomic.Pointer[[]*subscriber.Subscriber[T]]` avoids both the map walk and the allocation.
-- `Broadcast` allocates once per subscriber (24 B), even in sync mode. The per-subscriber `message.Config` is moved to
+- [-] `Broadcast` allocates once per subscriber (24 B), even in sync mode. The per-subscriber `message.Config` is moved to
   the heap because `option(&config)` in `message.New` passes its address to an unknown func (`go build -gcflags=-m`). Applying the
   options once per `Broadcast`, recording which fields they set, and then merging those over each subscriber's
   defaults by value could avoid it.
-- Async starts one goroutine per subscriber per `Broadcast`. The per-subscriber sender from "Ordered async" would cap
+- [ ] Async starts one goroutine per subscriber per `Broadcast`. The per-subscriber sender from "Ordered async" would cap
   that.
 - Replace UUIDs with an atomic counter. That removes the only dependency and the only error `Subscribe` can return, but
   changes `handle`'s signature too, since it takes the ID. The distributed direction below would need IDs that are
