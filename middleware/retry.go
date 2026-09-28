@@ -43,8 +43,9 @@ type RetryPolicy struct {
 //
 // Retry waits in the subscriber's goroutine, so each wait holds the subscriber up like a slow handle does, and with it
 // any Broadcast waiting for the subscriber to take a message. That is fine for a few quick attempts, not for retrying
-// minutes later. Unsubscribe does not end a wait, but the ctx passed to Subscribe being done does, which also
-// unsubscribes the subscriber, unless it has subscriber.WithDetachedContext.
+// minutes later. Unsubscribe does not end a wait, but ctx being done does: the ctx passed to Subscribe, whose being done
+// also unsubscribes the subscriber, unless it has subscriber.WithDetachedContext, or the message's own, when it was
+// sent with message.WithContext.
 //
 // A panic is not an error, so Retry does not retry it. Given after Recover, as recommended, it lets the panic through
 // to Recover right away. Given before Recover, it retries the *subscriber.PanicError like any other error.

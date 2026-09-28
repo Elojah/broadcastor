@@ -58,9 +58,9 @@
 // Unsubscribe never waits for anything, so handle can unsubscribe its own subscriber. A subscriber may still get
 // messages after Unsubscribe returns: whatever is in its buffer, and the message of a Broadcast that was already
 // sending to it. Its goroutine ends once it has processed them. The ctx given to Subscribe, which is the one handle
-// gets, is the subscription's: the subscriber is unsubscribed as soon as that ctx is done, even while handle is
-// running. subscriber.WithDetachedContext keeps it subscribed instead, and hands handle a ctx with the same values
-// that is never done.
+// gets unless a message has its own, is the subscription's: the subscriber is unsubscribed as soon as that ctx is done,
+// even while handle is running. subscriber.WithDetachedContext keeps it subscribed instead, and hands handle a ctx with
+// the same values that is never done.
 //
 // A SubscribeSeq loop ends once its subscriber is unsubscribed and has yielded those messages. The loop unsubscribes
 // the subscriber itself when it ends another way: when it breaks, or once the ctx given to SubscribeSeq is done. The
@@ -74,6 +74,26 @@
 // takes from then on are reported as *subscriber.ClosedError instead of being passed to handle, and a SubscribeSeq loop
 // ends right away. Pass it to Unsubscribe, or make it the subscriber's default with
 // subscriber.WithDefaultUnsubscribeOptions, which is the only way Close applies it.
+//
+// # Contexts
+//
+// Each ctx has one job:
+//
+//   - The ctx given to Subscribe or SubscribeSeq is the subscription's lifetime, as above, and what every message is
+//     handled with by default: handle and its middlewares get it, and so do the error handlers with every error about
+//     the subscriber's messages.
+//   - The ctx given to Broadcast only bounds how long Broadcast waits for each subscriber to take the message. Its
+//     values reach neither handle nor the error handlers.
+//   - The ctx given to message.WithContext replaces the subscription's for one message: handle, its middlewares and the
+//     error handlers get it as is, with its values and its cancellation. Pass context.WithoutCancel(ctx) to keep only
+//     its values, since a buffered or async subscriber may take the message once ctx is done.
+//
+// An async send keeps using the Broadcast ctx after Broadcast has returned, so a ctx that is done once the caller
+// returns, such as a request's, makes every subscriber that has not taken the message by then miss it. To let the
+// sends outlive the caller, detach them and bound them with a timeout instead:
+//
+//	detached := context.WithoutCancel(ctx)
+//	b.Broadcast(detached, msg, message.WithAsync[T](), message.WithTimeout[T](time.Second), message.WithContext[T](detached))
 //
 // # Middleware
 //
@@ -94,7 +114,7 @@
 //		logged,
 //	))
 //
-// Middlewares run in the subscriber's goroutine, with the ctx given to Subscribe, and have no effect on SubscribeSeq.
+// Middlewares run in the subscriber's goroutine, with the ctx handle gets, and have no effect on SubscribeSeq.
 // Package middleware holds ready-made ones: Recover and WrapError, which go first, in that order, and Retry, which
 // calls handle again after an error, with backoff, and goes right after them.
 //
@@ -108,12 +128,15 @@
 //   - The error handle returns, as is, or the one its outermost middleware returns: a *subscriber.HandleError, which
 //     tells the subscriber and the message, with middleware.WrapError, and a *subscriber.PanicError when handle or a
 //     middleware panics, with middleware.Recover (without it, the panic crashes the program). The handlers are called
-//     from the subscriber's goroutine, right after handle, with the ctx given to Subscribe.
+//     from the subscriber's goroutine, right after handle.
 //   - *subscriber.TimeoutError, *subscriber.DroppedError or *subscriber.ClosedError when Broadcast could not hand the
-//     message over. The handlers are called with the ctx given to Broadcast.
+//     message over.
 //   - *subscriber.ClosedError when a SubscribeSeq loop ended before yielding a message its subscriber took, or when a
-//     subscriber unsubscribed with subscriber.WithUnsubscribeDiscard took a message. The handlers are called with the
-//     ctx given to Subscribe or SubscribeSeq.
+//     subscriber unsubscribed with subscriber.WithUnsubscribeDiscard took a message.
+//
+// Both handlers get every error with the ctx the message is handled with: the one message.WithContext gave it, or else
+// the subscription's, never the one given to Broadcast. Unless the message has its own, that ctx is done only once the
+// subscription is over, even when the error is Broadcast giving up because its own ctx is done.
 //
 // Each error type the library makes matches a sentinel (subscriber.ErrTimeout, subscriber.ErrDropped, and so on) with
 // errors.Is, which does not need to know T.

@@ -34,6 +34,7 @@ if err := b.Unsubscribe(ctx, id); err != nil {
 
 `handle` is given the subscriber's ID, so it can unsubscribe itself with `b.Unsubscribe(ctx, id)`. The ctx passed to
 `Subscribe` is the subscription's: once it is done, the subscriber is unsubscribed (see [Unsubscribing](#unsubscribing)).
+[Contexts](#contexts) tells which ctx does what.
 
 Options live next to what they configure: [`subscriber`](subscriber) holds those passed to `Subscribe`,
 `SubscribeSeq` and `Unsubscribe`, along with `Handler`, `Middleware` and the errors about a subscriber's messages, and
@@ -76,6 +77,8 @@ for msg := range seq {
     logging middleware of its own and `middleware.WrapError`.
 13. [`13-parallel`](examples/13-parallel/main.go): `message.WithParallel`, where a slow subscriber holds up nobody else
     but `Broadcast` still waits for it.
+14. [`14-context`](examples/14-context/main.go): `message.WithContext`, carrying a request's values to `handle` and the
+    error handlers, and an async `Broadcast` that outlives the request.
 
 ## Delivery
 
@@ -87,7 +90,7 @@ a mode with a message option, and a subscriber can set its own default with `sub
 | **Sync** (default, `message.WithSync`) | In `Broadcast` order, for `Broadcast`s from one goroutine. | Each subscriber in turn, until it takes the message. A subscriber takes its next message only once `handle` returns, so a slow subscriber holds up `Broadcast` and every subscriber after it. | The `Broadcast` ctx is done, or the message's timeout runs out, before it takes the message (`*subscriber.TimeoutError`). |
 | **Buffered** (`subscriber.WithBuffer(n)`) | Same as sync. | Nothing while the subscriber's buffer has room, then the same as sync. | Same as sync, once the buffer is full. |
 | **Parallel** (`message.WithParallel`) | Same as sync. | Every subscriber at once, each from a goroutine of its own, until each takes the message or misses it. A slow subscriber holds up `Broadcast`, but nobody else. | Same as sync, reported before `Broadcast` returns. |
-| **Async** (`message.WithAsync`) | None: successive `Broadcast`s may arrive out of order. | Nothing. Each subscriber is sent the message from a goroutine of its own, so a slow subscriber holds up nobody else. | Same as sync, but reported after `Broadcast` has returned. |
+| **Async** (`message.WithAsync`) | None: successive `Broadcast`s may arrive out of order. | Nothing. Each subscriber is sent the message from a goroutine of its own, so a slow subscriber holds up nobody else. | Same as sync, but reported after `Broadcast` has returned: the `Broadcast` ctx still counts then (see [Contexts](#contexts)). |
 | **Non-blocking** (`message.WithNonBlocking`) | Same as sync, for the messages it takes. | Nothing. | It is busy in `handle`, or its buffer is full (`*subscriber.DroppedError`). |
 
 In every mode, a subscriber that is unsubscribed while `Broadcast` is running may miss the message
@@ -120,8 +123,8 @@ id, err := b.Subscribe(ctx, handle, subscriber.WithMiddleware(
 ))
 ```
 
-Middlewares run in the subscriber's goroutine with the ctx passed to `Subscribe`, so a slow one holds the subscriber up
-like a slow `handle`. Whatever error the outermost one returns reaches the error handlers as is. Middlewares have no
+Middlewares run in the subscriber's goroutine with the ctx `handle` gets, so a slow one holds the subscriber up like a
+slow `handle`. Whatever error the outermost one returns reaches the error handlers as is. Middlewares have no
 effect on `SubscribeSeq`, whose loop body runs in the caller's goroutine.
 
 [`middleware`](middleware) holds ready-made ones:
@@ -134,8 +137,8 @@ effect on `SubscribeSeq`, whose loop body runs in the caller's goroutine.
   last call as is. The policy sets `Attempts` (the first call included), `Delay` before the first retry, a `Multiplier`
   for each wait after it, capped at `MaxDelay`, a `Jitter` between 0 and 1 that shortens each wait at random, and
   `IsRetryable` to skip the errors not worth retrying. It waits in the subscriber's goroutine, so the subscriber takes
-  no message meanwhile, and a `Broadcast` waiting for it waits too. A done `Subscribe` ctx ends the wait, and
-  unsubscribes the subscriber, `Unsubscribe` alone does not.
+  no message meanwhile, and a `Broadcast` waiting for it waits too. A done ctx ends the wait: the `Subscribe` ctx, which
+  also unsubscribes the subscriber, or the message's own from `message.WithContext`. `Unsubscribe` alone does not.
 
 ```go
 middleware.Retry[string](middleware.RetryPolicy{
@@ -158,16 +161,20 @@ Errors go to error handlers, and are discarded when there are none:
 - `message.WithErrorHandler` gets every error about its message, after the subscriber's handler. Every subscriber shares
   it, so it can be called concurrently, even after `Broadcast` has returned.
 
-| Error | When | ctx given to the handler |
-| --- | --- | --- |
-| The error `handle` returned, as is | `handle`, or the outermost middleware, returned an error. | `Subscribe`'s |
-| `*subscriber.HandleError` | Same, in a subscriber with `middleware.WrapError`. | `Subscribe`'s |
-| `*subscriber.PanicError` | `handle` or a middleware panicked, in a subscriber with `middleware.Recover`. Without it, the panic crashes the program. | `Subscribe`'s |
-| `*subscriber.TimeoutError` | `Broadcast` gave up waiting. | `Broadcast`'s |
-| `*subscriber.DroppedError` | A non-blocking `Broadcast` found the subscriber busy. | `Broadcast`'s |
-| `*subscriber.ClosedError` | The subscriber was unsubscribed while `Broadcast` was running. | `Broadcast`'s |
-| `*subscriber.ClosedError` | A `SubscribeSeq` loop ended before yielding a message its subscriber took. | `SubscribeSeq`'s |
-| `*subscriber.ClosedError` | A subscriber unsubscribed with `subscriber.WithUnsubscribeDiscard` took a message. | `Subscribe`'s or `SubscribeSeq`'s |
+| Error | When |
+| --- | --- |
+| The error `handle` returned, as is | `handle`, or the outermost middleware, returned an error. |
+| `*subscriber.HandleError` | Same, in a subscriber with `middleware.WrapError`. |
+| `*subscriber.PanicError` | `handle` or a middleware panicked, in a subscriber with `middleware.Recover`. Without it, the panic crashes the program. |
+| `*subscriber.TimeoutError` | `Broadcast` gave up waiting. |
+| `*subscriber.DroppedError` | A non-blocking `Broadcast` found the subscriber busy. |
+| `*subscriber.ClosedError` | The subscriber was unsubscribed while `Broadcast` was running. |
+| `*subscriber.ClosedError` | A `SubscribeSeq` loop ended before yielding a message its subscriber took. |
+| `*subscriber.ClosedError` | A subscriber unsubscribed with `subscriber.WithUnsubscribeDiscard` took a message. |
+
+Both handlers get every error with the ctx the message is handled with: its own from `message.WithContext`, or else the
+subscription's, never the `Broadcast` one (see [Contexts](#contexts)). Unless the message has its own, that ctx is done
+only once the subscription is over, even when the error is `Broadcast` giving up because its own ctx is done.
 
 Each error type matches a sentinel with `errors.Is` (`subscriber.ErrTimeout`, `subscriber.ErrDropped`,
 `subscriber.ErrPanic`, `subscriber.ErrClosed`, and `ErrSubscriberNotFound` for `Unsubscribe`), without needing to know
@@ -198,6 +205,32 @@ to `Unsubscribe`. Those messages are then reported as `*subscriber.ClosedError` 
 a `SubscribeSeq` loop ends right away. `subscriber.WithDefaultUnsubscribeOptions(subscriber.WithUnsubscribeDiscard())`
 makes it the subscriber's default, which is the only way `Close` applies it. `subscriber.WithUnsubscribeDeliver`
 overrides that default for one `Unsubscribe`.
+
+## Contexts
+
+Each ctx has one job:
+
+- The `Subscribe` or `SubscribeSeq` ctx is the subscription's lifetime, and what every message is handled with by
+  default: `handle` and its middlewares get it, and so do the error handlers with every error about the subscriber's
+  messages.
+- The `Broadcast` ctx only bounds how long `Broadcast` waits for each subscriber to take the message. Its values reach
+  neither `handle` nor the error handlers.
+- `message.WithContext(ctx)` replaces the subscription's ctx for one message: `handle`, its middlewares and the error
+  handlers get `ctx` as is, with its values (a trace or request ID) and its cancellation. Pass
+  `context.WithoutCancel(ctx)` to keep only its values, since a buffered or async subscriber may take the message once
+  `ctx` is done. The `Subscribe` ctx being done still unsubscribes the subscriber, but no longer reaches `handle` for
+  that message.
+
+An async send keeps using the `Broadcast` ctx after `Broadcast` has returned, and `Broadcast` has already counted it. So
+the usual `defer cancel()` of a request makes every subscriber that has not taken the message by the time the request
+returns miss it. To let the sends outlive the request, detach them and bound them with a timeout instead:
+
+```go
+detached := context.WithoutCancel(ctx)
+b.Broadcast(detached, msg, message.WithAsync[string](), message.WithTimeout[string](time.Second), message.WithContext[string](detached))
+```
+
+This applies to a subscriber whose default is `message.WithAsync` too, even when the `Broadcast` does not ask for it.
 
 ## Development
 

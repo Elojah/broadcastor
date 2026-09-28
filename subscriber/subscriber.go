@@ -22,6 +22,10 @@ type Subscriber[T any] struct {
 	ch     chan message.Message[T]
 	config config[T]
 
+	// ctx is the ctx the subscriber runs with, set by ContextLifetime: every message without a ctx of its own is handled
+	// and reported with it, and a Seq loop ends once it is done.
+	ctx context.Context //nolint:containedctx // the subscription's, which outlives every call
+
 	// discarding is set when the subscriber is unsubscribed with WithUnsubscribeDiscard, before ch is released: from then
 	// on, Consume and pull report every message they take instead of processing it.
 	discarding atomic.Bool
@@ -77,14 +81,18 @@ func (s *Subscriber[T]) ID() uuid.UUID {
 	return s.id
 }
 
-// ContextLifetime ties the subscription to ctx: it calls unsubscribe once ctx is done, and returns the ctx the
-// subscriber runs with, ctx itself. With WithDetachedContext, it calls nothing and returns context.WithoutCancel(ctx),
-// which is never done. Unsubscribe undoes it, so it must be called before the subscriber can be unsubscribed, and at
-// most once. When ctx is already done, unsubscribe is called right away, from a goroutine of its own.
+// ContextLifetime ties the subscription to ctx: it calls unsubscribe once ctx is done, and makes ctx itself the one the
+// subscriber runs with, which it returns. With WithDetachedContext, it calls nothing, and the subscriber runs with
+// context.WithoutCancel(ctx), which is never done. Unsubscribe undoes it, and Deliver, Consume and Seq need that ctx, so
+// it must be called before anything else, and once. When ctx is already done, unsubscribe is called right away, from a
+// goroutine of its own.
 func (s *Subscriber[T]) ContextLifetime(ctx context.Context, unsubscribe func()) context.Context {
 	if s.config.detached {
-		return context.WithoutCancel(ctx)
+		s.ctx = context.WithoutCancel(ctx)
+
+		return s.ctx
 	}
+	s.ctx = ctx
 	s.stopContextLifetime = context.AfterFunc(ctx, unsubscribe)
 
 	return ctx
@@ -95,13 +103,14 @@ func (s *Subscriber[T]) ContextLifetime(ctx context.Context, unsubscribe func())
 // of its own, and Deliver returns right away with a channel that yields whether the subscriber took it once the send is
 // done, and nil otherwise. Once ctx is done, the message's timeout runs out, or right away for a non-blocking message
 // the subscriber cannot take, it gives up, and the subscriber's error handlers are given a *TimeoutError or a
-// *DroppedError, with ctx. If the subscriber was unsubscribed and its channel closed since the caller picked it up,
-// they are given a *ClosedError instead.
+// *DroppedError. If the subscriber was unsubscribed and its channel closed since the caller picked it up, they are
+// given a *ClosedError instead. ctx only bounds the wait: the error handlers get the message's own ctx, or the
+// subscriber's.
 func (s *Subscriber[T]) Deliver(ctx context.Context, value T, options ...message.Option[T]) (bool, <-chan bool) {
 	m := message.New(value, s.config.defaults, options...)
 
 	if !s.acquire() {
-		s.report(ctx, m, &ClosedError[T]{SubscriberID: s.id, Message: value})
+		s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: value}) //nolint:contextcheck // reported with the message's ctx, not the one bounding the wait
 
 		return false, nil
 	}
@@ -143,28 +152,28 @@ func (s *Subscriber[T]) Unsubscribe(options ...UnsubscribeOption) {
 	s.release()
 }
 
-// Consume calls handle, wrapped in the subscriber's middlewares, with ctx and the subscriber's ID for every message the
-// subscriber takes, and reports the errors it returns, until the channel is closed. It is what the goroutine Subscribe
-// starts runs.
-func (s *Subscriber[T]) Consume(ctx context.Context, handle Handler[T]) {
+// Consume calls handle, wrapped in the subscriber's middlewares, with the message's ctx, or else the subscriber's, and
+// the subscriber's ID for every message the subscriber takes, and reports the errors it returns, until the channel is
+// closed. It is what the goroutine Subscribe starts runs.
+func (s *Subscriber[T]) Consume(handle Handler[T]) {
 	handle = chain(handle, s.config.middlewares...)
 	for m := range s.ch {
 		if s.discarding.Load() {
-			s.report(ctx, m, &ClosedError[T]{SubscriberID: s.id, Message: m.Value})
+			s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: m.Value})
 
 			continue
 		}
 		// Reported here rather than from a middleware, so that a panic in an error handler is not recovered.
-		if err := handle(ctx, s.id, m.Value); err != nil {
-			s.report(ctx, m, err)
+		if err := handle(s.context(m), s.id, m.Value); err != nil {
+			s.report(m, err)
 		}
 	}
 }
 
-// Seq returns the iterator SubscribeSeq returns, over the messages the subscriber takes. Once the loop ends, it calls
-// unsubscribe, and reports every message the subscriber took but did not yield, from a goroutine of its own. It can be
-// ranged over only once: any other range yields nothing.
-func (s *Subscriber[T]) Seq(ctx context.Context, unsubscribe func()) iter.Seq[T] {
+// Seq returns the iterator SubscribeSeq returns, over the messages the subscriber takes, which ends once the
+// subscriber's ctx is done. Once the loop ends, it calls unsubscribe, and reports every message the subscriber took but
+// did not yield, from a goroutine of its own. It can be ranged over only once: any other range yields nothing.
+func (s *Subscriber[T]) Seq(unsubscribe func()) iter.Seq[T] {
 	var ranged atomic.Bool
 
 	return func(yield func(T) bool) {
@@ -175,10 +184,10 @@ func (s *Subscriber[T]) Seq(ctx context.Context, unsubscribe func()) iter.Seq[T]
 			// Unless it already was, which is one way for the loop to end.
 			unsubscribe()
 			// Nothing reads ch any more, but a Broadcast may still be sending to it.
-			go s.discard(ctx)
+			go s.discard()
 		}()
 
-		s.pull(ctx, yield)
+		s.pull(yield)
 	}
 }
 
@@ -192,7 +201,7 @@ func (s *Subscriber[T]) send(ctx context.Context, m message.Message[T]) bool {
 		case s.ch <- m:
 			return true
 		default:
-			s.report(ctx, m, &DroppedError[T]{SubscriberID: s.id, Message: m.Value})
+			s.report(m, &DroppedError[T]{SubscriberID: s.id, Message: m.Value}) //nolint:contextcheck // reported with the message's ctx, not the one bounding the wait
 
 			return false
 		}
@@ -209,8 +218,7 @@ func (s *Subscriber[T]) send(ctx context.Context, m message.Message[T]) bool {
 	case s.ch <- m:
 		return true
 	case <-sendCtx.Done():
-		// ctx, not sendCtx, so that the error handler is not handed a ctx that the timeout alone has ended.
-		s.report(ctx, m, &TimeoutError[T]{SubscriberID: s.id, Message: m.Value, Err: sendCtx.Err()})
+		s.report(m, &TimeoutError[T]{SubscriberID: s.id, Message: m.Value, Err: sendCtx.Err()}) //nolint:contextcheck // reported with the message's ctx, not the one bounding the wait
 
 		return false
 	}
@@ -236,8 +244,18 @@ func (s *Subscriber[T]) release() {
 	}
 }
 
-// report passes err to the subscriber's error handler, then to m's, skipping whichever is not set.
-func (s *Subscriber[T]) report(ctx context.Context, m message.Message[T], err error) {
+// context returns the ctx m is handled and reported with: its own, or else the subscriber's.
+func (s *Subscriber[T]) context(m message.Message[T]) context.Context {
+	if m.Config.Context != nil {
+		return m.Config.Context
+	}
+
+	return s.ctx
+}
+
+// report passes err to the subscriber's error handler, then to m's, skipping whichever is not set, both with m's ctx.
+func (s *Subscriber[T]) report(m message.Message[T], err error) {
+	ctx := s.context(m)
 	if s.config.errorHandler != nil {
 		s.config.errorHandler(ctx, err)
 	}
@@ -246,25 +264,25 @@ func (s *Subscriber[T]) report(ctx context.Context, m message.Message[T], err er
 	}
 }
 
-// pull is Consume for Seq: it yields every message the subscriber takes, one at a time, until yield returns false, ctx
-// is done, ch is closed or the subscriber is discarding. A message it takes once the subscriber is discarding is
-// reported, and discard reports the rest.
-func (s *Subscriber[T]) pull(ctx context.Context, yield func(T) bool) {
-	for ctx.Err() == nil && !s.discarding.Load() {
+// pull is Consume for Seq: it yields every message the subscriber takes, one at a time, until yield returns false, the
+// subscriber's ctx is done, ch is closed or the subscriber is discarding. A message it takes once the subscriber is
+// discarding is reported, and discard reports the rest.
+func (s *Subscriber[T]) pull(yield func(T) bool) {
+	for s.ctx.Err() == nil && !s.discarding.Load() {
 		select {
 		case m, ok := <-s.ch:
 			if !ok {
 				return
 			}
 			if s.discarding.Load() {
-				s.report(ctx, m, &ClosedError[T]{SubscriberID: s.id, Message: m.Value})
+				s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: m.Value})
 
 				return
 			}
 			if !yield(m.Value) {
 				return
 			}
-		case <-ctx.Done():
+		case <-s.ctx.Done():
 			return
 		}
 	}
@@ -272,8 +290,8 @@ func (s *Subscriber[T]) pull(ctx context.Context, yield func(T) bool) {
 
 // discard reads ch until it is closed, once a Seq loop has ended and unsubscribed, so that no Broadcast still sending
 // to it waits for nothing. Every message it reads was taken but never yielded, and is reported as such.
-func (s *Subscriber[T]) discard(ctx context.Context) {
+func (s *Subscriber[T]) discard() {
 	for m := range s.ch {
-		s.report(ctx, m, &ClosedError[T]{SubscriberID: s.id, Message: m.Value})
+		s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: m.Value})
 	}
 }

@@ -2,13 +2,17 @@ package broadcastor_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/elojah/broadcastor"
+	"github.com/elojah/broadcastor/message"
 	"github.com/elojah/broadcastor/subscriber"
 )
 
@@ -281,6 +285,180 @@ func TestSubscriberWithDetachedContext_SubscribeSeq(t *testing.T) {
 			t.Errorf("loop got %v, want %v", got, want)
 		}
 	})
+}
+
+// A message sent with message.WithContext is handled with that ctx instead of the one passed to Subscribe, which the
+// other messages still are. A default set with subscriber.WithDefaultMessageOptions applies to every message, unless a
+// Broadcast passes its own, or nil for none.
+func TestMessageWithContext(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		type key struct{}
+		ctx := context.WithValue(subscribeCtx(t), key{}, "subscribe")
+		messageCtx := context.WithValue(t.Context(), key{}, "message")
+		defaultCtx := context.WithValue(t.Context(), key{}, "default")
+		b := broadcastor.NewBroadcastor[int]()
+		subscribeRecording := func(options ...subscriber.Option[int]) (*recorder[string], uuid.UUID) {
+			values := &recorder[string]{}
+			id, err := b.Subscribe(ctx, func(ctx context.Context, _ uuid.UUID, _ int) error {
+				v, _ := ctx.Value(key{}).(string)
+				values.record(v)
+
+				return nil
+			}, options...)
+			if err != nil {
+				t.Fatalf("Subscribe: %v", err)
+			}
+
+			return values, id
+		}
+		plain, plainID := subscribeRecording()
+		defaulted, defaultedID := subscribeRecording(
+			subscriber.WithDefaultMessageOptions(message.WithContext[int](defaultCtx)))
+
+		b.Broadcast(t.Context(), 1)
+		b.Broadcast(t.Context(), 2, message.WithContext[int](messageCtx))
+		b.Broadcast(t.Context(), 3, message.WithContext[int](nil)) //nolint:staticcheck // nil is how to override a default
+		unsubscribeAll(t, b, plainID, defaultedID)
+		synctest.Wait()
+
+		if got, want := plain.messages(), []string{"subscribe", "message", "subscribe"}; !slices.Equal(got, want) {
+			t.Errorf("handle got ctx values %v, want %v", got, want)
+		}
+		if got, want := defaulted.messages(), []string{"default", "message", "subscribe"}; !slices.Equal(got, want) {
+			t.Errorf("handle with a default message ctx got ctx values %v, want %v", got, want)
+		}
+	})
+}
+
+// A message's ctx reaches handle as is, so a message taken once its ctx is done is handled with a done ctx, unless it
+// was passed through context.WithoutCancel. The ctx passed to Subscribe being done still unsubscribes the subscriber,
+// but no longer reaches handle for a message with a ctx of its own.
+func TestMessageWithContext_Cancel(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(subscribeCtx(t))
+		b := broadcastor.NewBroadcastor[int]()
+		release := make(chan struct{})
+		errs := &recorder[error]{}
+		id, err := b.Subscribe(ctx, func(ctx context.Context, _ uuid.UUID, _ int) error {
+			<-release
+			errs.record(ctx.Err())
+
+			return nil
+		}, subscriber.WithBuffer[int](2))
+		if err != nil {
+			t.Fatalf("Subscribe: %v", err)
+		}
+
+		// handle holds on to 0, and 1 and 2 fill the buffer.
+		requestCtx, cancelRequest := context.WithCancel(t.Context())
+		b.Broadcast(t.Context(), 0)
+		b.Broadcast(t.Context(), 1, message.WithContext[int](requestCtx))
+		b.Broadcast(t.Context(), 2, message.WithContext[int](context.WithoutCancel(requestCtx)))
+		cancelRequest()
+		cancel()
+		synctest.Wait()
+		if err := b.Unsubscribe(t.Context(), id); !isNotFound(err) {
+			t.Errorf("Unsubscribe once ctx is done = %v, want a *SubscriberNotFoundError", err)
+		}
+		close(release)
+		synctest.Wait()
+
+		if got, want := errs.messages(), []error{context.Canceled, context.Canceled, nil}; !slices.Equal(got, want) {
+			t.Errorf("handle got ctx errors %v, want %v", got, want)
+		}
+	})
+}
+
+// Every error about a message sent with message.WithContext reaches both error handlers with that ctx, whatever the
+// error: the one handle returned, Broadcast giving up on the subscriber, or a message it took but discarded.
+func TestMessageWithContext_ErrorHandlers(t *testing.T) {
+	t.Parallel()
+
+	type key struct{}
+	for _, tt := range []struct {
+		name string
+		want error
+		// fail makes a subscriber fail on message 1, sent with options, which give it its ctx and error handler.
+		fail func(t *testing.T, b *broadcastor.Broadcastor[int], errorHandler subscriber.Option[int], options ...message.Option[int])
+	}{
+		{"handle", handleError(1), func(t *testing.T, b *broadcastor.Broadcastor[int], errorHandler subscriber.Option[int], options ...message.Option[int]) {
+			t.Helper()
+			id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
+				return handleError(msg)
+			}, errorHandler)
+			b.Broadcast(t.Context(), 1, options...)
+			unsubscribe(t, b, id)
+		}},
+		{"Timeout", subscriber.ErrTimeout, func(t *testing.T, b *broadcastor.Broadcastor[int], errorHandler subscriber.Option[int], options ...message.Option[int]) {
+			t.Helper()
+			stuck := &recorder[int]{hold: make(chan struct{})}
+			id := subscribe(t, b, stuck.handle, errorHandler)
+			b.Broadcast(t.Context(), 0) // stuck is now processing 0 and not reading
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			b.Broadcast(ctx, 1, options...)
+			unsubscribe(t, b, id)
+			stuck.release()
+		}},
+		{"Dropped", subscriber.ErrDropped, func(t *testing.T, b *broadcastor.Broadcastor[int], errorHandler subscriber.Option[int], options ...message.Option[int]) {
+			t.Helper()
+			stuck := &recorder[int]{hold: make(chan struct{})}
+			id := subscribe(t, b, stuck.handle, errorHandler,
+				subscriber.WithDefaultMessageOptions(message.WithNonBlocking[int]()))
+			b.Broadcast(t.Context(), 0, message.WithSync[int]()) // stuck is now processing 0 and not reading
+			b.Broadcast(t.Context(), 1, options...)
+			unsubscribe(t, b, id)
+			stuck.release()
+		}},
+		{"SubscribeSeq", subscriber.ErrClosed, func(t *testing.T, b *broadcastor.Broadcastor[int], errorHandler subscriber.Option[int], options ...message.Option[int]) {
+			t.Helper()
+			_, seq := subscribeSeq(t, b, subscriber.WithBuffer[int](2), errorHandler)
+			b.Broadcast(t.Context(), 0)
+			b.Broadcast(t.Context(), 1, options...)
+			for range seq {
+				break // after 0, leaving 1 unyielded
+			}
+		}},
+		{"WithUnsubscribeDiscard", subscriber.ErrClosed, func(t *testing.T, b *broadcastor.Broadcastor[int], errorHandler subscriber.Option[int], options ...message.Option[int]) {
+			t.Helper()
+			held := &recorder[int]{hold: make(chan struct{})}
+			id := subscribe(t, b, held.handle, subscriber.WithBuffer[int](1), errorHandler)
+			b.Broadcast(t.Context(), 0) // held holds on to 0, and 1 fills the buffer
+			b.Broadcast(t.Context(), 1, options...)
+			if err := b.Unsubscribe(t.Context(), id, subscriber.WithUnsubscribeDiscard()); err != nil {
+				t.Fatalf("Unsubscribe: %v", err)
+			}
+			held.release()
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			synctest.Test(t, func(t *testing.T) {
+				got := &recorder[string]{}
+				errorHandler := func(who string) func(context.Context, error) {
+					return func(ctx context.Context, err error) {
+						v, _ := ctx.Value(key{}).(string)
+						got.record(fmt.Sprintf("%s: %t, ctx %s, done %v", who, errors.Is(err, tt.want), v, ctx.Err()))
+					}
+				}
+				b := broadcastor.NewBroadcastor[int]()
+				tt.fail(t, b, subscriber.WithErrorHandler[int](errorHandler("subscriber")),
+					message.WithContext[int](context.WithValue(t.Context(), key{}, "message")),
+					message.WithErrorHandler[int](errorHandler("message")))
+				synctest.Wait()
+
+				want := []string{"subscriber: true, ctx message, done <nil>", "message: true, ctx message, done <nil>"}
+				if got := got.messages(); !slices.Equal(got, want) {
+					t.Errorf("error handlers got %q, want %q", got, want)
+				}
+			})
+		})
+	}
 }
 
 // neverDone is a ctx that is never done, of a type the context package does not know, so a ctx derived from it needs a

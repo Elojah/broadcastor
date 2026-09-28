@@ -40,6 +40,10 @@ type Config struct {
 
 	// ErrorHandler is called with every error about this message, on top of the subscriber's own, or nil for none.
 	ErrorHandler func(ctx context.Context, err error)
+
+	// Context is what the message is handled and its errors reported with, instead of the subscriber's ctx, or nil for
+	// the subscriber's.
+	Context context.Context //nolint:containedctx // it travels with the message, which outlives Broadcast
 }
 
 // New returns what a Broadcast sends to one subscriber: value, with config, that subscriber's defaults, and the

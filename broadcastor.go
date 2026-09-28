@@ -30,7 +30,8 @@ func NewBroadcastor[T any]() *Broadcastor[T] {
 // Subscribe adds a subscriber and returns its ID, for Unsubscribe. The subscriber gets its own goroutine, which calls
 // handle with ctx and that same ID for every message it is sent, one at a time and in the order it takes them, until it
 // is unsubscribed and has processed everything it took. handle can then unsubscribe its own subscriber with the ID it
-// is given.
+// is given. A message sent with message.WithContext is handled with its own ctx instead, and so are its errors
+// reported.
 //
 // ctx is the subscription's: once it is done, the subscriber is unsubscribed like an Unsubscribe with no options, from a
 // goroutine of its own, or right after it is added if ctx already is, even while handle is running. As after any
@@ -40,11 +41,11 @@ func NewBroadcastor[T any]() *Broadcastor[T] {
 //
 // It returns ErrClosed once Close has been called, and otherwise fails only to generate the ID.
 func (b *Broadcastor[T]) Subscribe(ctx context.Context, handle func(ctx context.Context, id uuid.UUID, msg T) error, options ...subscriber.Option[T]) (uuid.UUID, error) {
-	s, ctx, err := b.add(ctx, options)
+	s, err := b.add(ctx, options)
 	if err != nil {
 		return uuid.Nil, err
 	}
-	go s.Consume(ctx, handle)
+	go s.Consume(handle)
 
 	return s.ID(), nil
 }
@@ -67,19 +68,20 @@ func (b *Broadcastor[T]) Subscribe(ctx context.Context, handle func(ctx context.
 // the loop unsubscribes the subscriber. ctx being done unsubscribes it too, as with Subscribe, even before the loop has
 // started, so no Broadcast waits for it any more. Every message it took but did not yield, from its buffer or from a
 // Broadcast that was already sending to it, is reported to its error handlers as a *subscriber.ClosedError with ctx,
-// from a goroutine of its own. seq can be ranged over only once: any other range yields nothing.
+// or the message's own ctx (message.WithContext), from a goroutine of its own. seq can be ranged over only once: any
+// other range yields nothing.
 // subscriber.WithDetachedContext keeps the subscriber subscribed and the loop going once ctx is done.
 //
 // subscriber.WithMiddleware has no effect, since the loop body runs in the caller's goroutine. It returns ErrClosed
 // once Close has been called, and otherwise fails only to generate the ID.
 func (b *Broadcastor[T]) SubscribeSeq(ctx context.Context, options ...subscriber.Option[T]) (uuid.UUID, iter.Seq[T], error) {
-	s, ctx, err := b.add(ctx, options)
+	s, err := b.add(ctx, options)
 	if err != nil {
 		return uuid.Nil, nil, err
 	}
 	id := s.ID()
 
-	return id, s.Seq(ctx, func() { b.remove(id) }), nil
+	return id, s.Seq(func() { b.remove(id) }), nil
 }
 
 // Unsubscribe removes the subscriber with the given ID, or returns a *SubscriberNotFoundError if there is none. It
@@ -133,9 +135,14 @@ func (b *Broadcastor[T]) Close() error {
 // every later one once ctx is done. message.WithParallel, message.WithAsync and message.WithNonBlocking change how
 // Broadcast waits.
 //
-// Every subscriber that misses the message has its error handlers given the reason, with ctx: a
-// *subscriber.TimeoutError, a *subscriber.DroppedError, or a *subscriber.ClosedError when it was unsubscribed since
-// Broadcast picked it up.
+// Every subscriber that misses the message has its error handlers given the reason: a *subscriber.TimeoutError, a
+// *subscriber.DroppedError, or a *subscriber.ClosedError when it was unsubscribed since Broadcast picked it up. ctx only
+// bounds how long Broadcast waits: those errors, like those about handling the message, come with the ctx it is handled
+// with, the one message.WithContext gave it or else the subscriber's, and its values never reach handle.
+//
+// An async send, with message.WithAsync or a subscriber that defaults to it, keeps using ctx after Broadcast has
+// returned, so a ctx that is done once the caller returns makes every such subscriber that has not taken the message by
+// then miss it. message.WithAsync tells how to let those sends outlive the caller.
 func (b *Broadcastor[T]) Broadcast(ctx context.Context, msg T, options ...message.Option[T]) int {
 	var (
 		n int
@@ -168,18 +175,18 @@ func (b *Broadcastor[T]) Broadcast(ctx context.Context, msg T, options ...messag
 	return n
 }
 
-// add creates a subscriber with the given options and adds it to b, which then sends it every message, and returns it
-// with the ctx it runs with, or returns ErrClosed once b is closed. Nothing reads its channel yet. Unless the
-// subscriber has subscriber.WithDetachedContext, it removes the subscriber once ctx is done.
-func (b *Broadcastor[T]) add(ctx context.Context, options []subscriber.Option[T]) (*subscriber.Subscriber[T], context.Context, error) {
+// add creates a subscriber with the given options, running with ctx, and adds it to b, which then sends it every
+// message, and returns it, or returns ErrClosed once b is closed. Nothing reads its channel yet. Unless the subscriber
+// has subscriber.WithDetachedContext, it removes the subscriber once ctx is done.
+func (b *Broadcastor[T]) add(ctx context.Context, options []subscriber.Option[T]) (*subscriber.Subscriber[T], error) {
 	id, err := uuid.NewV7()
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	s := subscriber.New(id, options...)
 
 	if !b.gate.Enter() {
-		return nil, nil, ErrClosed
+		return nil, ErrClosed
 	}
 	defer b.gate.Leave()
 
@@ -192,7 +199,7 @@ func (b *Broadcastor[T]) add(ctx context.Context, options []subscriber.Option[T]
 		b.remove(id)
 	}
 
-	return s, ctx, nil
+	return s, nil
 }
 
 // remove removes the subscriber with the given ID from b and drops the subscription's reference, or reports false if

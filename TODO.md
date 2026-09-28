@@ -82,6 +82,13 @@ when nobody reads it.
   subscriber calling `handle` with a done ctx. `subscriber.WithDetachedContext` opts out: the subscriber stays
   subscribed, and runs with `context.WithoutCancel` of its ctx, so `handle`, `middleware.Retry` and a `SubscribeSeq` loop
   never see it done. `Subscriber.AutoUnsubscribe` is now `Subscriber.ContextLifetime`, and returns that ctx.
+- `message.WithContext(ctx)`: the message is handled with `ctx` instead of the subscriber's ctx, which it replaces
+  rather than merging with (so no custom `context.Context`). `handle`, its middlewares and the error handlers get it
+  as is, cancellation included. Breaking change: the error handlers now get every error about a message with the ctx it
+  is handled with (its own, or else the subscriber's), never the `Broadcast` ctx, which only bounds the wait. That makes
+  the ctx the same whatever the error, and no longer done just because `Broadcast` gave up. The trap of an async send
+  cancelled with the request that broadcast it is documented, with `context.WithoutCancel` + `message.WithTimeout` +
+  `message.WithContext` as the fix (`examples/14-context`), rather than detaching async sends from the `Broadcast` ctx.
 
 ## Mid-term: more delivery modes (v0.x)
 
@@ -94,13 +101,6 @@ when nobody reads it.
   after it reaches nobody and returns 0), and never waits. Still missing: a way to wait until the subscribers have
   discarded, bounded by a ctx (`Close(ctx)`, or a separate `Wait(ctx)`). Called from `handle`, that would end up waiting
   on itself, so it has to either detect that case or be documented as off-limits there.
-
-### Broadcast ctx reaching `handle`
-
-- [ ] `handle` gets the `Subscribe` ctx, so values on the `Broadcast` ctx (trace IDs, request-scoped loggers) never reach it.
-  Carry the `Broadcast` ctx's values on the message, and give `handle` a ctx that combines those values with the
-  subscriber's cancellation. This needs a small custom `context.Context`. Offer it as an option, or make it the default
-  before v1.
 
 ### Ordered async and overflow policies
 
@@ -141,7 +141,7 @@ when nobody reads it.
 
 - [-] `Broadcast` walks a `sync.Map` through a closure on every call. For workloads that broadcast often but subscribe
   rarely, a copy-on-write `atomic.Pointer[[]*subscriber.Subscriber[T]]` avoids both the map walk and the allocation.
-- [-] `Broadcast` allocates once per subscriber (24 B), even in sync mode. The per-subscriber `message.Config` is moved to
+- [-] `Broadcast` allocates once per subscriber (48 B since `message.Config.Context`, 24 B before), even in sync mode. The per-subscriber `message.Config` is moved to
   the heap because `option(&config)` in `message.New` passes its address to an unknown func (`go build -gcflags=-m`). Applying the
   options once per `Broadcast`, recording which fields they set, and then merging those over each subscriber's
   defaults by value could avoid it.

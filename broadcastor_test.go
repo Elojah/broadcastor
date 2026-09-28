@@ -488,7 +488,11 @@ func TestMessageWithAsync_ContextDone(t *testing.T) {
 		b := broadcastor.NewBroadcastor[int]()
 		stuck := &recorder[int]{hold: make(chan struct{})}
 		errs := &recorder[error]{}
-		id := subscribe(t, b, stuck.handle, subscriber.WithErrorHandler[int](func(_ context.Context, err error) {
+		id := subscribe(t, b, stuck.handle, subscriber.WithErrorHandler[int](func(ctx context.Context, err error) {
+			// The subscriber's, not the Broadcast one, which is done.
+			if err := ctx.Err(); err != nil {
+				t.Errorf("error handler got a done ctx: %v", err)
+			}
 			errs.record(err)
 		}))
 		b.Broadcast(t.Context(), 0)
@@ -556,7 +560,7 @@ func TestMessageWithErrorHandler(t *testing.T) {
 }
 
 // A message's error handler is told when Broadcast gives up on a stuck subscriber, even one without an error handler of
-// its own.
+// its own, with the subscriber's ctx, which is not done, rather than the Broadcast one, which is.
 func TestMessageWithErrorHandler_ContextDone(t *testing.T) {
 	t.Parallel()
 
@@ -568,7 +572,10 @@ func TestMessageWithErrorHandler_ContextDone(t *testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 		defer cancel()
 		errs := &recorder[error]{}
-		b.Broadcast(ctx, 1, message.WithErrorHandler[int](func(_ context.Context, err error) {
+		b.Broadcast(ctx, 1, message.WithErrorHandler[int](func(ctx context.Context, err error) {
+			if err := ctx.Err(); err != nil {
+				t.Errorf("message error handler got a done ctx: %v", err)
+			}
 			errs.record(err)
 		}))
 

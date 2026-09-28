@@ -7,8 +7,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// Handler is what a subscriber calls for every message it takes, with the ctx passed to Subscribe and its own ID: the
-// handle function given to Subscribe, and what a Middleware wraps.
+// Handler is what a subscriber calls for every message it takes, with the message's ctx (message.WithContext) or else
+// the one passed to Subscribe, and its own ID: the handle function given to Subscribe, and what a Middleware wraps.
 type Handler[T any] func(ctx context.Context, id uuid.UUID, msg T) error
 
 // Middleware wraps a Handler in another, which may do something before or after calling next, change the error next
