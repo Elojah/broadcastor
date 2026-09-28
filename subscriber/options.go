@@ -42,7 +42,8 @@ func WithErrorHandler[T any](handler func(ctx context.Context, err error)) Optio
 // ctx passed to Subscribe, so a slow one holds the subscriber up like a slow handle. Whatever error the outermost one
 // returns reaches the error handlers as is, and a panic in one crashes the program like a panic in handle, unless an
 // outer middleware recovers it. Package middleware holds ready-made ones: middleware.Recover and middleware.WrapError,
-// in that order, go first. It has no effect on SubscribeSeq, whose loop body runs in the caller's goroutine.
+// in that order, go first, then middleware.Retry. It has no effect on SubscribeSeq, whose loop body runs in the
+// caller's goroutine.
 func WithMiddleware[T any](middlewares ...Middleware[T]) Option[T] {
 	return func(config *config[T]) {
 		config.middlewares = append(config.middlewares, middlewares...)

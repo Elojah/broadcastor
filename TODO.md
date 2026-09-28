@@ -72,6 +72,11 @@ when nobody reads it.
   successive `Broadcast`s from one goroutine still arrive in order, and the ctx deadline and the timeout apply to every
   subscriber from the same moment. `Broadcast` counts the parallel sends that were taken. `Subscriber.Deliver` now also
   returns a channel for a parallel send, so the other modes allocate nothing more.
+- `middleware.Retry(RetryPolicy)`: calls `handle` again after an error, up to `Attempts` calls, waiting `Delay` and then
+  each wait times `Multiplier`, capped at `MaxDelay` and shortened at random by up to `Jitter`, for the errors
+  `IsRetryable` accepts. It returns the last error as is, and a done `Subscribe` ctx ends it. It waits in the
+  subscriber's goroutine, holding the subscriber up like a slow `handle` does. `examples/12-middleware` uses it in place
+  of its hand-written retry.
 
 ## Mid-term: more delivery modes (v0.x)
 
@@ -101,11 +106,9 @@ when nobody reads it.
 
 ### Storage, retry, errors and groups (from the original list)
 
-- `middleware.Retry(RetryPolicy)` (see `examples/12-middleware`): run `handle` again after an error, with backoff
-  (attempts, delay, jitter, `IsRetryable(err)`). An in-memory retry holds the subscriber up during backoff, just like a slow `handle` does. That
-  is fine for a few quick attempts. Delayed or persistent retries need `WithStorage`.
 - `WithStorage(Storage[T])`: an interface (`Put`, `Next`, `Ack`) holding messages that failed or timed out, to be retried
-  or replayed later. Ship an in-memory ring buffer first and add real backends later.
+  or replayed later. Ship an in-memory ring buffer first and add real backends later. This is what delayed or
+  persistent retries need: `middleware.Retry` waits in the subscriber's goroutine, so it only suits a few quick attempts.
 - `WithErrorStorage`: the old error channel done safely. That means a bounded store (a ring buffer that drops the oldest
   errors and counts the drops) which the user reads whenever they like and which never blocks when nobody reads it (see
   `TestSubscribe_ErrorsWithoutHandler`). It could simply be a ready-made error handler (`NewErrorBuffer(n)` returning the

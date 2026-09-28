@@ -94,7 +94,8 @@
 //	))
 //
 // Middlewares run in the subscriber's goroutine, with the ctx given to Subscribe, and have no effect on SubscribeSeq.
-// Package middleware holds ready-made ones: Recover and WrapError, which go first, in that order.
+// Package middleware holds ready-made ones: Recover and WrapError, which go first, in that order, and Retry, which
+// calls handle again after an error, with backoff, and goes right after them.
 //
 // # Errors
 //

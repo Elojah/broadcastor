@@ -11,4 +11,6 @@ func Example() {
 	// charge-card: attempt 2 failed: unavailable
 	// charge-card: attempt 3 failed: unavailable
 	// gave up on charge-card: unavailable
+	// print-invoice: attempt 1 failed: unknown job
+	// gave up on print-invoice: unknown job
 }

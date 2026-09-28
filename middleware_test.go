@@ -7,6 +7,7 @@ import (
 	"slices"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -208,6 +209,90 @@ func TestSubscriberWithMiddleware_Recover(t *testing.T) {
 				t.Errorf("error %d is for subscriber %s and message %d with value %v, want %s, %d and %v",
 					i, panicErr.SubscriberID, panicErr.Message, panicErr.Value, id, msg, handleError(msg))
 			}
+		}
+	})
+}
+
+// middleware.Retry calls handle again in the subscriber's goroutine, so the subscriber takes no message while it waits,
+// and the next Broadcast waits for it.
+func TestSubscriberWithMiddleware_Retry(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := broadcastor.NewBroadcastor[int]()
+		handled := &recorder[int]{}
+		failures := &recorder[int]{}
+		id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
+			// Message 1 fails its first two calls.
+			if n := handled.record(msg); msg == 1 && n <= 2 {
+				return handleError(msg)
+			}
+
+			return nil
+		},
+			subscriber.WithMiddleware(middleware.Retry[int](middleware.RetryPolicy{Attempts: 3, Delay: time.Second})),
+			subscriber.WithErrorHandler[int](recordFailures(t, failures)),
+		)
+
+		start := time.Now()
+		b.Broadcast(t.Context(), 1)
+		b.Broadcast(t.Context(), 2)
+		if elapsed := time.Since(start); elapsed != 2*time.Second {
+			t.Errorf("second Broadcast returned after %v, want once message 1 was retried twice, after %v", elapsed, 2*time.Second)
+		}
+		unsubscribe(t, b, id)
+		synctest.Wait()
+
+		if got, want := handled.messages(), []int{1, 1, 1, 2}; !slices.Equal(got, want) {
+			t.Errorf("handle got %v, want %v", got, want)
+		}
+		if got := failures.messages(); len(got) != 0 {
+			t.Errorf("error handler got failures for %v, want none", got)
+		}
+	})
+}
+
+// With subscriber.WithAutoUnsubscribe, cancelling the Subscribe ctx while middleware.Retry waits unsubscribes the
+// subscriber and ends the wait: the error of the last call is reported right away, and the subscriber's goroutine ends.
+func TestSubscriberWithMiddleware_RetryAutoUnsubscribe(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		b := broadcastor.NewBroadcastor[int]()
+		handled := &recorder[int]{}
+		failures := &recorder[int]{}
+		_, err := b.Subscribe(ctx, func(_ context.Context, _ uuid.UUID, msg int) error {
+			handled.record(msg)
+
+			return handleError(msg)
+		},
+			subscriber.WithMiddleware(middleware.Retry[int](middleware.RetryPolicy{Attempts: 3, Delay: time.Hour})),
+			subscriber.WithAutoUnsubscribe[int](),
+			subscriber.WithErrorHandler[int](recordFailures(t, failures)),
+		)
+		if err != nil {
+			t.Fatalf("Subscribe: %v", err)
+		}
+
+		start := time.Now()
+		b.Broadcast(t.Context(), 1)
+		synctest.Wait()
+		cancel()
+		// Waits for the subscriber's goroutine to report, but lets no time pass: a Retry still waiting would not have.
+		synctest.Wait()
+
+		if got, want := failures.messages(), []int{1}; !slices.Equal(got, want) {
+			t.Errorf("error handler got failures for %v, want %v", got, want)
+		}
+		if got, want := handled.messages(), []int{1}; !slices.Equal(got, want) {
+			t.Errorf("handle got %v, want %v", got, want)
+		}
+		if elapsed := time.Since(start); elapsed != 0 {
+			t.Errorf("%v passed, want none", elapsed)
+		}
+		if n := b.Broadcast(t.Context(), 2); n != 0 {
+			t.Errorf("Broadcast after cancel reached %d subscribers, want 0", n)
 		}
 	})
 }

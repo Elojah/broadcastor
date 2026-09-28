@@ -71,8 +71,8 @@ for msg := range seq {
 10. [`10-defaults`](examples/10-defaults/main.go): `subscriber.WithDefaultMessageOptions`, overridden by
     `message.WithSync`.
 11. [`11-iterator`](examples/11-iterator/main.go): `SubscribeSeq` and a `for range` loop instead of `handle`.
-12. [`12-middleware`](examples/12-middleware/main.go): `subscriber.WithMiddleware`, a retry middleware and
-    `middleware.WrapError`.
+12. [`12-middleware`](examples/12-middleware/main.go): `subscriber.WithMiddleware`, `middleware.Retry` with backoff, a
+    logging middleware of its own and `middleware.WrapError`.
 13. [`13-parallel`](examples/13-parallel/main.go): `message.WithParallel`, where a slow subscriber holds up nobody else
     but `Broadcast` still waits for it.
 
@@ -129,9 +129,25 @@ effect on `SubscribeSeq`, whose loop body runs in the caller's goroutine.
   with the next message. Without it, a panic in `handle` or a middleware crashes the program.
 - `middleware.WrapError` makes an error a `*subscriber.HandleError`, with the subscriber and the message it failed on.
   Without it, error handlers get the error as `handle` returned it.
+- `middleware.Retry(middleware.RetryPolicy{...})` calls `handle` again when it fails, and returns the error of the
+  last call as is. The policy sets `Attempts` (the first call included), `Delay` before the first retry, a `Multiplier`
+  for each wait after it, capped at `MaxDelay`, a `Jitter` between 0 and 1 that shortens each wait at random, and
+  `IsRetryable` to skip the errors not worth retrying. It waits in the subscriber's goroutine, so the subscriber takes
+  no message meanwhile, and a `Broadcast` waiting for it waits too. A done `Subscribe` ctx ends the wait
+  (`subscriber.WithAutoUnsubscribe` ties it to the subscription), `Unsubscribe` alone does not.
+
+```go
+middleware.Retry[string](middleware.RetryPolicy{
+	Attempts:    3,
+	Delay:       10 * time.Millisecond,
+	Multiplier:  2,
+	IsRetryable: func(err error) bool { return !errors.Is(err, errInvalid) },
+})
+```
 
 Give them first, in that order: `Recover` then also recovers panics in every later middleware, and its
-`*subscriber.PanicError` is not wrapped in a `*subscriber.HandleError`.
+`*subscriber.PanicError` is not wrapped in a `*subscriber.HandleError`. `Retry` then retries `handle`'s errors as is,
+only the last one is wrapped, and panics are not retried.
 
 ## Errors
 
