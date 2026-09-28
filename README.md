@@ -32,7 +32,8 @@ if err := b.Unsubscribe(ctx, id); err != nil {
 }
 ```
 
-`handle` is given the subscriber's ID, so it can unsubscribe itself with `b.Unsubscribe(ctx, id)`.
+`handle` is given the subscriber's ID, so it can unsubscribe itself with `b.Unsubscribe(ctx, id)`. The ctx passed to
+`Subscribe` is the subscription's: once it is done, the subscriber is unsubscribed (see [Unsubscribing](#unsubscribing)).
 
 Options live next to what they configure: [`subscriber`](subscriber) holds those passed to `Subscribe`,
 `SubscribeSeq` and `Unsubscribe`, along with `Handler`, `Middleware` and the errors about a subscriber's messages, and
@@ -133,8 +134,8 @@ effect on `SubscribeSeq`, whose loop body runs in the caller's goroutine.
   last call as is. The policy sets `Attempts` (the first call included), `Delay` before the first retry, a `Multiplier`
   for each wait after it, capped at `MaxDelay`, a `Jitter` between 0 and 1 that shortens each wait at random, and
   `IsRetryable` to skip the errors not worth retrying. It waits in the subscriber's goroutine, so the subscriber takes
-  no message meanwhile, and a `Broadcast` waiting for it waits too. A done `Subscribe` ctx ends the wait
-  (`subscriber.WithAutoUnsubscribe` ties it to the subscription), `Unsubscribe` alone does not.
+  no message meanwhile, and a `Broadcast` waiting for it waits too. A done `Subscribe` ctx ends the wait, and
+  unsubscribes the subscriber, `Unsubscribe` alone does not.
 
 ```go
 middleware.Retry[string](middleware.RetryPolicy{
@@ -176,10 +177,12 @@ the message type.
 
 `Unsubscribe` never waits, so `handle` can unsubscribe its own subscriber. A subscriber may still get messages after
 `Unsubscribe` returns: whatever is in its buffer, and the message of a `Broadcast` that was already sending to it. Its
-goroutine ends once it has processed them. `handle` gets the ctx passed to `Subscribe`, and cancelling that ctx does not
-unsubscribe it, unless the subscriber has `subscriber.WithAutoUnsubscribe`. That option unsubscribes it as soon as the
-ctx passed to `Subscribe` or `SubscribeSeq` is done, even while `handle` or the loop body is running, or before the loop
-starts.
+goroutine ends once it has processed them. The ctx passed to `Subscribe` or `SubscribeSeq` is the subscription's: the
+subscriber is unsubscribed as soon as it is done, even while `handle` or the loop body is running, or before the loop
+starts. `handle` gets that ctx, so it gets it done for whatever the subscriber took before being unsubscribed. Pass
+`subscriber.WithDetachedContext` to keep the subscriber subscribed until `Unsubscribe` or `Close` instead: `handle`, its
+middlewares, its error handlers and the loop then get `context.WithoutCancel` of that ctx, with its values but never
+done.
 
 A `SubscribeSeq` loop ends once its subscriber is unsubscribed and has yielded those messages. When it ends another way,
 because it breaks or because the ctx passed to `SubscribeSeq` is done, it unsubscribes the subscriber itself. The

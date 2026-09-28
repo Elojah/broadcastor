@@ -51,8 +51,8 @@ when nobody reads it.
   `SubscribeSeq` loop ends. It can be the subscriber's default (`subscriber.WithDefaultUnsubscribeOptions`), which is
   how `Close` applies it: `Close()` keeps its signature, and so still satisfies `io.Closer`. `WithUnsubscribeDeliver`
   overrides that default.
-- `subscriber.WithAutoUnsubscribe`: the subscriber is unsubscribed as soon as the `Subscribe` or `SubscribeSeq` ctx is
-  done, even while `handle` runs. It is a `context.AfterFunc` rather than a watcher goroutine, stopped by whichever
+- `subscriber.WithAutoUnsubscribe` (since made the default, see below): the subscriber is unsubscribed as soon as the
+  `Subscribe` or `SubscribeSeq` ctx is done, even while `handle` runs. It is a `context.AfterFunc` rather than a watcher goroutine, stopped by whichever
   removal comes first, so nothing is left waiting on a ctx that is never done.
 - Benchmarks (`bench_test.go`, `make bench`): `Broadcast` for 1 to 1000 subscribers × sync/parallel/async/buffered/middleware,
   and `Subscribe`/`Unsubscribe` churn, serial and parallel.
@@ -77,6 +77,11 @@ when nobody reads it.
   `IsRetryable` accepts. It returns the last error as is, and a done `Subscribe` ctx ends it. It waits in the
   subscriber's goroutine, holding the subscriber up like a slow `handle` does. `examples/12-middleware` uses it in place
   of its hand-written retry.
+- The `Subscribe`/`SubscribeSeq` ctx is the subscription's lifetime: once it is done, the subscriber is unsubscribed.
+  Breaking change: that used to be opt-in with `subscriber.WithAutoUnsubscribe`, which is gone, and left a `Subscribe`
+  subscriber calling `handle` with a done ctx. `subscriber.WithDetachedContext` opts out: the subscriber stays
+  subscribed, and runs with `context.WithoutCancel` of its ctx, so `handle`, `middleware.Retry` and a `SubscribeSeq` loop
+  never see it done. `Subscriber.AutoUnsubscribe` is now `Subscriber.ContextLifetime`, and returns that ctx.
 
 ## Mid-term: more delivery modes (v0.x)
 

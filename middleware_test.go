@@ -26,7 +26,7 @@ func TestSubscriberWithMiddleware(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		type key struct{}
-		ctx := context.WithValue(t.Context(), key{}, "subscribe")
+		ctx := context.WithValue(subscribeCtx(t), key{}, "subscribe")
 		b := broadcastor.NewBroadcastor[int]()
 		calls := &recorder[string]{}
 		ids := &recorder[uuid.UUID]{}
@@ -252,9 +252,9 @@ func TestSubscriberWithMiddleware_Retry(t *testing.T) {
 	})
 }
 
-// With subscriber.WithAutoUnsubscribe, cancelling the Subscribe ctx while middleware.Retry waits unsubscribes the
-// subscriber and ends the wait: the error of the last call is reported right away, and the subscriber's goroutine ends.
-func TestSubscriberWithMiddleware_RetryAutoUnsubscribe(t *testing.T) {
+// Cancelling the Subscribe ctx while middleware.Retry waits unsubscribes the subscriber and ends the wait: the error of
+// the last call is reported right away, and the subscriber's goroutine ends.
+func TestSubscriberWithMiddleware_RetryContextDone(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
@@ -268,7 +268,6 @@ func TestSubscriberWithMiddleware_RetryAutoUnsubscribe(t *testing.T) {
 			return handleError(msg)
 		},
 			subscriber.WithMiddleware(middleware.Retry[int](middleware.RetryPolicy{Attempts: 3, Delay: time.Hour})),
-			subscriber.WithAutoUnsubscribe[int](),
 			subscriber.WithErrorHandler[int](recordFailures(t, failures)),
 		)
 		if err != nil {

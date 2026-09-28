@@ -73,7 +73,7 @@ func TestWithErrorHandler(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		type key struct{}
-		ctx := context.WithValue(t.Context(), key{}, "subscribe")
+		ctx := context.WithValue(subscribeCtx(t), key{}, "subscribe")
 		checkCtx := func(ctx context.Context, what string) {
 			if v := ctx.Value(key{}); v != "subscribe" {
 				t.Errorf("%s got a ctx with value %v, want the one passed to Subscribe", what, v)
@@ -524,7 +524,7 @@ func TestMessageWithErrorHandler(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		type key struct{}
-		ctx := context.WithValue(t.Context(), key{}, "subscribe")
+		ctx := context.WithValue(subscribeCtx(t), key{}, "subscribe")
 		b := broadcastor.NewBroadcastor[int]()
 		subscriberErrs := &recorder[int]{}
 		failingID, err := b.Subscribe(ctx, func(_ context.Context, _ uuid.UUID, msg int) error {
@@ -1006,7 +1006,7 @@ func TestSubscribe_Parallel(t *testing.T) {
 	const subscribers = 100
 
 	synctest.Test(t, func(t *testing.T) {
-		ctx := t.Context()
+		ctx := subscribeCtx(t)
 		b := broadcastor.NewBroadcastor[int]()
 		var mu sync.Mutex
 		recorders := make(map[uuid.UUID]*recorder[int], subscribers)
@@ -1051,7 +1051,7 @@ func TestSubscribeUnsubscribe_ChurnDuringBroadcasts(t *testing.T) {
 	const consumers, rounds = 16, 30
 
 	synctest.Test(t, func(t *testing.T) {
-		ctx := t.Context()
+		ctx := subscribeCtx(t)
 		b := broadcastor.NewBroadcastor[int]()
 
 		stop := make(chan struct{})
@@ -1600,7 +1600,7 @@ func TestSubscribeSeq_BreakReportsUnyielded(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		type key struct{}
-		ctx := context.WithValue(t.Context(), key{}, "seq")
+		ctx := context.WithValue(subscribeCtx(t), key{}, "seq")
 		b := broadcastor.NewBroadcastor[int]()
 		closed := &recorder[int]{}
 		id, seq, err := b.SubscribeSeq(ctx, subscriber.WithBuffer[int](2),
@@ -1970,16 +1970,16 @@ func subscribeUntilClosed(t *testing.T, b *broadcastor.Broadcastor[int], kind in
 	switch kind {
 	case 0:
 		var id uuid.UUID
-		if id, err = b.Subscribe(t.Context(), (&recorder[int]{}).handle); err == nil {
+		if id, err = b.Subscribe(subscribeCtx(t), (&recorder[int]{}).handle); err == nil {
 			if err := b.Unsubscribe(t.Context(), id); err != nil && !isNotFound(err) {
 				t.Errorf("Unsubscribe(%s) = %v, want nil or *SubscriberNotFoundError", id, err)
 			}
 		}
 	case 1:
-		_, err = b.Subscribe(t.Context(), (&recorder[int]{}).handle)
+		_, err = b.Subscribe(subscribeCtx(t), (&recorder[int]{}).handle)
 	default:
 		var seq iter.Seq[int]
-		if _, seq, err = b.SubscribeSeq(t.Context()); err == nil {
+		if _, seq, err = b.SubscribeSeq(subscribeCtx(t)); err == nil {
 			for range seq { // until Close ends the loop
 			}
 		}
@@ -2067,12 +2067,21 @@ func recordTimeouts(t *testing.T, r *recorder[int]) func(context.Context, error)
 	}
 }
 
+// subscribeCtx is the ctx tests subscribe with: the test's, but never done. A subscriber is unsubscribed once its ctx is
+// done, which the test's is when the test ends, so a subscriber the test failed to unsubscribe would end there instead
+// of failing the synctest test.
+func subscribeCtx(t *testing.T) context.Context {
+	t.Helper()
+
+	return context.WithoutCancel(t.Context())
+}
+
 func subscribe[T any](
 	t *testing.T, b *broadcastor.Broadcastor[T], handle func(context.Context, uuid.UUID, T) error,
 	options ...subscriber.Option[T],
 ) uuid.UUID {
 	t.Helper()
-	id, err := b.Subscribe(t.Context(), handle, options...)
+	id, err := b.Subscribe(subscribeCtx(t), handle, options...)
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -2098,10 +2107,10 @@ func hold[T any](t *testing.T, b *broadcastor.Broadcastor[T]) (*recorder[T], uui
 	return r, id
 }
 
-// subscribeSeq subscribes with SubscribeSeq, with the test's ctx.
+// subscribeSeq subscribes with SubscribeSeq, with subscribeCtx.
 func subscribeSeq[T any](t *testing.T, b *broadcastor.Broadcastor[T], options ...subscriber.Option[T]) (uuid.UUID, iter.Seq[T]) {
 	t.Helper()
-	id, seq, err := b.SubscribeSeq(t.Context(), options...)
+	id, seq, err := b.SubscribeSeq(subscribeCtx(t), options...)
 	if err != nil {
 		t.Fatalf("SubscribeSeq: %v", err)
 	}

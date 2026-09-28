@@ -50,18 +50,13 @@ func WithMiddleware[T any](middlewares ...Middleware[T]) Option[T] {
 	}
 }
 
-// WithAutoUnsubscribe unsubscribes the subscriber once the ctx passed to Subscribe or SubscribeSeq is done, like an
-// Unsubscribe with no options, so its WithDefaultUnsubscribeOptions apply. Without it, cancelling that ctx leaves a
-// Subscribe subscriber subscribed, and ends a SubscribeSeq loop only once the loop checks it.
-//
-// The subscriber is unsubscribed from a goroutine of its own as soon as ctx is done, or right after it is added if ctx
-// already is, even while handle or the loop body is running, or before the loop has started: no later Broadcast waits
-// for it. As after any Unsubscribe, it may still get messages from its buffer or from a Broadcast that was already
-// sending to it, and processes them with the done ctx, unless it discards them. Once the subscriber is unsubscribed
-// another way, nothing waits for ctx any more, so ctx may be one that is never done.
-func WithAutoUnsubscribe[T any]() Option[T] {
+// WithDetachedContext keeps the subscriber subscribed once the ctx passed to Subscribe or SubscribeSeq is done, until
+// Unsubscribe or Close. The subscriber runs with context.WithoutCancel of that ctx instead: handle, its middlewares,
+// its error handlers and a SubscribeSeq loop get ctx's values, but a ctx that is never done. So middleware.Retry waits
+// out its policy, and a SubscribeSeq loop only ends when it breaks or once the subscriber is unsubscribed.
+func WithDetachedContext[T any]() Option[T] {
 	return func(config *config[T]) {
-		config.autoUnsubscribe = true
+		config.detached = true
 	}
 }
 

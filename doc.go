@@ -57,9 +57,10 @@
 //
 // Unsubscribe never waits for anything, so handle can unsubscribe its own subscriber. A subscriber may still get
 // messages after Unsubscribe returns: whatever is in its buffer, and the message of a Broadcast that was already
-// sending to it. Its goroutine ends once it has processed them. Cancelling the ctx given to Subscribe, which is the one
-// handle gets, does not unsubscribe it, unless the subscriber has subscriber.WithAutoUnsubscribe: it is then
-// unsubscribed as soon as that ctx is done, even while handle is running.
+// sending to it. Its goroutine ends once it has processed them. The ctx given to Subscribe, which is the one handle
+// gets, is the subscription's: the subscriber is unsubscribed as soon as that ctx is done, even while handle is
+// running. subscriber.WithDetachedContext keeps it subscribed instead, and hands handle a ctx with the same values
+// that is never done.
 //
 // A SubscribeSeq loop ends once its subscriber is unsubscribed and has yielded those messages. The loop unsubscribes
 // the subscriber itself when it ends another way: when it breaks, or once the ctx given to SubscribeSeq is done. The

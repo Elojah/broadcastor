@@ -12,16 +12,15 @@ import (
 	"github.com/elojah/broadcastor/subscriber"
 )
 
-// Once its ctx is done, a subscriber with subscriber.WithAutoUnsubscribe is unsubscribed: Broadcast no longer reaches
-// it, and its goroutine ends.
-func TestSubscriberWithAutoUnsubscribe(t *testing.T) {
+// Once its ctx is done, a subscriber is unsubscribed: Broadcast no longer reaches it, and its goroutine ends.
+func TestSubscribe_ContextDone(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		b := broadcastor.NewBroadcastor[int]()
 		handled := &recorder[int]{}
-		id, err := b.Subscribe(ctx, handled.handle, subscriber.WithAutoUnsubscribe[int]())
+		id, err := b.Subscribe(ctx, handled.handle)
 		if err != nil {
 			t.Fatalf("Subscribe: %v", err)
 		}
@@ -45,7 +44,7 @@ func TestSubscriberWithAutoUnsubscribe(t *testing.T) {
 
 // A subscriber whose ctx is done while handle is running is unsubscribed right away, without waiting for handle, and
 // with its default unsubscribe options: here, it discards what is left in its buffer.
-func TestSubscriberWithAutoUnsubscribe_WhileHandling(t *testing.T) {
+func TestSubscribe_ContextDoneWhileHandling(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
@@ -53,8 +52,7 @@ func TestSubscriberWithAutoUnsubscribe_WhileHandling(t *testing.T) {
 		b := broadcastor.NewBroadcastor[int]()
 		handled := &recorder[int]{hold: make(chan struct{})}
 		closed := &recorder[int]{}
-		id, err := b.Subscribe(ctx, handled.handle, subscriber.WithAutoUnsubscribe[int](),
-			subscriber.WithBuffer[int](1),
+		id, err := b.Subscribe(ctx, handled.handle, subscriber.WithBuffer[int](1),
 			subscriber.WithErrorHandler[int](recordClosed(t, closed)),
 			subscriber.WithDefaultUnsubscribeOptions[int](subscriber.WithUnsubscribeDiscard()))
 		if err != nil {
@@ -87,7 +85,7 @@ func TestSubscriberWithAutoUnsubscribe_WhileHandling(t *testing.T) {
 }
 
 // A subscriber whose ctx is already done when it subscribes is unsubscribed right after.
-func TestSubscriberWithAutoUnsubscribe_ContextDoneFirst(t *testing.T) {
+func TestSubscribe_ContextDoneFirst(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
@@ -95,7 +93,7 @@ func TestSubscriberWithAutoUnsubscribe_ContextDoneFirst(t *testing.T) {
 		cancel()
 		b := broadcastor.NewBroadcastor[int]()
 		handled := &recorder[int]{}
-		if _, err := b.Subscribe(ctx, handled.handle, subscriber.WithAutoUnsubscribe[int]()); err != nil {
+		if _, err := b.Subscribe(ctx, handled.handle); err != nil {
 			t.Fatalf("Subscribe: %v", err)
 		}
 		synctest.Wait()
@@ -112,15 +110,14 @@ func TestSubscriberWithAutoUnsubscribe_ContextDoneFirst(t *testing.T) {
 
 // A SubscribeSeq subscriber whose ctx is done before its loop starts is unsubscribed without waiting for the loop, so
 // Broadcast no longer waits for it. The loop then yields nothing, and reports the message the subscriber took.
-func TestSubscriberWithAutoUnsubscribe_SubscribeSeq(t *testing.T) {
+func TestSubscribeSeq_ContextDoneBeforeLoop(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		b := broadcastor.NewBroadcastor[int]()
 		closed := &recorder[int]{}
-		_, seq, err := b.SubscribeSeq(ctx, subscriber.WithAutoUnsubscribe[int](),
-			subscriber.WithBuffer[int](1),
+		_, seq, err := b.SubscribeSeq(ctx, subscriber.WithBuffer[int](1),
 			subscriber.WithErrorHandler[int](recordClosed(t, closed)))
 		if err != nil {
 			t.Fatalf("SubscribeSeq: %v", err)
@@ -144,9 +141,9 @@ func TestSubscriberWithAutoUnsubscribe_SubscribeSeq(t *testing.T) {
 	})
 }
 
-// A subscriber with subscriber.WithAutoUnsubscribe that is unsubscribed another way, while its ctx is never done,
-// leaves nothing waiting on that ctx. A goroutine left waiting would never end, and fail the synctest test.
-func TestSubscriberWithAutoUnsubscribe_NoLeak(t *testing.T) {
+// A subscriber unsubscribed another way, while its ctx is never done, leaves nothing waiting on that ctx. A goroutine
+// left waiting would never end, and fail the synctest test.
+func TestSubscribe_ContextNoLeak(t *testing.T) {
 	t.Parallel()
 
 	for _, tt := range []struct {
@@ -171,7 +168,7 @@ func TestSubscriberWithAutoUnsubscribe_NoLeak(t *testing.T) {
 				ctx := neverDone{Context: context.Background(), done: make(chan struct{})}
 				b := broadcastor.NewBroadcastor[int]()
 				handled := &recorder[int]{}
-				id, err := b.Subscribe(ctx, handled.handle, subscriber.WithAutoUnsubscribe[int]())
+				id, err := b.Subscribe(ctx, handled.handle)
 				if err != nil {
 					t.Fatalf("Subscribe: %v", err)
 				}
@@ -189,14 +186,14 @@ func TestSubscriberWithAutoUnsubscribe_NoLeak(t *testing.T) {
 }
 
 // Its ctx being done and Unsubscribe racing on one subscriber unsubscribe it once between them.
-func TestSubscriberWithAutoUnsubscribe_RacesUnsubscribe(t *testing.T) {
+func TestSubscribe_ContextDoneRacesUnsubscribe(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		b := broadcastor.NewBroadcastor[int]()
 		handled := &recorder[int]{}
-		id, err := b.Subscribe(ctx, handled.handle, subscriber.WithAutoUnsubscribe[int]())
+		id, err := b.Subscribe(ctx, handled.handle)
 		if err != nil {
 			t.Fatalf("Subscribe: %v", err)
 		}
@@ -209,6 +206,79 @@ func TestSubscriberWithAutoUnsubscribe_RacesUnsubscribe(t *testing.T) {
 
 		if n := b.Broadcast(t.Context(), 1); n != 0 {
 			t.Errorf("Broadcast handed the message to %d subscribers, want 0", n)
+		}
+	})
+}
+
+// A subscriber with subscriber.WithDetachedContext stays subscribed once its ctx is done, and handle gets a ctx with
+// the same values that is never done.
+func TestSubscriberWithDetachedContext(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		type key struct{}
+		ctx, cancel := context.WithCancel(context.WithValue(t.Context(), key{}, "subscribe"))
+		b := broadcastor.NewBroadcastor[int]()
+		handled := &recorder[int]{}
+		id, err := b.Subscribe(ctx, func(ctx context.Context, id uuid.UUID, msg int) error {
+			if err := ctx.Err(); err != nil {
+				t.Errorf("handle got a done ctx: %v", err)
+			}
+			if got, want := ctx.Value(key{}), "subscribe"; got != want {
+				t.Errorf("handle got ctx value %v, want %v", got, want)
+			}
+
+			return handled.handle(ctx, id, msg)
+		}, subscriber.WithDetachedContext[int]())
+		if err != nil {
+			t.Fatalf("Subscribe: %v", err)
+		}
+
+		cancel()
+		synctest.Wait()
+
+		if n := b.Broadcast(t.Context(), 1); n != 1 {
+			t.Errorf("Broadcast once ctx is done handed the message to %d subscribers, want 1", n)
+		}
+		unsubscribe(t, b, id)
+		synctest.Wait()
+		if got, want := handled.messages(), []int{1}; !slices.Equal(got, want) {
+			t.Errorf("handle got %v, want %v", got, want)
+		}
+	})
+}
+
+// A SubscribeSeq loop with subscriber.WithDetachedContext goes on once its ctx is done, and ends once its subscriber is
+// unsubscribed.
+func TestSubscriberWithDetachedContext_SubscribeSeq(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		b := broadcastor.NewBroadcastor[int]()
+		id, seq, err := b.SubscribeSeq(ctx, subscriber.WithDetachedContext[int]())
+		if err != nil {
+			t.Fatalf("SubscribeSeq: %v", err)
+		}
+
+		got := &recorder[int]{}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for msg := range seq {
+				got.record(msg)
+			}
+		}()
+		cancel()
+		synctest.Wait()
+
+		if n := b.Broadcast(t.Context(), 1); n != 1 {
+			t.Errorf("Broadcast once ctx is done handed the message to %d subscribers, want 1", n)
+		}
+		unsubscribe(t, b, id)
+		waitClosed(t, done, "the loop to end once its subscriber is unsubscribed")
+		if got, want := got.messages(), []int{1}; !slices.Equal(got, want) {
+			t.Errorf("loop got %v, want %v", got, want)
 		}
 	})
 }

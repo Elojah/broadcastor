@@ -20,7 +20,7 @@ func TestWithUnsubscribeDiscard(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		type key struct{}
-		ctx := context.WithValue(t.Context(), key{}, "subscribe")
+		ctx := context.WithValue(subscribeCtx(t), key{}, "subscribe")
 		b := broadcastor.NewBroadcastor[int]()
 		handled := &recorder[int]{hold: make(chan struct{})}
 		closed := &recorder[int]{}

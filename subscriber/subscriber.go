@@ -26,9 +26,9 @@ type Subscriber[T any] struct {
 	// on, Consume and pull report every message they take instead of processing it.
 	discarding atomic.Bool
 
-	// stopAutoUnsubscribe undoes the context.AfterFunc that AutoUnsubscribe set up, once the subscriber was removed
-	// another way. It is nil without WithAutoUnsubscribe.
-	stopAutoUnsubscribe func() bool
+	// stopContextLifetime undoes the context.AfterFunc that ContextLifetime set up, once the subscriber was removed
+	// another way. It is nil with WithDetachedContext.
+	stopContextLifetime func() bool
 
 	// refs is 1 for the subscription itself, plus 1 for each Broadcast currently sending on ch. Whoever drops it to 0
 	// closes ch, so ch is never closed while a Broadcast can still send on it.
@@ -54,9 +54,9 @@ type config[T any] struct {
 	// middlewares wrap handle, the first one outermost.
 	middlewares []Middleware[T]
 
-	// autoUnsubscribe makes the Broadcastor remove the subscriber once the ctx passed to Subscribe or SubscribeSeq is
-	// done.
-	autoUnsubscribe bool
+	// detached keeps the subscriber subscribed once the ctx passed to Subscribe or SubscribeSeq is done, and makes it run
+	// with context.WithoutCancel of that ctx.
+	detached bool
 }
 
 // New returns a subscriber with the given ID, set up by options. It holds the subscription's reference, which
@@ -77,16 +77,17 @@ func (s *Subscriber[T]) ID() uuid.UUID {
 	return s.id
 }
 
-// AutoUnsubscribe calls unsubscribe once ctx is done if the subscriber was given WithAutoUnsubscribe, and reports
-// whether it was. Unsubscribe undoes it, so it must be called before the subscriber can be unsubscribed, and at most
-// once. When ctx is already done, unsubscribe is called right away, from a goroutine of its own.
-func (s *Subscriber[T]) AutoUnsubscribe(ctx context.Context, unsubscribe func()) bool {
-	if !s.config.autoUnsubscribe {
-		return false
+// ContextLifetime ties the subscription to ctx: it calls unsubscribe once ctx is done, and returns the ctx the
+// subscriber runs with, ctx itself. With WithDetachedContext, it calls nothing and returns context.WithoutCancel(ctx),
+// which is never done. Unsubscribe undoes it, so it must be called before the subscriber can be unsubscribed, and at
+// most once. When ctx is already done, unsubscribe is called right away, from a goroutine of its own.
+func (s *Subscriber[T]) ContextLifetime(ctx context.Context, unsubscribe func()) context.Context {
+	if s.config.detached {
+		return context.WithoutCancel(ctx)
 	}
-	s.stopAutoUnsubscribe = context.AfterFunc(ctx, unsubscribe)
+	s.stopContextLifetime = context.AfterFunc(ctx, unsubscribe)
 
-	return true
+	return ctx
 }
 
 // Deliver hands value to the subscriber, as set up by its default message options and then options, and reports
@@ -134,8 +135,8 @@ func (s *Subscriber[T]) Unsubscribe(options ...UnsubscribeOption) {
 		s.discarding.Store(true)
 	}
 	// However it was removed, so that nothing keeps waiting for a ctx that may never be done.
-	if s.stopAutoUnsubscribe != nil {
-		s.stopAutoUnsubscribe()
+	if s.stopContextLifetime != nil {
+		s.stopContextLifetime()
 	}
 
 	// Closes the channel now, or once the last Broadcast still sending on it is done.
