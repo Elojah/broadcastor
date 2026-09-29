@@ -6,7 +6,6 @@
 //		middleware.Retry[string](middleware.RetryPolicy{Attempts: 3, Delay: 10 * time.Millisecond}),
 //	))
 //
-// Given first, in that order, Recover also recovers panics in every later middleware, and the *subscriber.PanicError it
-// returns is not wrapped in a *subscriber.HandleError. Retry then retries the errors handle returns as is, wrapping
-// only the last one, and does not retry panics.
+// Give them in that order: Recover first also catches panics in later middlewares, and Retry after WrapError sees
+// handle's raw errors, so only the last one is wrapped and panics are not retried.
 package middleware

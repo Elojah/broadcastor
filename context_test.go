@@ -46,8 +46,7 @@ func TestSubscribe_ContextDone(t *testing.T) {
 	})
 }
 
-// A subscriber whose ctx is done while handle is running is unsubscribed right away, without waiting for handle, and
-// with its default unsubscribe options: here, it discards what is left in its buffer.
+// A subscriber whose ctx is done during handle is unsubscribed right away, with its default unsubscribe options.
 func TestSubscribe_ContextDoneWhileHandling(t *testing.T) {
 	t.Parallel()
 
@@ -58,7 +57,7 @@ func TestSubscribe_ContextDoneWhileHandling(t *testing.T) {
 		closed := &recorder[int]{}
 		id, err := b.Subscribe(ctx, handled.handle, subscriber.WithBuffer[int](1),
 			subscriber.WithErrorHandler[int](recordClosed(t, closed)),
-			subscriber.WithDefaultUnsubscribeOptions[int](subscriber.WithUnsubscribeDiscard()))
+			subscriber.WithUnsubscribeOptions[int](subscriber.WithUnsubscribeDiscard()))
 		if err != nil {
 			t.Fatalf("Subscribe: %v", err)
 		}
@@ -112,8 +111,7 @@ func TestSubscribe_ContextDoneFirst(t *testing.T) {
 	})
 }
 
-// A SubscribeSeq subscriber whose ctx is done before its loop starts is unsubscribed without waiting for the loop, so
-// Broadcast no longer waits for it. The loop then yields nothing, and reports the message the subscriber took.
+// A SubscribeSeq subscriber whose ctx is done before its loop starts is unsubscribed, and the loop yields nothing.
 func TestSubscribeSeq_ContextDoneBeforeLoop(t *testing.T) {
 	t.Parallel()
 
@@ -145,8 +143,7 @@ func TestSubscribeSeq_ContextDoneBeforeLoop(t *testing.T) {
 	})
 }
 
-// A subscriber unsubscribed another way, while its ctx is never done, leaves nothing waiting on that ctx. A goroutine
-// left waiting would never end, and fail the synctest test.
+// A subscriber unsubscribed another way leaves nothing waiting on its ctx.
 func TestSubscribe_ContextNoLeak(t *testing.T) {
 	t.Parallel()
 
@@ -287,9 +284,8 @@ func TestSubscriberWithDetachedContext_SubscribeSeq(t *testing.T) {
 	})
 }
 
-// A message sent with message.WithContext is handled with that ctx instead of the one passed to Subscribe, which the
-// other messages still are. A default set with subscriber.WithDefaultMessageOptions applies to every message, unless a
-// Broadcast passes its own, or nil for none.
+// message.WithContext replaces the Subscribe ctx for one message, and a Broadcast overrides a default one, nil
+// included.
 func TestMessageWithContext(t *testing.T) {
 	t.Parallel()
 
@@ -332,9 +328,7 @@ func TestMessageWithContext(t *testing.T) {
 	})
 }
 
-// A message's ctx reaches handle as is, so a message taken once its ctx is done is handled with a done ctx, unless it
-// was passed through context.WithoutCancel. The ctx passed to Subscribe being done still unsubscribes the subscriber,
-// but no longer reaches handle for a message with a ctx of its own.
+// A message's ctx reaches handle as is, done or not, and the Subscribe ctx being done still unsubscribes.
 func TestMessageWithContext_Cancel(t *testing.T) {
 	t.Parallel()
 
@@ -373,8 +367,7 @@ func TestMessageWithContext_Cancel(t *testing.T) {
 	})
 }
 
-// Every error about a message sent with message.WithContext reaches both error handlers with that ctx, whatever the
-// error: the one handle returned, Broadcast giving up on the subscriber, or a message it took but discarded.
+// Every error about a message with its own ctx reaches both error handlers with that ctx, whatever the error.
 func TestMessageWithContext_ErrorHandlers(t *testing.T) {
 	t.Parallel()
 
@@ -461,8 +454,8 @@ func TestMessageWithContext_ErrorHandlers(t *testing.T) {
 	}
 }
 
-// neverDone is a ctx that is never done, of a type the context package does not know, so a ctx derived from it needs a
-// goroutine to wait for it, which only ends once that derived ctx is cancelled.
+// neverDone is a ctx type the context package does not know, so AfterFunc on it starts a goroutine, which leaks unless
+// stopped.
 type neverDone struct {
 	context.Context //nolint:containedctx // it is the ctx itself, not a struct carrying one
 

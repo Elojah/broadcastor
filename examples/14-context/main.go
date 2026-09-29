@@ -1,10 +1,6 @@
-// message.WithContext gives a message a ctx of its own, which handle, its middlewares and the error handlers get instead
-// of the ctx passed to Subscribe. The ctx passed to Broadcast only bounds how long Broadcast waits, and its values never
-// reach handle.
-//
-// Here a request broadcasts asynchronously and returns while the subscriber is still busy. Its ctx, cancelled once it
-// returns, would make the pending send give up, so the Broadcast is detached from it with context.WithoutCancel and
-// bounded by a timeout instead. The same detached ctx carries the request ID to handle and to the error handler.
+// message.WithContext gives a message its own ctx, which handle and the error handlers get instead of the Subscribe
+// ctx. Here a request broadcasts asynchronously and returns while the subscriber is busy, so the Broadcast is detached
+// from the request's ctx with context.WithoutCancel, bounded by a timeout, and carries the request ID.
 //
 // handle waits for release, standing in for slow work.
 package main

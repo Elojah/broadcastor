@@ -13,10 +13,8 @@ import (
 	"github.com/elojah/broadcastor/subscriber"
 )
 
-// BenchmarkBroadcast measures one Broadcast until every subscriber has handled its message, with subscribers that do
-// nothing, for each delivery mode. Waiting for every subscriber keeps async Broadcasts from piling up goroutines without
-// bound. Idle subscribers are always ready to take the next message, so a buffer gains nothing here: it only helps with
-// subscribers slower than the broadcaster.
+// BenchmarkBroadcast measures one Broadcast until every subscriber has handled it, for each delivery mode. Waiting
+// keeps async Broadcasts from piling up goroutines.
 func BenchmarkBroadcast(b *testing.B) {
 	modes := []struct {
 		name      string

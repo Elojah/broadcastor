@@ -103,7 +103,7 @@ func TestWithUnsubscribeDiscard_Self(t *testing.T) {
 }
 
 // A subscriber's default unsubscribe options apply to Close, and an Unsubscribe's own options override them.
-func TestSubscriberWithDefaultUnsubscribeOptions(t *testing.T) {
+func TestSubscriberWithUnsubscribeOptions(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
@@ -112,7 +112,7 @@ func TestSubscriberWithDefaultUnsubscribeOptions(t *testing.T) {
 			handled := &recorder[int]{hold: make(chan struct{})}
 			id := subscribe(t, b, handled.handle, subscriber.WithBuffer[int](2),
 				subscriber.WithErrorHandler[int](recordClosed(t, closed)),
-				subscriber.WithDefaultUnsubscribeOptions[int](subscriber.WithUnsubscribeDiscard()))
+				subscriber.WithUnsubscribeOptions[int](subscriber.WithUnsubscribeDiscard()))
 
 			return handled, id
 		}

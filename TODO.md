@@ -48,7 +48,7 @@ when nobody reads it.
   never yielded are reported as `*subscriber.ClosedError`.
 - `WithUnsubscribeDiscard` (not "drain", which in NATS means the opposite: process what is pending, then close): once
   unsubscribed, the subscriber reports what it takes as `*subscriber.ClosedError` instead of handling it, and a
-  `SubscribeSeq` loop ends. It can be the subscriber's default (`subscriber.WithDefaultUnsubscribeOptions`), which is
+  `SubscribeSeq` loop ends. It can be the subscriber's default (`subscriber.WithUnsubscribeOptions`), which is
   how `Close` applies it: `Close()` keeps its signature, and so still satisfies `io.Closer`. `WithUnsubscribeDeliver`
   overrides that default.
 - `subscriber.WithAutoUnsubscribe` (since made the default, see below): the subscriber is unsubscribed as soon as the
@@ -89,6 +89,12 @@ when nobody reads it.
   the ctx the same whatever the error, and no longer done just because `Broadcast` gave up. The trap of an async send
   cancelled with the request that broadcast it is documented, with `context.WithoutCancel` + `message.WithTimeout` +
   `message.WithContext` as the fix (`examples/14-context`), rather than detaching async sends from the `Broadcast` ctx.
+- `subscriber.WithStore(Store[T])`: every message a subscriber loses (the errors `handle` returns, panics with
+  `middleware.Recover`, timeouts, drops, discards) goes to the store's `Put` as a `subscriber.Record` (subscriber ID,
+  message, error), right before the error handlers, so each message a `Broadcast` picks the subscriber up for is either
+  handled or stored, exactly once. `Put` gets the values of the message's ctx, but a ctx that is never done. When it
+  fails, the handlers get a `*subscriber.StoreError` instead, which matches `ErrStore` and unwraps to both `Put`'s error
+  and the original one. The core only writes: reading back is under "Storage" below. `examples/15-store`.
 
 ## Mid-term: more delivery modes (v0.x)
 
@@ -111,9 +117,28 @@ when nobody reads it.
 
 ### Storage, retry, errors and groups (from the original list)
 
-- `WithStorage(Storage[T])`: an interface (`Put`, `Next`, `Ack`) holding messages that failed or timed out, to be retried
-  or replayed later. Ship an in-memory ring buffer first and add real backends later. This is what delayed or
-  persistent retries need: `middleware.Retry` waits in the subscriber's goroutine, so it only suits a few quick attempts.
+- Reading back what `subscriber.WithStore` stored, in a `store` package that imports `subscriber` (like `middleware`).
+  This is what delayed or persistent retries need: `middleware.Retry` waits in the subscriber's goroutine, so it only
+  suits a few quick attempts.
+  - [x] `store.Queue[T]`: `subscriber.Store[T]` plus `Next(ctx) (Entry[T], error)` and `Ack(ctx, id string) error`.
+    `Next` returns the oldest entry not yet acked, waiting until there is one, and the same one until it is acked, so
+    a single reader keeps them in order. `Entry` adds an ID the store assigns, opaque so that a Redis stream ID or a
+    SQLite rowid both fit.
+  - [x] `store.NewRing[T](size)`: in memory and bounded. `Put` never blocks and never fails: when full, it drops the
+    oldest entry and counts it (`Dropped()`). That can be the entry `Next` returned, whose `Ack` is then ignored.
+    `Next` waits on a channel `Put` closes and replaces, not a `sync.Cond`, so it can select on `ctx.Done()` and stays
+    durably blocked in a synctest bubble.
+  - [x] `store.Drain(ctx, q, handle, deadLetter)`: `Next`, `handle`, `Ack`. An entry `handle` fails on goes to
+    `deadLetter`, if set, and is acked. Once ctx is done, the entry is left unacked and `Drain` returns. Retries come from
+    wrapping `handle` in `middleware.Retry` (`Attempts: math.MaxInt` to wait for an uplink to come back). `handle` is
+    given the ID of the subscriber that lost the message.
+  - [x] `store.Enqueue(q) subscriber.Handler[T]`, a `handle` that only calls `Put`. With `Drain`, that is
+    store-and-forward: the subscriber is almost always idle, and the sink gets every message in order from one
+    goroutine.
+  - [x] `store.Filter(s, func(subscriber.Record[T]) bool)`, to keep permanent failures (a payload that does not decode)
+    out of a store. It returns a `store.PutFunc`, a func used as a store, rather than an interface (`ireturn`).
+  - [ ] Before tagging, try a SQLite `Queue` in a scratch branch, to check that the interface holds for a durable
+    backend.
 - `WithErrorStorage`: the old error channel done safely. That means a bounded store (a ring buffer that drops the oldest
   errors and counts the drops) which the user reads whenever they like and which never blocks when nobody reads it (see
   `TestSubscribe_ErrorsWithoutHandler`). It could simply be a ready-made error handler (`NewErrorBuffer(n)` returning the
@@ -130,7 +155,7 @@ when nobody reads it.
 ### Replay for late subscribers
 
 - `WithReplay(n)` on the `Broadcastor`: a new subscriber first gets the last `n` messages, and `n = 1` gives "current
-  value" semantics. It can reuse the ring buffer behind `WithStorage`.
+  value" semantics. It can reuse `store.Ring`.
 
 ### Topics
 
@@ -164,15 +189,15 @@ when nobody reads it.
 - Acknowledgements: `handle` acks explicitly, and unacked messages go back to storage after a visibility timeout. That
   moves delivery from at-most-once (today) to at-least-once. It needs a message envelope visible to `handle` (ID,
   timestamp, attempt count).
-- Dead letters: once the retry policy gives up, pass the message to a dead-letter handler or store instead of only
-  reporting it.
+- Dead letters: `subscriber.WithStore` already stores what `handle` still fails on once `middleware.Retry` gives up.
+  What is left is `store.Drain`'s `deadLetter`, for what fails again when read back.
 
 ### Pluggable transport
 
 - A `Transport` interface behind `Broadcast`, so the same API can fan out across processes: in-process (today's
   behaviour and the default), Redis pub/sub or streams, NATS, Postgres `LISTEN/NOTIFY`. Each backend goes in its own
   module to keep the core's dependencies minimal, and a `Codec[T]` handles serialization.
-- Durable backends for `WithStorage` and `WithReplay` (SQLite, Postgres, Redis streams), built the same way.
+- Durable backends for `subscriber.WithStore` (`store.Queue`) and `WithReplay` (SQLite, Postgres, Redis streams), built the same way.
 
 ### Toward v1.0
 
