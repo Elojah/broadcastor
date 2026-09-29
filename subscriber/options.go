@@ -44,6 +44,15 @@ func WithStore[T any](store Store[T]) Option[T] {
 	}
 }
 
+// WithFilter makes Broadcast skip the messages keep rejects: they are neither sent, nor counted, nor reported, so they
+// never hold Broadcast up nor reach the store. keep runs in Broadcast's goroutine, and may run concurrently, so it must
+// be quick and safe for concurrent use. Unlike WithMiddleware, it applies to SubscribeSeq too.
+func WithFilter[T any](keep func(msg T) bool) Option[T] {
+	return func(config *config[T]) {
+		config.filter = keep
+	}
+}
+
 // WithMiddleware appends middlewares around handle, the first one outermost. It has no effect on SubscribeSeq.
 func WithMiddleware[T any](middlewares ...Middleware[T]) Option[T] {
 	return func(config *config[T]) {

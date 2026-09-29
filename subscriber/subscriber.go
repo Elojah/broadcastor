@@ -39,6 +39,7 @@ type config[T any] struct {
 	unsubscribeDefaults unsubscription
 	errorHandler        func(ctx context.Context, err error)
 	store               Store[T]
+	filter              func(msg T) bool
 	middlewares         []Middleware[T]
 	detached            bool
 }
@@ -77,8 +78,11 @@ func (s *Subscriber[T]) ContextLifetime(ctx context.Context, unsubscribe func())
 
 // Deliver sends value to the subscriber and reports whether it took it, or, for an async message, whether a send was
 // started. A parallel message returns false and a channel that yields the result instead. Failures are reported with
-// the message's ctx, never ctx, which only bounds the wait.
+// the message's ctx, never ctx, which only bounds the wait. A value WithFilter rejects returns false, unreported.
 func (s *Subscriber[T]) Deliver(ctx context.Context, value T, options ...message.Option[T]) (bool, <-chan bool) {
+	if s.config.filter != nil && !s.config.filter(value) {
+		return false, nil
+	}
 	m := message.New(value, s.config.defaults, options...)
 
 	if !s.acquire() {

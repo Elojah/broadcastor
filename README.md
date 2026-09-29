@@ -83,6 +83,10 @@ for msg := range seq {
     `Close` discards.
 16. [`16-store-and-forward`](examples/16-store-and-forward/main.go): `store.Enqueue` and `store.Drain`, forwarding every
     message in order to an uplink that is down for a while, without holding `Broadcast` up.
+17. [`17-udp`](examples/17-udp/main.go): `transport/udp`, broadcasting the datagrams a sensor sends and forwarding them
+    to a dashboard.
+18. [`18-http`](examples/18-http/main.go): `transport/http`, broadcasting what is POSTed and streaming each client the
+    messages it picked with `subscriber.WithFilter`, as server-sent events.
 
 ## Delivery
 
@@ -106,6 +110,10 @@ In every mode, a subscriber that is unsubscribed while `Broadcast` is running ma
 them. A parallel `Broadcast` gets to every subscriber at once, so it waits at most `d` in all, and a ctx deadline gives
 every subscriber the same time. `subscriber.WithTimeout(d)` sets a default timeout for every message sent to one
 subscriber.
+
+`subscriber.WithFilter(keep)` makes `Broadcast` skip the messages a subscriber does not want, such as those for other
+topics when the message carries its topic. A skipped message is not sent, not counted and not reported, so it never
+holds `Broadcast` up nor reaches the subscriber's store, whereas one `handle` ignores has been delivered first.
 
 ## Middleware
 
@@ -239,6 +247,40 @@ go store.Drain(ctx, queue, retry(uplink), nil)
 ```
 
 `store.Filter` keeps some records out of a store, such as those that will never be handled.
+
+## Transports
+
+Package [`transport`](transport) connects a `Broadcastor` to the outside, at its edges. A source reads messages from a
+connection and broadcasts them, and a sink is a subscriber that writes them to one. So carrying messages from one
+process to another is a sink in the first and a source in the second, and subscribers, their errors and their stores
+stay local. Each protocol takes a connection the caller opened and closes, and funcs to decode and encode messages,
+which also see where each comes from or goes to.
+
+- [`transport/udp`](transport/udp): `udp.Receive` broadcasts every datagram a `net.PacketConn` reads, and `udp.Send`
+  is a handle that writes every message as a datagram.
+- [`transport/http`](transport/http): `http.Receive` is a handler that broadcasts every request, and `http.Stream`
+  sends every message to a client as server-sent events.
+
+A source passes its own message options to every `Broadcast`, chosen for what its protocol can afford:
+`udp.Receive` never waits for a subscriber (`message.WithNonBlocking`), since the socket's buffer would overflow
+meanwhile, and `http.Receive` waits for every one (`message.WithSync`), bounded by the request's ctx.
+`transport.WithMessageOptions` replaces them. Like any `Broadcast` option, they override the subscribers' defaults,
+delivery mode included.
+
+That is why `http.Stream` does not rely on a subscriber default to keep a slow client from holding `Broadcast` up.
+Each client's subscriber only puts messages in a `store.Ring` of its own (`store.Enqueue`), which `Stream` drains to
+the client. `Put` never waits, so whatever the `Broadcast` options, a slow client loses its oldest messages instead
+(`http.WithRingSize`).
+
+```go
+mux.Handle("POST /readings", httptransport.Receive(b, decode))
+mux.HandleFunc("GET /readings", func(w http.ResponseWriter, r *http.Request) {
+ room := r.URL.Query().Get("room")
+ _ = httptransport.Stream(w, r, b, encode, httptransport.WithSubscriberOptions(
+  subscriber.WithFilter(func(rd reading) bool { return rd.Room == room }),
+ ))
+})
+```
 
 ## Unsubscribing
 

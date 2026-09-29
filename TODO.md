@@ -18,11 +18,6 @@ when nobody reads it.
 
 - [ ] `Unsubscribe`'s ctx is unused. Give it a job or drop it before v1.
 
-### Small options
-
-- `subscriber.WithFilter(func(T) bool)`: skip unwanted messages before sending, so they never take a reference or hold
-  `Broadcast` up.
-
 ### Done
 
 - Package doc (`doc.go`) with the delivery guarantees, and doc comments on every exported identifier.
@@ -95,6 +90,9 @@ when nobody reads it.
   handled or stored, exactly once. `Put` gets the values of the message's ctx, but a ctx that is never done. When it
   fails, the handlers get a `*subscriber.StoreError` instead, which matches `ErrStore` and unwraps to both `Put`'s error
   and the original one. The core only writes: reading back is under "Storage" below. `examples/15-store`.
+- `subscriber.WithFilter(func(T) bool)`: `Deliver` skips the messages it rejects before `acquire`, so they are neither
+  sent, nor counted, nor reported: they never hold `Broadcast` up, and never reach the store as the subscriber's
+  losses, which a filter in `handle` could not prevent. It applies to `SubscribeSeq` too.
 
 ## Mid-term: more delivery modes (v0.x)
 
@@ -114,6 +112,8 @@ when nobody reads it.
   `Broadcast` enqueues and returns, and the subscriber gets messages in `Broadcast` order. The queue must be bounded,
   with an overflow policy (`Block`, `DropNewest`, `DropOldest`, `Error`), since an unbounded one just turns a slow
   subscriber into a memory problem. This generalises `subscriber.WithBuffer` and `message.WithNonBlocking`.
+  `store.Enqueue` into a `store.Ring`, drained by a goroutine of the caller's, already gives `DropOldest` without the
+  core's help (`http.Stream` does it), so check what a built-in queue would add first.
 
 ### Storage, retry, errors and groups (from the original list)
 
@@ -159,8 +159,9 @@ when nobody reads it.
 
 ### Topics
 
-- Subscribing to a subset of messages: either `subscriber.WithFilter`, or a keyed `Topics[K comparable, T]` holding one
-  `Broadcastor[T]` per key, with prefix or wildcard matching later on.
+- For now a message carries its topic, and subscribers pick theirs with `subscriber.WithFilter`, which calls the filter
+  of every subscriber on every `Broadcast`. A keyed `Topics[K comparable, T]` holding one `Broadcastor[T]` per key, with
+  prefix or wildcard matching, can come once that cost shows.
 
 ### Performance
 
@@ -192,12 +193,37 @@ when nobody reads it.
 - Dead letters: `subscriber.WithStore` already stores what `handle` still fails on once `middleware.Retry` gives up.
   What is left is `store.Drain`'s `deadLetter`, for what fails again when read back.
 
-### Pluggable transport
+### Transports, at the edges
 
-- A `Transport` interface behind `Broadcast`, so the same API can fan out across processes: in-process (today's
-  behaviour and the default), Redis pub/sub or streams, NATS, Postgres `LISTEN/NOTIFY`. Each backend goes in its own
-  module to keep the core's dependencies minimal, and a `Codec[T]` handles serialization.
-- Durable backends for `subscriber.WithStore` (`store.Queue`) and `WithReplay` (SQLite, Postgres, Redis streams), built the same way.
+Not a `Transport` behind `Broadcast`: a source reads a connection and broadcasts, and a sink is a subscriber writing to
+one (package `transport`). Cross-process fan-out is a sink in one process and a source in the other, so subscribers,
+their errors, their stores and `message.Config` stay local. Each transport takes a connection the caller owns and never
+dials, so reconnecting stays the client library's job, and decode and encode funcs that see the address, since a
+message carries its topic.
+
+- [x] `transport.Publisher` and `transport.Subscribable`, which `*Broadcastor` satisfies, so `transport` never imports
+  `broadcastor`. `transport.SourceOption`: `WithMessageOptions` replaces the source's default message options, which
+  override the subscribers' defaults, and `WithErrorHandler` gets what decode fails on.
+- [x] `transport/udp`: `Receive` (non-blocking by default, since the socket's buffer overflows while it waits) and
+  `Send`. `examples/17-udp`.
+- [x] `transport/http`: `Receive` (sync by default, bounded by the request's ctx, 400 on a decode error) and `Stream`
+  (server-sent events). `Stream` subscribes with `store.Enqueue` into a `store.Ring` per client and drains it, so a slow
+  client holds up no `Broadcast` whatever its options and loses its oldest messages: a subscriber default of
+  `message.WithNonBlocking` would be overridden by a source's delivery option. `examples/18-http`.
+- [ ] MQTT, in its own module under `transport/mqtt`, with a `go.work` for development, per-module tags, and CI and
+  `make check` looping over modules (`./...` stops at a nested `go.mod`). The first tag needs a tagged core to require.
+  Source: the client's callback broadcasts with `WithParallel` + `WithTimeout`, since callbacks must return quickly.
+  Sink: publish behind `store.Enqueue` + `store.Drain`. Decode gets the topic, encode returns it.
+- [ ] Modbus (polled: a ticker, sync + `WithTimeout(pollInterval)`, since a sync subscriber with no timeout would stop
+  the polling for good), then OPC UA (data-change notifications, parallel + timeout), each in its own module.
+- [ ] TCP: one subscription per connection like `http.Stream`, plus a framer.
+- Later: Redis, NATS or Postgres `LISTEN/NOTIFY` as further source and sink pairs.
+- Extract `middleware.RetryPolicy`'s backoff into `pkg/backoff` once a transport owns a reconnect loop, such as a TCP
+  source that dials. Until then `middleware.Retry` is its only user.
+- Carrying a trace or a message ID across processes is when the envelope from "Stronger delivery guarantees" becomes
+  necessary, and not before.
+- Durable backends for `subscriber.WithStore` (`store.Queue`) and `WithReplay` (SQLite, Postgres, Redis streams), each in
+  its own module.
 
 ### Toward v1.0
 

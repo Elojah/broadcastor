@@ -10,8 +10,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `subscriber`: `Subscriber`, the options for `Subscribe`/`SubscribeSeq`/`Unsubscribe`, `Handler`/`Middleware`, `Store`/`Record`, and the errors about messages.
 - `message`: `Message`, `Config`, `Delivery`, the options for `Broadcast`.
 - `middleware` (`Recover`, `WrapError`, `Retry`), `store` (`Queue`, `Ring`, `Drain`, `Enqueue`, `Filter`), `pkg/gate`, `examples/`.
+- `transport` (`Publisher`, `Subscribable`, `SourceOption`), `transport/udp`, `transport/http` (package `http`, imported as `httptransport`).
 
-Imports go one way: `broadcastor` → `subscriber` → `message`. `middleware` and `store` import `subscriber`, never `broadcastor`. Planned work is in TODO.md.
+Imports go one way: `broadcastor` → `subscriber` → `message`. `middleware` and `store` import `subscriber`, never `broadcastor`, and `transport` imports `store` too, never `broadcastor`. Planned work is in TODO.md.
 
 ## Commands
 
@@ -48,6 +49,7 @@ Any change to channels, removal or error reporting must keep these.
 
 - The `Broadcast` ctx only bounds the wait. Async sends keep using it after `Broadcast` returns. That is documented (`message.WithAsync`, `examples/14-context`) rather than changed: detaching them automatically would leave no way to cancel sends piling up behind a stuck subscriber.
 - `message.WithContext` replaces the subscriber's ctx for one message, without merging. nil means none, which overrides a default (staticcheck SA1012 is silenced in the test that does it).
+- Transports are edges (a source broadcasts, a sink subscribes), not a backend behind `Broadcast`. They take a connection the caller owns and never dial. A per-client sink (`http.Stream`) subscribes with `store.Enqueue` into its own `store.Ring`, never with a non-blocking default, which a source's delivery option would override (`TestStream_SlowClient`).
 - The library applies no middleware of its own. The recommended order is `Recover`, `WrapError`, `Retry`, then the user's. Middlewares don't apply to `SubscribeSeq`.
 - `message.Config` has no `T` (`message.Option[T]` keeps it only for the public API), which is why there is no message-level store.
 - In `store`, `Enqueue`'s `Put` and `Drain`'s dead-letter `Put` and `Ack` get `context.WithoutCancel`, like `report`'s `Put`: a done ctx is often why a message is stored, and an entry `Drain` handled must be acked even if ctx ended meanwhile (`TestDrain_AckOnceHandled`). An entry whose handle failed once ctx is done stays in the queue, for the next `Drain`.
@@ -56,6 +58,7 @@ Any change to channels, removal or error reporting must keep these.
 
 - The root package tests (`broadcastor_test`) cover `subscriber` and `message` too, through a `Broadcastor`, so those have no test files. Name a test after its option, package included: `TestSubscriberWithBuffer`, `TestMessageWithAsync`.
 - Most tests run in a `synctest` bubble, where a leaked subscriber goroutine fails the test. So subscribe with `subscribeCtx(t)` (`context.WithoutCancel(t.Context())`): `t.Context()` would unsubscribe a leak instead of failing. `synctest.Wait()` after `Unsubscribe` waits until the subscriber is done. Bound every wait with `deadlockTimeout`.
+- Transport tests on real sockets run in real time, since a goroutine blocked in a syscall is not durably blocked. `http.Stream` tests that need no connection use a `ResponseRecorder` in a bubble.
 - A goroutine blocked on a mutex is not durably blocked, so `synctest.Wait()` would hang: `pkg/gate` tests and `TestUnsubscribe_SeveralThenDrain` run in real time.
 - Add `Recover` or `WrapError` only to check a `PanicError` or `HandleError`. Other tests check `handle`'s raw error.
 - Examples (`examples/NN-name/`, listed in the README) each have an `Example()` in `main_test.go`. They run in real time, so their output must not depend on scheduling: synchronise with channels or a `WaitGroup`, or use `// Unordered output:`. A slow `handle` waits on a `release` channel, never sleeps.
