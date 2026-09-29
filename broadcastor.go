@@ -63,7 +63,7 @@ func (b *Broadcastor[T]) SubscribeSeq(ctx context.Context, options ...subscriber
 
 // Unsubscribe removes the subscriber, or returns a *SubscriberNotFoundError. It never waits, so handle can call it, and
 // the subscriber may still process messages it already took. options override its
-// subscriber.WithDefaultUnsubscribeOptions. ctx is unused.
+// subscriber.WithUnsubscribeOptions. ctx is unused.
 func (b *Broadcastor[T]) Unsubscribe(ctx context.Context, id uuid.UUID, options ...subscriber.UnsubscribeOption) error {
 	if !b.remove(id, options...) {
 		return &SubscriberNotFoundError{SubscriberID: id}

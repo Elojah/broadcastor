@@ -10,7 +10,7 @@ import (
 // Option configures a subscriber, when passed to Subscribe or SubscribeSeq.
 type Option[T any] func(config *config[T])
 
-// UnsubscribeOption configures an Unsubscribe, or every one with WithDefaultUnsubscribeOptions.
+// UnsubscribeOption configures an Unsubscribe, or every one with WithUnsubscribeOptions.
 type UnsubscribeOption func(unsubscription *unsubscription)
 
 // unsubscription is what UnsubscribeOptions set.
@@ -70,9 +70,9 @@ func WithDefaultMessageOptions[T any](options ...message.Option[T]) Option[T] {
 	}
 }
 
-// WithDefaultUnsubscribeOptions sets unsubscribe options for every Unsubscribe of the subscriber, which its own options
+// WithUnsubscribeOptions sets unsubscribe options for every Unsubscribe of the subscriber, which its own options
 // override, and for Close, which has none.
-func WithDefaultUnsubscribeOptions[T any](options ...UnsubscribeOption) Option[T] {
+func WithUnsubscribeOptions[T any](options ...UnsubscribeOption) Option[T] {
 	return func(config *config[T]) {
 		for _, option := range options {
 			option(&config.unsubscribeDefaults)
@@ -97,7 +97,7 @@ func WithUnsubscribeDiscard() UnsubscribeOption {
 }
 
 // WithUnsubscribeDeliver makes the subscriber handle every message it takes once unsubscribed. It is the default, so
-// it only overrides WithDefaultUnsubscribeOptions.
+// it only overrides WithUnsubscribeOptions.
 func WithUnsubscribeDeliver() UnsubscribeOption {
 	return func(unsubscription *unsubscription) {
 		unsubscription.discard = false

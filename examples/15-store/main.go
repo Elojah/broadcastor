@@ -58,7 +58,7 @@ func main() {
 	},
 		subscriber.WithBuffer[int](2),
 		subscriber.WithStore[int](lost),
-		subscriber.WithDefaultUnsubscribeOptions[int](subscriber.WithUnsubscribeDiscard()),
+		subscriber.WithUnsubscribeOptions[int](subscriber.WithUnsubscribeDiscard()),
 	)
 	if err != nil {
 		log.Fatal(err)

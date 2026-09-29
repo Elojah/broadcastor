@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -19,7 +21,10 @@ import (
 	"github.com/elojah/broadcastor/subscriber"
 )
 
-var errPut = errors.New("put failed")
+var (
+	errPut      = errors.New("put failed")
+	errSinkDown = errors.New("sink down")
+)
 
 // The store is given every message handle fails on, with the subscriber's ID and the error as handle returned it, right
 // before the error handler is given that error. Messages handled without error are not stored.
@@ -235,7 +240,7 @@ func TestSubscriberWithStore_Context(t *testing.T) {
 		handled := &recorder[int]{hold: make(chan struct{})}
 		puts := &recorder[string]{}
 		_, err := b.Subscribe(ctx, handled.handle, subscriber.WithBuffer[int](2),
-			subscriber.WithDefaultUnsubscribeOptions[int](subscriber.WithUnsubscribeDiscard()),
+			subscriber.WithUnsubscribeOptions[int](subscriber.WithUnsubscribeDiscard()),
 			subscriber.WithStore[int](storeFunc(func(ctx context.Context, r subscriber.Record[int]) error {
 				puts.record(fmt.Sprintf("%d: %v, %v", r.Message, ctx.Value(key{}), ctx.Err()))
 
@@ -274,7 +279,7 @@ func TestSubscriberWithStore_ExactlyOnce(t *testing.T) {
 		options := []subscriber.Option[int]{
 			subscriber.WithBuffer[int](1),
 			subscriber.WithStore[int](stored),
-			subscriber.WithDefaultUnsubscribeOptions[int](subscriber.WithUnsubscribeDiscard()),
+			subscriber.WithUnsubscribeOptions[int](subscriber.WithUnsubscribeDiscard()),
 		}
 		handled := &recorder[int]{}
 		handleID := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
@@ -400,6 +405,65 @@ func TestSubscriberWithStore_Ring(t *testing.T) {
 		}
 		if n := lost.Len(); n != 0 {
 			t.Errorf("Len = %d once everything is read back, want 0", n)
+		}
+	})
+}
+
+// With store.Enqueue as handle and store.Drain forwarding to a sink that is down, Broadcast never waits for the sink, and
+// once the sink is back up, it gets every message once, in order.
+func TestStoreAndForward(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := broadcastor.NewBroadcastor[int]()
+		queue := store.NewRing[int](8)
+		id := subscribe(t, b, store.Enqueue[int](queue))
+
+		var up atomic.Bool
+		sent := &recorder[int]{}
+		sink := middleware.Retry[int](middleware.RetryPolicy{Attempts: math.MaxInt, Delay: time.Second})(
+			func(_ context.Context, _ uuid.UUID, msg int) error {
+				if !up.Load() {
+					return errSinkDown
+				}
+				sent.record(msg)
+
+				return nil
+			})
+		ctx, cancel := context.WithCancel(t.Context())
+		drained := make(chan error, 1)
+		go func() { drained <- store.Drain(ctx, queue, sink, nil) }()
+
+		start := time.Now()
+		for msg := 1; msg <= 5; msg++ {
+			b.Broadcast(t.Context(), msg)
+		}
+		if elapsed := time.Since(start); elapsed != 0 {
+			t.Errorf("Broadcast waited %v for a sink that is down, want no wait", elapsed)
+		}
+		time.Sleep(10 * time.Second)
+		if got := sent.messages(); len(got) != 0 {
+			t.Fatalf("sink got %v while down, want nothing", got)
+		}
+		up.Store(true)
+		time.Sleep(time.Second) // until the next retry
+		unsubscribe(t, b, id)
+		synctest.Wait()
+		cancel()
+
+		select {
+		case err := <-drained:
+			if !errors.Is(err, context.Canceled) {
+				t.Errorf("Drain = %v, want %v", err, context.Canceled)
+			}
+		case <-time.After(deadlockTimeout):
+			t.Fatalf("still waiting for Drain after %v: deadlock", deadlockTimeout)
+		}
+		if got, want := sent.messages(), []int{1, 2, 3, 4, 5}; !slices.Equal(got, want) {
+			t.Errorf("sink got %v, want %v", got, want)
+		}
+		if n := queue.Len(); n != 0 {
+			t.Errorf("Len = %d once forwarded, want 0", n)
 		}
 	})
 }

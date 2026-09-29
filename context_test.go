@@ -57,7 +57,7 @@ func TestSubscribe_ContextDoneWhileHandling(t *testing.T) {
 		closed := &recorder[int]{}
 		id, err := b.Subscribe(ctx, handled.handle, subscriber.WithBuffer[int](1),
 			subscriber.WithErrorHandler[int](recordClosed(t, closed)),
-			subscriber.WithDefaultUnsubscribeOptions[int](subscriber.WithUnsubscribeDiscard()))
+			subscriber.WithUnsubscribeOptions[int](subscriber.WithUnsubscribeDiscard()))
 		if err != nil {
 			t.Fatalf("Subscribe: %v", err)
 		}

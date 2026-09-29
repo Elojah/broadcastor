@@ -48,7 +48,7 @@ when nobody reads it.
   never yielded are reported as `*subscriber.ClosedError`.
 - `WithUnsubscribeDiscard` (not "drain", which in NATS means the opposite: process what is pending, then close): once
   unsubscribed, the subscriber reports what it takes as `*subscriber.ClosedError` instead of handling it, and a
-  `SubscribeSeq` loop ends. It can be the subscriber's default (`subscriber.WithDefaultUnsubscribeOptions`), which is
+  `SubscribeSeq` loop ends. It can be the subscriber's default (`subscriber.WithUnsubscribeOptions`), which is
   how `Close` applies it: `Close()` keeps its signature, and so still satisfies `io.Closer`. `WithUnsubscribeDeliver`
   overrides that default.
 - `subscriber.WithAutoUnsubscribe` (since made the default, see below): the subscriber is unsubscribed as soon as the
@@ -128,14 +128,15 @@ when nobody reads it.
     oldest entry and counts it (`Dropped()`). That can be the entry `Next` returned, whose `Ack` is then ignored.
     `Next` waits on a channel `Put` closes and replaces, not a `sync.Cond`, so it can select on `ctx.Done()` and stays
     durably blocked in a synctest bubble.
-  - [ ] `store.Drain(ctx, q, handle, deadLetter)`: `Next`, `handle`, `Ack`. An entry `handle` fails on goes to
+  - [x] `store.Drain(ctx, q, handle, deadLetter)`: `Next`, `handle`, `Ack`. An entry `handle` fails on goes to
     `deadLetter`, if set, and is acked. Once ctx is done, the entry is left unacked and `Drain` returns. Retries come from
     wrapping `handle` in `middleware.Retry` (`Attempts: math.MaxInt` to wait for an uplink to come back). `handle` is
     given the ID of the subscriber that lost the message.
-  - [ ] `store.Enqueue(q) subscriber.Handler[T]`, a `handle` that only calls `Put`. With `Drain`, that is
+  - [x] `store.Enqueue(q) subscriber.Handler[T]`, a `handle` that only calls `Put`. With `Drain`, that is
     store-and-forward: the subscriber is almost always idle, and the sink gets every message in order from one
     goroutine.
-  - [ ] `store.Filter(s, func(error) bool)`, to keep permanent failures (a payload that does not decode) out of a store.
+  - [x] `store.Filter(s, func(subscriber.Record[T]) bool)`, to keep permanent failures (a payload that does not decode)
+    out of a store. It returns a `store.PutFunc`, a func used as a store, rather than an interface (`ireturn`).
   - [ ] Before tagging, try a SQLite `Queue` in a scratch branch, to check that the interface holds for a durable
     backend.
 - `WithErrorStorage`: the old error channel done safely. That means a bounded store (a ring buffer that drops the oldest
