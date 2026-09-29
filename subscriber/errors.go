@@ -7,22 +7,16 @@ import (
 	"github.com/google/uuid"
 )
 
-// Sentinels matched by the typed errors below, so that errors.Is can tell them apart without knowing T.
+// Sentinels matched by the error types below with errors.Is, which does not need T.
 var (
-	// ErrClosed is matched by *ClosedError.
-	ErrClosed = errors.New("subscriber closed")
-	// ErrTimeout is matched by *TimeoutError.
+	ErrClosed  = errors.New("subscriber closed")
 	ErrTimeout = errors.New("timeout")
-	// ErrDropped is matched by *DroppedError.
 	ErrDropped = errors.New("message dropped")
-	// ErrPanic is matched by *PanicError.
-	ErrPanic = errors.New("panic in handle")
-	// ErrStore is matched by *StoreError.
-	ErrStore = errors.New("store failed")
+	ErrPanic   = errors.New("panic in handle")
+	ErrStore   = errors.New("store failed")
 )
 
-// HandleError is what middleware.WrapError makes of an error returned by the handler it wraps: the subscriber and the
-// message it failed on, and the error it returned.
+// HandleError is what middleware.WrapError makes of handle's errors.
 type HandleError[T any] struct {
 	SubscriberID uuid.UUID
 	Message      T
@@ -37,9 +31,8 @@ func (e *HandleError[T]) Unwrap() error {
 	return e.Err
 }
 
-// PanicError is what middleware.Recover makes of a panic in the handler it wraps: the subscriber and the message it
-// panicked on, the value it panicked with, and the stack of the goroutine at that point.
-// It unwraps to Value when Value is an error, and matches ErrPanic.
+// PanicError is what middleware.Recover makes of a panic. It matches ErrPanic, and unwraps to Value when that is an
+// error.
 type PanicError[T any] struct {
 	SubscriberID uuid.UUID
 	Message      T
@@ -61,9 +54,8 @@ func (e *PanicError[T]) Is(target error) bool {
 	return target == ErrPanic
 }
 
-// TimeoutError is what an error handler is given when Broadcast gives up handing a message to a subscriber: Err is the
-// Broadcast ctx's error, or context.DeadlineExceeded when the message's timeout ran out first. It matches ErrTimeout,
-// and unwraps to Err.
+// TimeoutError is reported when Broadcast gives up on a subscriber: Err is the Broadcast ctx's error, or
+// context.DeadlineExceeded for the message's timeout. It matches ErrTimeout, and unwraps to Err.
 type TimeoutError[T any] struct {
 	SubscriberID uuid.UUID
 	Message      T
@@ -82,8 +74,7 @@ func (e *TimeoutError[T]) Is(target error) bool {
 	return target == ErrTimeout
 }
 
-// DroppedError is what an error handler is given when a message sent with message.WithNonBlocking is dropped, because
-// the subscriber could not take it right away. It matches ErrDropped.
+// DroppedError is reported when a non-blocking Broadcast finds the subscriber busy. It matches ErrDropped.
 type DroppedError[T any] struct {
 	SubscriberID uuid.UUID
 	Message      T
@@ -97,10 +88,8 @@ func (e *DroppedError[T]) Is(target error) bool {
 	return target == ErrDropped
 }
 
-// ClosedError is what an error handler is given when a subscriber misses a message because it was unsubscribed:
-// either Broadcast skips it, because its channel was closed between Broadcast picking it up and sending to it, or it
-// took the message but its SubscribeSeq loop ended before yielding it, or it took the message after being unsubscribed
-// with WithUnsubscribeDiscard. It matches ErrClosed.
+// ClosedError is reported for a message a subscriber misses because it was unsubscribed: skipped by a Broadcast under
+// way, left over by a SubscribeSeq loop, or discarded (WithUnsubscribeDiscard). It matches ErrClosed.
 type ClosedError[T any] struct {
 	SubscriberID uuid.UUID
 	Message      T
@@ -114,9 +103,8 @@ func (e *ClosedError[T]) Is(target error) bool {
 	return target == ErrClosed
 }
 
-// StoreError is what an error handler is given about a message the subscriber lost when its Store (WithStore) failed to
-// store it: Err is the error Put returned, and Cause the error about the message that the handlers would otherwise have
-// been given. It matches ErrStore, and unwraps to both Err and Cause, so errors.Is and errors.As still find Cause.
+// StoreError replaces the error about a lost message when the Store fails to store it: Err is Put's, Cause the
+// original. It matches ErrStore, and unwraps to both.
 type StoreError[T any] struct {
 	SubscriberID uuid.UUID
 	Message      T

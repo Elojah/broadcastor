@@ -9,10 +9,8 @@ import (
 	"github.com/elojah/broadcastor/subscriber"
 )
 
-// Recover makes a panic in the handler it wraps a *subscriber.PanicError, with the value it panicked with and the stack
-// at that point, instead of letting the panic crash the program. The subscriber's error handlers are given it like any
-// other error, and the subscriber then goes on with the next message. Only panics in the handler it wraps are
-// recovered: not those in outer middlewares, nor in error handlers.
+// Recover turns a panic in the handler it wraps into a *subscriber.PanicError, and the subscriber goes on with the next
+// message. Panics in outer middlewares and in error handlers are not recovered.
 func Recover[T any]() subscriber.Middleware[T] {
 	return func(next subscriber.Handler[T]) subscriber.Handler[T] {
 		return func(ctx context.Context, id uuid.UUID, msg T) (err error) {

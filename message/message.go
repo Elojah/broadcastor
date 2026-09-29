@@ -1,6 +1,4 @@
-// Package message holds how a broadcastor.Broadcastor hands a message to each subscriber: the options passed to
-// Broadcast or to subscriber.WithDefaultMessageOptions, and the Message they set up. Broadcast is the Broadcastor's
-// method.
+// Package message holds the options passed to Broadcast and the Message they configure.
 package message
 
 import (
@@ -8,47 +6,41 @@ import (
 	"time"
 )
 
-// Delivery is how Broadcast hands a message to a subscriber. The modes exclude each other, so the last option that sets
-// one wins.
+// Delivery is how Broadcast hands a message to a subscriber. The last option that sets it wins.
 type Delivery int
 
 const (
-	// DeliverySync makes Broadcast wait for the subscriber to take the message. It is the default.
+	// DeliverySync waits for each subscriber in turn. It is the default.
 	DeliverySync Delivery = iota
-	// DeliveryParallel makes Broadcast wait for the subscriber from a goroutine of its own, and return once every such
-	// goroutine is done.
+	// DeliveryParallel sends to every subscriber at once, then waits for all of them.
 	DeliveryParallel
-	// DeliveryAsync makes Broadcast wait for the subscriber from a goroutine of its own, and return right away.
+	// DeliveryAsync sends to every subscriber at once and returns right away.
 	DeliveryAsync
-	// DeliveryNonBlocking makes Broadcast drop the message if the subscriber cannot take it right away.
+	// DeliveryNonBlocking drops the message for a subscriber that cannot take it right away.
 	DeliveryNonBlocking
 )
 
-// Message is what a single Broadcast sends to one subscriber: the value, and how it is sent.
+// Message is what one Broadcast sends to one subscriber.
 type Message[T any] struct {
 	Value  T
 	Config Config
 }
 
-// Config is how a single Broadcast sends its message to one subscriber, as set by the subscriber's default message
-// options and then the Broadcast's own. Options change nothing else.
+// Config is how one Broadcast sends its message to one subscriber.
 type Config struct {
 	Delivery Delivery
 
-	// Timeout bounds how long Broadcast waits for the subscriber to take the message, on top of ctx, or is 0 for none.
+	// Timeout bounds the wait for the subscriber to take the message. 0 means none.
 	Timeout time.Duration
 
-	// ErrorHandler is called with every error about this message, on top of the subscriber's own, or nil for none.
+	// ErrorHandler gets every error about this message, after the subscriber's own. nil means none.
 	ErrorHandler func(ctx context.Context, err error)
 
-	// Context is what the message is handled and its errors reported with, instead of the subscriber's ctx, or nil for
-	// the subscriber's.
+	// Context replaces the subscriber's ctx for this message. nil means none.
 	Context context.Context //nolint:containedctx // it travels with the message, which outlives Broadcast
 }
 
-// New returns what a Broadcast sends to one subscriber: value, with config, that subscriber's defaults, and the
-// Broadcast's options applied on top, so that they override the defaults. config is a copy, so the defaults are left as
-// they were.
+// New applies options on top of config, a subscriber's defaults, which are left untouched since config is a copy.
 func New[T any](value T, config Config, options ...Option[T]) Message[T] {
 	for _, option := range options {
 		option(&config)

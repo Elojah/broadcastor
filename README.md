@@ -191,27 +191,31 @@ without needing to know the message type.
 subscriber's ID, the message, and the error about it, whatever it is in the table above. So every message a `Broadcast`
 picks the subscriber up for is either handled or stored, once, and the store can be read later to handle the stored
 ones again. Make `subscriber.WithUnsubscribeDiscard` the subscriber's default, and `Close` stores whatever it had not
-handled yet:
+handled yet.
+
+Package `store` holds ready-made stores. `store.Ring` keeps the records in memory, with room for a fixed number of
+them: `Put` never waits, and once the ring is full it drops the oldest record and counts it (`Dropped`). It is a
+`store.Queue`, which a single reader reads back oldest first: `Next` returns the oldest entry not yet acked, waiting
+until there is one, and returns the same entry until `Ack` removes it.
 
 ```go
-type deadLetters struct {
-	mu      sync.Mutex
-	records []subscriber.Record[string]
-}
-
-func (d *deadLetters) Put(_ context.Context, r subscriber.Record[string]) error {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.records = append(d.records, r)
-
-	return nil
-}
-
+lost := store.NewRing[string](1024)
 id, err := b.Subscribe(ctx, handle,
-	subscriber.WithStore[string](&deadLetters{}),
+	subscriber.WithStore[string](lost),
 	subscriber.WithDefaultUnsubscribeOptions[string](subscriber.WithUnsubscribeDiscard()),
 )
+...
+for {
+	entry, err := lost.Next(ctx) // entry.SubscriberID, entry.Message, entry.Err
+	if err != nil {
+		break // ctx is done
+	}
+	...
+	lost.Ack(ctx, entry.ID)
+}
 ```
+
+Any type with a `Put(ctx, subscriber.Record[T]) error` method is a store, so it can also write to a database or a log.
 
 `Put` is called right before the error handlers, from wherever they are, including from `Broadcast` for the messages it
 could not hand over. So a slow `Put` holds things up like a slow error handler (and makes a non-blocking `Broadcast`

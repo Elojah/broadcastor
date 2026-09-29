@@ -1,11 +1,8 @@
-// subscriber.WithMiddleware wraps handle in middlewares: each one is called with the message, and calls the next one,
-// or not. Here middleware.Retry calls handle again when it fails with an error worth retrying, up to 3 attempts,
-// waiting 10ms and then 20ms in between. logAttempts, a middleware of our own given after Retry, sees every attempt.
-// Only the error of the last one reaches middleware.WrapError, given first so that it wraps Retry, which makes it a
-// *subscriber.HandleError for the error handler.
+// subscriber.WithMiddleware wraps handle: middleware.Retry retries a retryable error up to 3 attempts, waiting 10ms then
+// 20ms, logAttempts, our own, sees every attempt, and middleware.WrapError wraps the last error for the error handler.
 //
-// Middlewares run in the subscriber's goroutine, like handle and the error handler, so the output is in message order.
-// While Retry waits, the subscriber takes no message, and the next Broadcast waits for it.
+// Middlewares run in the subscriber's goroutine, so the output is in message order, and Broadcast waits while Retry
+// does.
 package main
 
 import (

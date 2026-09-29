@@ -1,10 +1,7 @@
-// A store is given every message a subscriber loses, whatever the reason, so that it can be handled again later. Here
-// handle fails on negative numbers, and Close finds two messages still in the subscriber's buffer, which it discards,
-// since subscriber.WithUnsubscribeDiscard is the subscriber's default. Every message is either handled or stored, so
-// none is lost.
+// A store is given every message a subscriber loses. Here handle fails on negative numbers, and Close makes the
+// subscriber discard the two messages left in its buffer (subscriber.WithUnsubscribeDiscard), so none is lost.
 //
-// The store is given the messages handle fails on and those the subscriber discards from the subscriber's goroutine, in
-// order, so the output is in message order.
+// The store is called from the subscriber's goroutine, so the output is in message order.
 package main
 
 import (

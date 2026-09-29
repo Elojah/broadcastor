@@ -1,6 +1,5 @@
-// A parallel Broadcast sends the message to every subscriber at once, each from a goroutine of its own, and returns
-// once each has taken it or missed it. A slow subscriber then holds up nobody else, but still holds up Broadcast, so the
-// messages of successive Broadcasts from one goroutine reach every subscriber in order, unlike with message.WithAsync.
+// A parallel Broadcast sends to every subscriber at once and waits for all of them: a slow subscriber holds up nobody
+// else, and messages stay in order, unlike with message.WithAsync.
 //
 // The slow subscriber's handle waits for release, which the fast one closes once it has got "second".
 package main

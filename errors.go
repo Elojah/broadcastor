@@ -6,15 +6,13 @@ import (
 	"github.com/google/uuid"
 )
 
-// ErrClosed is returned by Subscribe and SubscribeSeq once Close has been called, and by every Close after the first.
+// ErrClosed is returned by Subscribe and SubscribeSeq after Close, and by every Close after the first.
 var ErrClosed = errors.New("broadcastor closed")
 
-// ErrSubscriberNotFound is matched by *SubscriberNotFoundError, so that errors.Is can tell it apart. The errors about a
-// subscriber's messages are in package subscriber.
+// ErrSubscriberNotFound is matched by *SubscriberNotFoundError.
 var ErrSubscriberNotFound = errors.New("subscriber not found")
 
-// SubscriberNotFoundError is what Unsubscribe returns for an ID that is not subscribed, or no longer. It matches
-// ErrSubscriberNotFound.
+// SubscriberNotFoundError is what Unsubscribe returns for an unknown ID.
 type SubscriberNotFoundError struct {
 	SubscriberID uuid.UUID
 }

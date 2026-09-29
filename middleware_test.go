@@ -18,9 +18,7 @@ import (
 
 var errMiddleware = errors.New("middleware failed")
 
-// Middlewares wrap handle in the order they are given, the first one outermost, across several
-// subscriber.WithMiddleware options, and get the ctx passed to Subscribe and the subscriber's ID. A nil middleware is
-// skipped.
+// Middlewares wrap handle in order, the first one outermost, across several options, and nil ones are skipped.
 func TestSubscriberWithMiddleware(t *testing.T) {
 	t.Parallel()
 

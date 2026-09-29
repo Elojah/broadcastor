@@ -120,12 +120,12 @@ when nobody reads it.
 - Reading back what `subscriber.WithStore` stored, in a `store` package that imports `subscriber` (like `middleware`).
   This is what delayed or persistent retries need: `middleware.Retry` waits in the subscriber's goroutine, so it only
   suits a few quick attempts.
-  - [ ] `store.Queue[T]`: `subscriber.Store[T]` plus `Next(ctx) (Entry[T], error)` and `Ack(ctx, id string) error`.
+  - [x] `store.Queue[T]`: `subscriber.Store[T]` plus `Next(ctx) (Entry[T], error)` and `Ack(ctx, id string) error`.
     `Next` returns the oldest entry not yet acked, waiting until there is one, and the same one until it is acked, so
     a single reader keeps them in order. `Entry` adds an ID the store assigns, opaque so that a Redis stream ID or a
     SQLite rowid both fit.
-  - [ ] `store.NewRing[T](size)`: in memory and bounded. `Put` never blocks and never fails: when full, it drops the
-    oldest entry and counts it (`Dropped()`). That can be the entry `Next` returned, whose `Ack` is then a no-op.
+  - [x] `store.NewRing[T](size)`: in memory and bounded. `Put` never blocks and never fails: when full, it drops the
+    oldest entry and counts it (`Dropped()`). That can be the entry `Next` returned, whose `Ack` is then ignored.
     `Next` waits on a channel `Put` closes and replaces, not a `sync.Cond`, so it can select on `ctx.Done()` and stays
     durably blocked in a synctest bubble.
   - [ ] `store.Drain(ctx, q, handle, deadLetter)`: `Next`, `handle`, `Ack`. An entry `handle` fails on goes to

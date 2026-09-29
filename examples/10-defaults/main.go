@@ -1,7 +1,6 @@
-// Subscribers with different needs, set up with subscriber.WithDefaultMessageOptions. The log must get every message,
-// so Broadcast waits for it, as by default. The dashboard is slow and must not hold Broadcast up, so it defaults to
-// message.WithNonBlocking and misses updates while it is busy. A Broadcast that everyone must get passes
-// message.WithSync, which overrides the dashboard's default.
+// Subscribers with different defaults (subscriber.WithDefaultMessageOptions): Broadcast waits for the log, while the
+// slow dashboard defaults to message.WithNonBlocking and misses updates while busy. message.WithSync overrides that for
+// a message everyone must get.
 //
 // The dashboard's handle waits for release, standing in for slow work.
 package main

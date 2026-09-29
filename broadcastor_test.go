@@ -21,14 +21,8 @@ import (
 	"github.com/elojah/broadcastor/subscriber"
 )
 
-// deadlockTimeout bounds every wait in these tests, so a deadlock fails the test instead of hanging until go test's own
-// timeout. Inside a synctest bubble the fake clock only advances once every goroutine is blocked, so there it fires
-// exactly when the bubble is deadlocked.
-//
-// Most tests run in a synctest bubble for another reason too: a subscriber's goroutine only ends once its channel is
-// closed, and synctest.Test fails if any goroutine is left blocked when the test returns. So a channel that is never
-// closed fails the test, with the stuck subscriber's goroutine in the trace, and synctest.Wait after an Unsubscribe
-// waits for the subscriber to finish processing what it was sent.
+// deadlockTimeout bounds every wait, so a deadlock fails the test instead of hanging. In a synctest bubble, it fires
+// exactly when the bubble is deadlocked. The bubble also fails a test that leaves a subscriber's channel open.
 const deadlockTimeout = 10 * time.Second
 
 func TestBroadcast_DeliversAllMessagesInOrder(t *testing.T) {
@@ -254,9 +248,8 @@ func TestBroadcast_ContextUnblocksStuckSubscriber(t *testing.T) {
 	})
 }
 
-// A subscriber is unsubscribed while it is stuck in handle and a Broadcast is waiting to send to it. That Broadcast
-// can only give up once ctx is done, and it must still close the channel on its way out, or the subscriber's goroutine
-// never ends once handle returns.
+// Unsubscribing a subscriber stuck in handle, while a Broadcast waits on it: that Broadcast must close the channel
+// when it gives up.
 func TestBroadcast_ContextDoneAfterUnsubscribe(t *testing.T) {
 	t.Parallel()
 
@@ -289,9 +282,7 @@ func TestBroadcast_ContextDoneAfterUnsubscribe(t *testing.T) {
 	})
 }
 
-// handle unsubscribes its own subscription while a Broadcast is waiting to send to it. The subscriber only reads
-// again once handle returns, so Unsubscribe must not wait for that Broadcast. The Broadcast then delivers its message
-// and closes the channel.
+// handle unsubscribes itself while a Broadcast waits on it, so Unsubscribe must not wait for that Broadcast.
 func TestUnsubscribe_SelfDuringBroadcast(t *testing.T) {
 	t.Parallel()
 
@@ -445,9 +436,8 @@ func TestSubscriberWithBuffer(t *testing.T) {
 	})
 }
 
-// An async Broadcast returns without waiting for a stuck subscriber, and reaches the other subscribers without waiting
-// for it either. It takes its references before returning, so subscribers that unsubscribe right after still get the
-// message.
+// An async Broadcast waits for no stuck subscriber, and takes its references before returning, so subscribers that
+// unsubscribe right after still get the message.
 func TestMessageWithAsync(t *testing.T) {
 	t.Parallel()
 
@@ -659,9 +649,7 @@ func TestSubscriberWithDefaultMessageOptions_ErrorHandlerOverridden(t *testing.T
 	})
 }
 
-// A message's timeout bounds how long Broadcast waits for each subscriber separately, unlike a ctx deadline, which a
-// synchronous Broadcast uses up across all of them. The error handler is given the Broadcast's ctx, which the timeout
-// has not ended.
+// A message's timeout bounds the wait for each subscriber separately, unlike a ctx deadline.
 func TestMessageWithTimeout(t *testing.T) {
 	t.Parallel()
 
@@ -876,11 +864,9 @@ func TestUnsubscribe_RacesBroadcastPickingUpChannel(t *testing.T) {
 	}
 }
 
-// handle leaves both of its consumer's subscriptions while a Broadcast is waiting to send to the first one, then
-// the subscriber discards that Broadcast's message. The subscriber is not reading while handle runs, so Unsubscribe must
-// never wait on a Broadcast, not even indirectly through a lock held by another Broadcast that is waiting on this one.
-// This runs in real time rather than in a synctest bubble: a goroutine stuck on a sync.Mutex is not durably blocked, so
-// the bubble would hang instead of failing.
+// handle unsubscribes both of its consumer's subscriptions while a Broadcast waits on the first one: Unsubscribe must
+// never wait on a Broadcast, even through a lock. In real time, since a goroutine stuck on a mutex would hang a
+// synctest bubble.
 func TestUnsubscribe_SeveralThenDrain(t *testing.T) {
 	t.Parallel()
 
@@ -1049,9 +1035,7 @@ func TestSubscribe_Parallel(t *testing.T) {
 	})
 }
 
-// Subscribers come and go while a single goroutine broadcasts increasing numbers continuously. Every subscription must
-// receive a run of consecutive numbers, in order and without gaps, and its channel must be closed some time after it
-// unsubscribes.
+// Subscribers come and go while one goroutine broadcasts increasing numbers: each must get a gapless run of them.
 func TestSubscribeUnsubscribe_ChurnDuringBroadcasts(t *testing.T) {
 	t.Parallel()
 
@@ -1392,9 +1376,7 @@ func TestMessageWithParallel(t *testing.T) {
 	})
 }
 
-// A parallel Broadcast gets to every subscriber at once, so the message's timeout runs out for all of them at the same
-// time: it waits for the timeout once, where a sync Broadcast waits for it once per subscriber (TestMessageWithTimeout).
-// The error handlers are told before it returns.
+// A parallel Broadcast waits for the timeout once in all, not once per subscriber, and reports before returning.
 func TestMessageWithParallel_Timeout(t *testing.T) {
 	t.Parallel()
 
@@ -1435,8 +1417,7 @@ func TestMessageWithParallel_Timeout(t *testing.T) {
 }
 
 // Once ctx is done, a parallel Broadcast gives up on a stuck subscriber, but every idle one has already taken the
-// message, since it got to them all at once. A sync Broadcast that gets to an idle subscriber after the stuck one may
-// give up on it too.
+// message.
 func TestMessageWithParallel_ContextDone(t *testing.T) {
 	t.Parallel()
 
@@ -1809,8 +1790,7 @@ func TestSubscribeSeq_Panic(t *testing.T) {
 	})
 }
 
-// Close unsubscribes every subscriber: each still processes what it took, a SubscribeSeq loop ends once it has yielded
-// it, and Broadcast then hands messages to nobody. Every later Subscribe, SubscribeSeq and Close returns ErrClosed.
+// Close unsubscribes every subscriber, which still processes what it took, and every later call returns ErrClosed.
 func TestClose(t *testing.T) {
 	t.Parallel()
 
@@ -1866,9 +1846,7 @@ func TestClose(t *testing.T) {
 	})
 }
 
-// handle closes the Broadcastor while a Broadcast is waiting to send to its subscriber. The subscriber only reads again
-// once handle returns, so Close must not wait for that Broadcast, which then delivers its message and closes the
-// channel.
+// handle closes the Broadcastor while a Broadcast waits on it, so Close must not wait for that Broadcast.
 func TestClose_FromHandle(t *testing.T) {
 	t.Parallel()
 
@@ -1912,9 +1890,7 @@ func TestClose_FromHandle(t *testing.T) {
 	})
 }
 
-// Close races with Subscribe, SubscribeSeq, Unsubscribe, Broadcast and other Close calls. Exactly one Close succeeds,
-// every subscription is either refused with ErrClosed or ended by Close, which synctest checks by failing on any
-// goroutine left behind, and once any Close has returned there is no subscriber left.
+// Close races with every other method: exactly one Close succeeds, and every subscription is refused or ended.
 func TestClose_Parallel(t *testing.T) {
 	t.Parallel()
 
@@ -1961,8 +1937,7 @@ func TestClose_Parallel(t *testing.T) {
 			})
 		}
 		waitGroup(t, &closersWG, "closers")
-		// Stopped before waiting for the subscribers: while it spins, the fake clock never advances, so a SubscribeSeq
-		// loop that Close missed would hang the test instead of failing it at deadlockTimeout.
+		// Stopped first: while it spins, the fake clock never advances, so a leak would hang instead of failing.
 		close(stop)
 		waitClosed(t, broadcasterDone, "broadcaster")
 		waitGroup(t, &subscribersWG, "subscribers")
@@ -1974,9 +1949,7 @@ func TestClose_Parallel(t *testing.T) {
 	})
 }
 
-// subscribeUntilClosed subscribes to b, which a concurrent Close may refuse, then, depending on kind: unsubscribes
-// right away, racing with Close for the same subscriber; leaves the subscriber for Close to end; or ranges over
-// SubscribeSeq until Close ends the loop.
+// subscribeUntilClosed subscribes, then, depending on kind, unsubscribes, leaves it to Close, or ranges until Close.
 func subscribeUntilClosed(t *testing.T, b *broadcastor.Broadcastor[int], kind int) {
 	t.Helper()
 
@@ -2081,9 +2054,8 @@ func recordTimeouts(t *testing.T, r *recorder[int]) func(context.Context, error)
 	}
 }
 
-// subscribeCtx is the ctx tests subscribe with: the test's, but never done. A subscriber is unsubscribed once its ctx is
-// done, which the test's is when the test ends, so a subscriber the test failed to unsubscribe would end there instead
-// of failing the synctest test.
+// subscribeCtx is the test's ctx, never done, so a leaked subscriber fails the synctest test instead of being
+// unsubscribed when the test ends.
 func subscribeCtx(t *testing.T) context.Context {
 	t.Helper()
 
@@ -2151,8 +2123,7 @@ func broadcast[T any](ctx context.Context, b *broadcastor.Broadcastor[T], msg T)
 	return recovered(func() { b.Broadcast(ctx, msg) })
 }
 
-// recovered runs f and returns whatever it panicked with, so that a panic fails only the test that caused it instead
-// of crashing the whole test binary.
+// recovered runs f and returns whatever it panicked with, so that a panic fails only its own test.
 func recovered(f func()) any {
 	var r any
 	func() {

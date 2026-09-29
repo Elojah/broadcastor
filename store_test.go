@@ -15,6 +15,7 @@ import (
 	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/message"
 	"github.com/elojah/broadcastor/middleware"
+	"github.com/elojah/broadcastor/store"
 	"github.com/elojah/broadcastor/subscriber"
 )
 
@@ -174,9 +175,7 @@ func TestSubscriberWithStore_Lost(t *testing.T) {
 	}
 }
 
-// When Put fails, the error handlers are given a *StoreError instead, once, which matches both ErrStore and the error
-// about the message, so an error handler looking for the latter still finds it. The message is not given to the store
-// again.
+// When Put fails, the error handlers get a *StoreError, once, matching both ErrStore and the original error.
 func TestSubscriberWithStore_PutFails(t *testing.T) {
 	t.Parallel()
 
@@ -224,9 +223,7 @@ func TestSubscriberWithStore_PutFails(t *testing.T) {
 	})
 }
 
-// Put is given a ctx with the values of the ctx the message is handled with, the one message.WithContext gave it or else
-// the subscriber's, but never done, even when that ctx is, as it is here: the subscriber's ctx being done unsubscribes it
-// and makes it discard what is left in its buffer.
+// Put gets the values of the message's ctx, but never a done ctx, even when that one is.
 func TestSubscriberWithStore_Context(t *testing.T) {
 	t.Parallel()
 
@@ -267,9 +264,7 @@ func TestSubscriberWithStore_Context(t *testing.T) {
 	})
 }
 
-// Every message a Broadcast picks a subscriber up for is either handled or stored, never both and never twice, whatever
-// the delivery mode and however it is lost: handle failing on it, Broadcast timing out or finding the subscriber busy,
-// or Close making the subscriber discard it. Both subscribers share the store, which tells them apart by their ID.
+// Every message is either handled or stored, never both and never twice, whatever the delivery mode and the loss.
 func TestSubscriberWithStore_ExactlyOnce(t *testing.T) {
 	t.Parallel()
 
@@ -352,6 +347,59 @@ func TestSubscriberWithStore_ExactlyOnce(t *testing.T) {
 			if r.SubscriberID != handleID && r.SubscriberID != seqID {
 				t.Errorf("store got a record for subscriber %s, want %s or %s", r.SubscriberID, handleID, seqID)
 			}
+		}
+	})
+}
+
+// A store.Ring can be read back while the subscriber runs: the reader gets every message the subscriber lost, in order,
+// with the subscriber's ID and the error about it.
+func TestSubscriberWithStore_Ring(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := broadcastor.NewBroadcastor[int]()
+		lost := store.NewRing[int](8)
+		id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
+			if msg%2 == 0 {
+				return handleError(msg)
+			}
+
+			return nil
+		}, subscriber.WithStore[int](lost))
+
+		readBack := &recorder[int]{}
+		ctx, cancel := context.WithCancel(t.Context())
+		readerDone := make(chan struct{})
+		go func() {
+			defer close(readerDone)
+			for {
+				entry, err := lost.Next(ctx)
+				if err != nil {
+					return
+				}
+				if entry.SubscriberID != id || !errors.Is(entry.Err, handleError(entry.Message)) {
+					t.Errorf("read back %+v, want subscriber %s and a handleError for its message", entry, id)
+				}
+				readBack.record(entry.Message)
+				if err := lost.Ack(ctx, entry.ID); err != nil {
+					t.Errorf("Ack: %v", err)
+				}
+			}
+		}()
+
+		for msg := 1; msg <= 6; msg++ {
+			b.Broadcast(t.Context(), msg)
+		}
+		unsubscribe(t, b, id)
+		synctest.Wait()
+		cancel()
+		waitClosed(t, readerDone, "reader")
+
+		if got, want := readBack.messages(), []int{2, 4, 6}; !slices.Equal(got, want) {
+			t.Errorf("read back %v, want %v", got, want)
+		}
+		if n := lost.Len(); n != 0 {
+			t.Errorf("Len = %d once everything is read back, want 0", n)
 		}
 	})
 }
