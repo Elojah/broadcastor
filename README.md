@@ -326,8 +326,10 @@ This applies to a subscriber whose default is `message.WithAsync` too, even when
 ## Development
 
 ```sh
-make check  # golangci-lint + go test -race
-make bench  # benchmarks
+make check     # golangci-lint + go test -race -shuffle=on -cpu 1,4, running each benchmark once
+make bench     # benchmarks (BENCH=regexp)
+make benchcmp  # benchstat of main against the working tree
+make stress    # the stress test, 50 times
 ```
 
 ## License

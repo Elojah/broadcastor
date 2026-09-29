@@ -13,8 +13,15 @@ import (
 	"github.com/elojah/broadcastor/subscriber"
 )
 
-// BenchmarkBroadcast measures one Broadcast until every subscriber has handled it, for each delivery mode. Waiting
-// keeps async Broadcasts from piling up goroutines.
+// benchSubscribers are the subscriber counts the Broadcast benchmarks run with.
+var benchSubscribers = []int{1, 10, 100, 1000}
+
+// benchBuffer is the buffer of every buffered subscriber in the benchmarks.
+const benchBuffer = 64
+
+// BenchmarkBroadcast measures the latency of one Broadcast until every subscriber has handled it, for each delivery
+// mode. That is mostly the wake-up of each subscriber's parked goroutine: BenchmarkBroadcast_Throughput measures
+// Broadcast itself. Waiting keeps async Broadcasts from piling up goroutines.
 func BenchmarkBroadcast(b *testing.B) {
 	modes := []struct {
 		name      string
@@ -24,13 +31,13 @@ func BenchmarkBroadcast(b *testing.B) {
 		{name: "sync"},
 		{name: "parallel", broadcast: []message.Option[int]{message.WithParallel[int]()}},
 		{name: "async", broadcast: []message.Option[int]{message.WithAsync[int]()}},
-		{name: "buffered", subscribe: []subscriber.Option[int]{subscriber.WithBuffer[int](64)}},
+		{name: "buffered", subscribe: []subscriber.Option[int]{subscriber.WithBuffer[int](benchBuffer)}},
 		{name: "middleware", subscribe: []subscriber.Option[int]{subscriber.WithMiddleware(
 			func(next subscriber.Handler[int]) subscriber.Handler[int] { return next },
 		)}},
 	}
 
-	for _, subscribers := range []int{1, 10, 100, 1000} {
+	for _, subscribers := range benchSubscribers {
 		for _, mode := range modes {
 			b.Run(fmt.Sprintf("subscribers=%d/%s", subscribers, mode.name), func(b *testing.B) {
 				bc := broadcastor.NewBroadcastor[int]()
@@ -63,6 +70,101 @@ func BenchmarkBroadcast(b *testing.B) {
 	}
 }
 
+// BenchmarkBroadcast_Throughput measures Broadcast itself, per message a subscriber gets: subscribers are buffered, and
+// the benchmark waits for them once, after the last Broadcast. It loops over b.N rather than b.Loop, which would stop
+// the timer before that wait.
+func BenchmarkBroadcast_Throughput(b *testing.B) {
+	modes := []struct {
+		name      string
+		broadcast []message.Option[int]
+	}{
+		{name: "sync"},
+		{name: "parallel", broadcast: []message.Option[int]{message.WithParallel[int]()}},
+		{name: "async", broadcast: []message.Option[int]{message.WithAsync[int]()}},
+	}
+
+	for _, subscribers := range benchSubscribers {
+		for _, mode := range modes {
+			b.Run(fmt.Sprintf("subscribers=%d/%s", subscribers, mode.name), func(b *testing.B) {
+				bc := broadcastor.NewBroadcastor[int]()
+				wait := subscribeCounting(b, bc, subscribers, b.N, subscriber.WithBuffer[int](benchBuffer))
+
+				b.ReportAllocs()
+				b.ResetTimer()
+				for range b.N {
+					bc.Broadcast(b.Context(), 0, mode.broadcast...)
+				}
+				wait()
+				reportPerDelivery(b, subscribers)
+			})
+		}
+	}
+}
+
+// BenchmarkBroadcast_Concurrent is BenchmarkBroadcast_Throughput in sync mode from GOMAXPROCS goroutines at once, so
+// that they contend on each subscriber's reference count, counters and channel.
+func BenchmarkBroadcast_Concurrent(b *testing.B) {
+	for _, subscribers := range benchSubscribers {
+		b.Run(fmt.Sprintf("subscribers=%d", subscribers), func(b *testing.B) {
+			bc := broadcastor.NewBroadcastor[int]()
+			// RunParallel shares the b.N Broadcasts out between its goroutines.
+			wait := subscribeCounting(b, bc, subscribers, b.N, subscriber.WithBuffer[int](benchBuffer))
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			b.RunParallel(func(pb *testing.PB) {
+				for pb.Next() {
+					bc.Broadcast(b.Context(), 0)
+				}
+			})
+			wait()
+			reportPerDelivery(b, subscribers)
+		})
+	}
+}
+
+// BenchmarkBroadcast_Churn is BenchmarkBroadcast_Throughput in sync mode while another goroutine subscribes and
+// unsubscribes, so that Broadcast ranges over a sync.Map that has writes. Only the steady subscribers count as
+// deliveries, and the allocations include the churn's.
+func BenchmarkBroadcast_Churn(b *testing.B) {
+	for _, subscribers := range benchSubscribers {
+		b.Run(fmt.Sprintf("subscribers=%d", subscribers), func(b *testing.B) {
+			bc := broadcastor.NewBroadcastor[int]()
+			wait := subscribeCounting(b, bc, subscribers, b.N, subscriber.WithBuffer[int](benchBuffer))
+
+			stop := make(chan struct{})
+			var churn sync.WaitGroup
+			churn.Go(func() {
+				for {
+					select {
+					case <-stop:
+						return
+					default:
+					}
+					// Buffered, so Broadcast never waits for one to wake up.
+					if err := subscribeUnsubscribe(b.Context(), bc, subscriber.WithBuffer[int](benchBuffer)); err != nil {
+						b.Error(err) // not Fatal, which must not be called from another goroutine
+
+						return
+					}
+				}
+			})
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				bc.Broadcast(b.Context(), 0)
+			}
+			wait()
+			reportPerDelivery(b, subscribers)
+
+			b.StopTimer()
+			close(stop)
+			churn.Wait()
+		})
+	}
+}
+
 // BenchmarkSubscribeUnsubscribe measures a subscription that comes and goes without ever getting a message.
 func BenchmarkSubscribeUnsubscribe(b *testing.B) {
 	bc := broadcastor.NewBroadcastor[int]()
@@ -90,8 +192,8 @@ func BenchmarkSubscribeUnsubscribe_Parallel(b *testing.B) {
 	})
 }
 
-func subscribeUnsubscribe(ctx context.Context, bc *broadcastor.Broadcastor[int]) error {
-	id, err := bc.Subscribe(ctx, func(context.Context, uuid.UUID, int) error { return nil })
+func subscribeUnsubscribe(ctx context.Context, bc *broadcastor.Broadcastor[int], options ...subscriber.Option[int]) error {
+	id, err := bc.Subscribe(ctx, func(context.Context, uuid.UUID, int) error { return nil }, options...)
 	if err != nil {
 		return fmt.Errorf("Subscribe: %w", err)
 	}
@@ -100,4 +202,40 @@ func subscribeUnsubscribe(ctx context.Context, bc *broadcastor.Broadcastor[int])
 	}
 
 	return nil
+}
+
+// subscribeCounting subscribes subscribers that each expect messages, and returns a func that waits until every one
+// has handled them. Each counts on its own, so waiting adds no contention between them. They are unsubscribed once
+// b.Context() is done, after each run of the benchmark function.
+func subscribeCounting(b *testing.B, bc *broadcastor.Broadcastor[int], subscribers, messages int, options ...subscriber.Option[int]) func() {
+	b.Helper()
+	done := make([]chan struct{}, subscribers)
+	for i := range done {
+		handled := make(chan struct{})
+		done[i] = handled
+		remaining := messages // only handle touches it, in the subscriber's goroutine
+		_, err := bc.Subscribe(b.Context(), func(context.Context, uuid.UUID, int) error {
+			remaining--
+			if remaining == 0 {
+				close(handled)
+			}
+
+			return nil
+		}, options...)
+		if err != nil {
+			b.Fatalf("Subscribe: %v", err)
+		}
+	}
+
+	return func() {
+		for _, handled := range done {
+			<-handled
+		}
+	}
+}
+
+// reportPerDelivery reports the time per message a subscriber got, for b.N Broadcasts to subscribers each.
+func reportPerDelivery(b *testing.B, subscribers int) {
+	b.Helper()
+	b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*subscribers), "ns/delivery")
 }
