@@ -83,6 +83,8 @@ for msg := range seq {
     `Close` discards.
 16. [`16-store-and-forward`](examples/16-store-and-forward/main.go): `store.Enqueue` and `store.Drain`, forwarding every
     message in order to an uplink that is down for a while, without holding `Broadcast` up.
+19. [`19-stats`](examples/19-stats/main.go): `Broadcastor.Stats`, for a subscriber stuck with a full buffer and one
+    failing on every message.
 
 ## Delivery
 
@@ -239,6 +241,35 @@ go store.Drain(ctx, queue, retry(uplink), nil)
 ```
 
 `store.Filter` keeps some records out of a store, such as those that will never be handled.
+
+## Stats
+
+`Stats` returns a snapshot of each subscriber's counters since it subscribed, as a `subscriber.Stats`, in the order they
+subscribed:
+
+| Field | What |
+| --- | --- |
+| `Queued`, `Buffer` | Messages waiting in the subscriber's buffer, which has room for `Buffer` (`subscriber.WithBuffer`). |
+| `Delivered` | Messages the subscriber took. |
+| `Handled` | Messages `handle` returned nil for, or a `SubscribeSeq` loop body got. |
+| `Failed` | Messages `handle`, or its outermost middleware, returned an error for, `*subscriber.PanicError` included. |
+| `TimedOut`, `Dropped` | Messages lost as a `*subscriber.TimeoutError` or a `*subscriber.DroppedError`. |
+| `HandleTime` | Time spent in `handle` and its middlewares (`middleware.Retry`'s waits included), or in the loop body, for `Handled + Failed` messages, so dividing gives the mean. |
+
+Each message a `Broadcast` picks a subscriber up for is counted once in `Handled`, `Failed`, `TimedOut` or `Dropped`,
+or is still on its way: `Delivered` is `Handled + Failed + Queued`, plus the message in `handle` if there is one. The
+counters are read one at a time, so they may not add up while messages are in flight. A loss is counted before the
+error handlers are called, so they see it counted.
+
+```go
+for _, s := range b.Stats() {
+ log.Printf("%s: %d/%d queued, %d failed, %d lost", s.SubscriberID, s.Queued, s.Buffer, s.Failed, s.TimedOut+s.Dropped)
+}
+```
+
+A subscriber leaves the snapshot once unsubscribed, even while it still processes what it took, so the messages it
+misses as a `*subscriber.ClosedError` are never counted. `Stats` never waits, so `handle` and the error handlers can call
+it. The counters are always on, and cost a few atomic adds and two clock reads per message.
 
 ## Unsubscribing
 

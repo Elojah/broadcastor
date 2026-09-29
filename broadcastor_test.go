@@ -1060,6 +1060,7 @@ func TestSubscribeUnsubscribe_ChurnDuringBroadcasts(t *testing.T) {
 
 					return
 				}
+				b.Stats() // for the race detector, during Subscribe, Unsubscribe and handle
 			}
 		}()
 

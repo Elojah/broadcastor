@@ -95,6 +95,11 @@ when nobody reads it.
   handled or stored, exactly once. `Put` gets the values of the message's ctx, but a ctx that is never done. When it
   fails, the handlers get a `*subscriber.StoreError` instead, which matches `ErrStore` and unwraps to both `Put`'s error
   and the original one. The core only writes: reading back is under "Storage" below. `examples/15-store`.
+- `Broadcastor.Stats()`: a `subscriber.Stats` per subscriber still subscribed, in the order they subscribed, with
+  `Queued`/`Buffer`, the messages `Delivered`, `Handled`, `Failed`, `TimedOut` and `Dropped`, and `HandleTime` (in
+  `handle` and its middlewares, or the loop body). Each message a `Broadcast` picks a subscriber up for is counted once,
+  before it is reported. Always on: a few atomic adds and two clock reads per message. No totals across unsubscribes,
+  so no `Closed` counter, which no snapshot could see. `examples/19-stats`.
 
 ## Mid-term: more delivery modes (v0.x)
 
@@ -180,9 +185,9 @@ when nobody reads it.
 
 ### Observability
 
-- A `Stats()` snapshot: per-subscriber queue length, counts of messages delivered, timed out, dropped and failed, and
-  `handle` latency. OpenTelemetry metrics and tracing live in a separate module (`broadcastor/otel`), so the core stays
-  at one dependency or none.
+- OpenTelemetry metrics and tracing in a separate module (`broadcastor/otel`), so the core stays at one dependency or
+  none. `Stats` only covers current subscribers, so monotonic counters across unsubscribes need a hook in the core,
+  such as an observer each subscriber calls where it counts.
 
 ### Stronger delivery guarantees
 

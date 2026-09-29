@@ -55,4 +55,9 @@
 // or stored, once. Package store holds store.Ring, an in-memory queue to read them back from, and store.Drain, which
 // hands them to a handle again. With store.Enqueue as the handle, it forwards messages to a slow sink without holding
 // Broadcast up.
+//
+// # Stats
+//
+// Broadcastor.Stats returns a snapshot of each subscriber's counters (subscriber.Stats): how many messages are queued,
+// and how many it took, handled, failed on, and missed by timeout or drop, with the time spent in handle.
 package broadcastor

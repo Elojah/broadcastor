@@ -6,6 +6,7 @@ import (
 	"context"
 	"iter"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -30,6 +31,8 @@ type Subscriber[T any] struct {
 	// refs counts the subscription plus each Broadcast sending on ch. Whoever drops it to 0 closes ch, so ch is never
 	// closed under a sender.
 	refs atomic.Int64
+
+	counters counters
 }
 
 // config is what Options set.
@@ -132,8 +135,11 @@ func (s *Subscriber[T]) Consume(handle Handler[T]) {
 
 			continue
 		}
+		start := time.Now()
+		err := handle(s.context(m), s.id, m.Value)
+		s.counters.handle(time.Since(start), err)
 		// Reported outside the chain, so Recover never catches a panic in an error handler.
-		if err := handle(s.context(m), s.id, m.Value); err != nil {
+		if err != nil {
 			s.report(m, err)
 		}
 	}
@@ -159,6 +165,21 @@ func (s *Subscriber[T]) Seq(unsubscribe func()) iter.Seq[T] {
 	}
 }
 
+// Stats returns a snapshot of the subscriber's counters.
+func (s *Subscriber[T]) Stats() Stats {
+	return Stats{
+		SubscriberID: s.id,
+		Queued:       len(s.ch),
+		Buffer:       cap(s.ch),
+		Delivered:    s.counters.delivered.Load(),
+		Handled:      s.counters.handled.Load(),
+		Failed:       s.counters.failed.Load(),
+		TimedOut:     s.counters.timedOut.Load(),
+		Dropped:      s.counters.dropped.Load(),
+		HandleTime:   time.Duration(s.counters.handleTime.Load()),
+	}
+}
+
 // send hands m over and releases the caller's reference. It gives up once ctx is done or m's timeout runs out, or
 // right away if m is non-blocking.
 func (s *Subscriber[T]) send(ctx context.Context, m message.Message[T]) bool {
@@ -167,8 +188,11 @@ func (s *Subscriber[T]) send(ctx context.Context, m message.Message[T]) bool {
 	if m.Config.Delivery == message.DeliveryNonBlocking {
 		select {
 		case s.ch <- m:
+			s.counters.delivered.Add(1)
+
 			return true
 		default:
+			s.counters.dropped.Add(1)
 			s.report(m, &DroppedError[T]{SubscriberID: s.id, Message: m.Value}) //nolint:contextcheck // reported with the message's ctx, not the one bounding the wait
 
 			return false
@@ -184,8 +208,11 @@ func (s *Subscriber[T]) send(ctx context.Context, m message.Message[T]) bool {
 
 	select {
 	case s.ch <- m:
+		s.counters.delivered.Add(1)
+
 		return true
 	case <-sendCtx.Done():
+		s.counters.timedOut.Add(1)
 		s.report(m, &TimeoutError[T]{SubscriberID: s.id, Message: m.Value, Err: sendCtx.Err()}) //nolint:contextcheck // reported with the message's ctx, not the one bounding the wait
 
 		return false
@@ -253,7 +280,10 @@ func (s *Subscriber[T]) pull(yield func(T) bool) {
 
 				return
 			}
-			if !yield(m.Value) {
+			start := time.Now()
+			more := yield(m.Value)
+			s.counters.handle(time.Since(start), nil)
+			if !more {
 				return
 			}
 		case <-s.ctx.Done():

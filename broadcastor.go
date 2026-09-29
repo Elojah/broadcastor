@@ -1,8 +1,10 @@
 package broadcastor
 
 import (
+	"bytes"
 	"context"
 	"iter"
+	"slices"
 	"sync"
 
 	"github.com/google/uuid"
@@ -128,6 +130,25 @@ func (b *Broadcastor[T]) Broadcast(ctx context.Context, msg T, options ...messag
 	}
 
 	return n
+}
+
+// Stats returns a snapshot of every subscriber's counters, in the order they subscribed. A subscriber leaves it once
+// unsubscribed, even while it still processes the messages it took. It never waits, so handle can call it.
+func (b *Broadcastor[T]) Stats() []subscriber.Stats {
+	var stats []subscriber.Stats
+	b.subscribers.Range(func(_, value any) bool {
+		if s, ok := value.(*subscriber.Subscriber[T]); ok {
+			stats = append(stats, s.Stats())
+		}
+
+		return true
+	})
+	// IDs are UUIDv7, which sort in the order they were made.
+	slices.SortFunc(stats, func(x, y subscriber.Stats) int {
+		return bytes.Compare(x.SubscriberID[:], y.SubscriberID[:])
+	})
+
+	return stats
 }
 
 // add creates and stores a subscriber, or returns ErrClosed. Nothing reads its channel yet.

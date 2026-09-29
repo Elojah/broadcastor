@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 `github.com/elojah/broadcastor` is a Go library: a generic in-process fan-out, where one `Broadcast` hands a message to every subscriber. Its only dependency is `github.com/google/uuid`. Go 1.26.1.
 
 - `broadcastor` (root): `Broadcastor`, `ErrClosed`, `SubscriberNotFoundError`.
-- `subscriber`: `Subscriber`, the options for `Subscribe`/`SubscribeSeq`/`Unsubscribe`, `Handler`/`Middleware`, `Store`/`Record`, and the errors about messages.
+- `subscriber`: `Subscriber`, the options for `Subscribe`/`SubscribeSeq`/`Unsubscribe`, `Handler`/`Middleware`, `Store`/`Record`, `Stats`, and the errors about messages.
 - `message`: `Message`, `Config`, `Delivery`, the options for `Broadcast`.
 - `middleware` (`Recover`, `WrapError`, `Retry`), `store` (`Queue`, `Ring`, `Drain`, `Enqueue`, `Filter`), `pkg/gate`, `examples/`.
 
@@ -43,12 +43,14 @@ Any change to channels, removal or error reporting must keep these.
 - **No error path the library owns may block.** Errors used to go to a channel returned by `Subscribe`: an unread error blocked the subscriber, then `Broadcast` (`TestSubscribe_ErrorsWithoutHandler`). Only the user's own handler or store may block, and a store the library ships never does.
 - **`report` is the only caller of error handlers and `Store.Put`.** It takes no ctx: every error about a message uses `context(m)` (the message's ctx, else the subscriber's), never the `Broadcast` ctx, hence the `contextcheck` nolints in `Deliver`/`send`. `Put` gets `context.WithoutCancel` of it, and a failed `Put` becomes a `StoreError`, so each loss is reported once and stored at most once (`TestSubscriberWithStore_ExactlyOnce`).
 - **`report` runs outside the middleware chain** (in `Consume`), so `Recover` never recovers a panic in an error handler.
+- **Each message a `Broadcast` picks a subscriber up for is counted once** in `Handled`, `Failed`, `TimedOut` or `Dropped`, and a loss is counted before `report`, so an error handler sees it (`TestStats/Failed`, `TestStats_AddUp`). `Delivered` is counted once the send succeeded, so it may briefly trail `Handled`.
 
 ## Decisions not to revert
 
 - The `Broadcast` ctx only bounds the wait. Async sends keep using it after `Broadcast` returns. That is documented (`message.WithAsync`, `examples/14-context`) rather than changed: detaching them automatically would leave no way to cancel sends piling up behind a stuck subscriber.
 - `message.WithContext` replaces the subscriber's ctx for one message, without merging. nil means none, which overrides a default (staticcheck SA1012 is silenced in the test that does it).
 - The library applies no middleware of its own. The recommended order is `Recover`, `WrapError`, `Retry`, then the user's. Middlewares don't apply to `SubscribeSeq`.
+- `Stats` covers the subscribers still in the map, with no totals across unsubscribes: those would need counters every subscriber goroutine shares, or a fold at removal racing the late `ClosedError`s. So there is no `Closed` counter, since no snapshot could see one. OpenTelemetry goes in its own module.
 - `message.Config` has no `T` (`message.Option[T]` keeps it only for the public API), which is why there is no message-level store.
 - In `store`, `Enqueue`'s `Put` and `Drain`'s dead-letter `Put` and `Ack` get `context.WithoutCancel`, like `report`'s `Put`: a done ctx is often why a message is stored, and an entry `Drain` handled must be acked even if ctx ended meanwhile (`TestDrain_AckOnceHandled`). An entry whose handle failed once ctx is done stays in the queue, for the next `Drain`.
 
@@ -56,6 +58,7 @@ Any change to channels, removal or error reporting must keep these.
 
 - The root package tests (`broadcastor_test`) cover `subscriber` and `message` too, through a `Broadcastor`, so those have no test files. Name a test after its option, package included: `TestSubscriberWithBuffer`, `TestMessageWithAsync`.
 - Most tests run in a `synctest` bubble, where a leaked subscriber goroutine fails the test. So subscribe with `subscribeCtx(t)` (`context.WithoutCancel(t.Context())`): `t.Context()` would unsubscribe a leak instead of failing. `synctest.Wait()` after `Unsubscribe` waits until the subscriber is done. Bound every wait with `deadlockTimeout`.
+- A sleeping `handle` is durably blocked, so `synctest.Wait()` returns before it is done: sleep in the test too before checking `Stats`.
 - A goroutine blocked on a mutex is not durably blocked, so `synctest.Wait()` would hang: `pkg/gate` tests and `TestUnsubscribe_SeveralThenDrain` run in real time.
 - Add `Recover` or `WrapError` only to check a `PanicError` or `HandleError`. Other tests check `handle`'s raw error.
 - Examples (`examples/NN-name/`, listed in the README) each have an `Example()` in `main_test.go`. They run in real time, so their output must not depend on scheduling: synchronise with channels or a `WaitGroup`, or use `// Unordered output:`. A slow `handle` waits on a `release` channel, never sleeps.
