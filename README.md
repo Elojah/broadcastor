@@ -176,7 +176,7 @@ Errors go to error handlers, and are discarded when there are none:
 | `*subscriber.PanicError` | `handle` or a middleware panicked, in a subscriber with `middleware.Recover`. Without it, the panic crashes the program. |
 | `*subscriber.TimeoutError` | `Broadcast` gave up waiting. |
 | `*subscriber.DroppedError` | A non-blocking `Broadcast` found the subscriber busy. |
-| `*subscriber.ClosedError` | The subscriber was unsubscribed while `Broadcast` was running. |
+| `*subscriber.ClosedError` | The subscriber was unsubscribed while `Broadcast` was running, or waiting on it. |
 | `*subscriber.ClosedError` | A `SubscribeSeq` loop ended before yielding a message its subscriber took. |
 | `*subscriber.ClosedError` | A subscriber unsubscribed with `subscriber.WithUnsubscribeDiscard` took a message. |
 | `*subscriber.StoreError` | Instead of any of the above, the subscriber's store failed to store the message. It still matches the error it replaces with `errors.Is` and `errors.As`. |
@@ -273,9 +273,10 @@ it. The counters are always on, and cost a few atomic adds and two clock reads p
 
 ## Unsubscribing
 
-`Unsubscribe` never waits, so `handle` can unsubscribe its own subscriber. A subscriber may still get messages after
-`Unsubscribe` returns: whatever is in its buffer, and the message of a `Broadcast` that was already sending to it. Its
-goroutine ends once it has processed them. The ctx passed to `Subscribe` or `SubscribeSeq` is the subscription's: the
+`Unsubscribe` never waits, so `handle` can unsubscribe its own subscriber. A `Broadcast` waiting on the subscriber gives
+up then, and reports its message as a `*subscriber.ClosedError`. A subscriber may still get messages after
+`Unsubscribe` returns: whatever is in its buffer, and the message of a `Broadcast` racing `Unsubscribe`. Its goroutine
+ends once it has processed them. The ctx passed to `Subscribe` or `SubscribeSeq` is the subscription's: the
 subscriber is unsubscribed as soon as it is done, even while `handle` or the loop body is running, or before the loop
 starts. `handle` gets that ctx, so it gets it done for whatever the subscriber took before being unsubscribed. Pass
 `subscriber.WithDetachedContext` to keep the subscriber subscribed until `Unsubscribe` or `Close` instead: `handle`, its

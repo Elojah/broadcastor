@@ -32,8 +32,9 @@
 //
 // # Unsubscribing
 //
-// Unsubscribe and Close never wait, so handle can call them. A subscriber may still process messages it already took,
-// unless unsubscribed with subscriber.WithUnsubscribeDiscard. Once the ctx passed to Subscribe is done, the subscriber
+// Unsubscribe and Close never wait, so handle can call them, and a Broadcast waiting on a subscriber gives up once it is
+// unsubscribed. A subscriber may still process messages it already took, unless unsubscribed with
+// subscriber.WithUnsubscribeDiscard. Once the ctx passed to Subscribe is done, the subscriber
 // is unsubscribed, unless it has subscriber.WithDetachedContext.
 //
 // # Contexts

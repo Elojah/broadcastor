@@ -25,13 +25,6 @@ Each item changes one function or adds one option.
 
 ### Reliability
 
-- [ ] `Unsubscribe` frees the `Broadcast`s blocked on that subscriber. Today a `Broadcast` waiting on a stuck handle
-  stays blocked after both `Unsubscribe` and `Close` (checked: still blocked 500 ms later), and so do async sends, until
-  handle returns or their ctx ends. `Subscriber.Unsubscribe` would close a `done` channel, which only it closes, once,
-  and `send` would select on it and report a `*ClosedError`. Messages already buffered are still handled with
-  `WithUnsubscribeDeliver`, but a subscriber no longer takes new ones once unsubscribed, except for a send that races
-  `Unsubscribe`. `ch` is still closed only by `release`. This is what makes `Close` and ctx-lifetime removal actually
-  release a stuck subscriber.
 - [ ] Bound async sends: `subscriber.WithAsyncLimit(n)`. Each async message to a stuck subscriber parks a goroutine
   that holds the message until the subscriber takes it or ctx ends. With `context.Background()` and no timeout, that
   may never happen, so the goroutines pile up without limit. Past n sends in flight, an async message is dropped with a
@@ -69,8 +62,8 @@ Each item changes one function or adds one option.
   `SubscribeSeq` loop and its discard), or until ctx is done. `Close` never waits, so today a program that exits right
   after it cuts off whatever handle was doing, and cannot flush the buffers first. With `WithUnsubscribeDeliver`,
   `Shutdown` flushes the buffers. With discard, it reports what is left. The count goes up in `add` under the gate, so
-  none goes up after `Close`. `Shutdown` waits for a `Broadcast` only through a subscriber, which the unblock item
-  frees quickly, so it is the one documented, ctx-bounded exception to "nothing waits for a `Broadcast`". Called from
+  none goes up after `Close`. `Shutdown` waits for a `Broadcast` only through a subscriber, which `Unsubscribe`
+  frees right away, so it is the one documented, ctx-bounded exception to "nothing waits for a `Broadcast`". Called from
   handle, it waits on itself until ctx is done. So is a `SubscribeSeq` loop that was never started.
 - [ ] Latest value wins: `subscriber.WithDropOldest()` for non-blocking sends. When the buffer is full, it drops the
   oldest message to make room instead of the new one. That suits state broadcasts (prices, positions, config), where a

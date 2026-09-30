@@ -64,8 +64,9 @@ func (b *Broadcastor[T]) SubscribeSeq(ctx context.Context, options ...subscriber
 }
 
 // Unsubscribe removes the subscriber, or returns a *SubscriberNotFoundError. It never waits, so handle can call it, and
-// the subscriber may still process messages it already took. options override its
-// subscriber.WithUnsubscribeOptions. ctx is unused.
+// the subscriber may still process messages it already took. A Broadcast waiting on the subscriber gives up, and
+// reports its message as a *subscriber.ClosedError. options override its subscriber.WithUnsubscribeOptions. ctx is
+// unused.
 func (b *Broadcastor[T]) Unsubscribe(ctx context.Context, id uuid.UUID, options ...subscriber.UnsubscribeOption) error {
 	if !b.remove(id, options...) {
 		return &SubscriberNotFoundError{SubscriberID: id}
@@ -98,7 +99,8 @@ func (b *Broadcastor[T]) Close() error {
 // Broadcast hands msg to every subscriber and returns how many took it, counting every async send as taken.
 //
 // By default it waits for each subscriber in turn, so a slow one holds up those after it. It gives up on a subscriber
-// once ctx is done or the message's timeout runs out, and tells its error handlers why. ctx only bounds the wait, and
+// once ctx is done or the message's timeout runs out, and tells its error handlers why, but a subscriber ready for the
+// message takes it even then. ctx only bounds the wait, and
 // reaches neither handle nor the error handlers, although async sends keep using it (see message.WithAsync).
 func (b *Broadcastor[T]) Broadcast(ctx context.Context, msg T, options ...message.Option[T]) int {
 	var (

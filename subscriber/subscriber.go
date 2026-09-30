@@ -22,6 +22,9 @@ type Subscriber[T any] struct {
 	// ctx handles and reports every message that has no ctx of its own. Set by ContextLifetime.
 	ctx context.Context //nolint:containedctx // the subscription's, which outlives every call
 
+	// done is closed by Unsubscribe, so that no send waits on a subscriber that is gone.
+	done chan struct{}
+
 	// discarding makes Consume and pull report messages instead of processing them.
 	discarding atomic.Bool
 
@@ -52,7 +55,7 @@ func New[T any](id uuid.UUID, options ...Option[T]) *Subscriber[T] {
 	for _, option := range options {
 		option(&config)
 	}
-	s := &Subscriber[T]{id: id, ch: make(chan message.Message[T], config.buffer), config: config}
+	s := &Subscriber[T]{id: id, ch: make(chan message.Message[T], config.buffer), config: config, done: make(chan struct{})}
 	s.refs.Store(1)
 
 	return s
@@ -122,6 +125,8 @@ func (s *Subscriber[T]) Unsubscribe(options ...UnsubscribeOption) {
 	if s.stopContextLifetime != nil {
 		s.stopContextLifetime()
 	}
+	// Every send waiting on ch gives up. It still holds its reference, so ch is not closed under it.
+	close(s.done)
 
 	s.release()
 }
@@ -180,23 +185,36 @@ func (s *Subscriber[T]) Stats() Stats {
 	}
 }
 
-// send hands m over and releases the caller's reference. It gives up once ctx is done or m's timeout runs out, or
-// right away if m is non-blocking.
+// send hands m over and releases the caller's reference. It gives up once ctx is done, m's timeout runs out or the
+// subscriber is unsubscribed, or right away if m is non-blocking.
 func (s *Subscriber[T]) send(ctx context.Context, m message.Message[T]) bool {
 	defer s.release()
 
+	// Checked first, since select picks at random among ready cases: once unsubscribed, the subscriber takes no new
+	// message, but for a send racing Unsubscribe.
+	select {
+	case <-s.done:
+		s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: m.Value}) //nolint:contextcheck // reported with the message's ctx, not the one bounding the wait
+
+		return false
+	default:
+	}
+
+	// Before waiting, so that a subscriber ready for m costs neither a timer nor the locks of the select below, which
+	// takes every channel's. Even once ctx is done, it takes m.
+	select {
+	case s.ch <- m:
+		s.counters.delivered.Add(1)
+
+		return true
+	default:
+	}
+
 	if m.Config.Delivery == message.DeliveryNonBlocking {
-		select {
-		case s.ch <- m:
-			s.counters.delivered.Add(1)
+		s.counters.dropped.Add(1)
+		s.report(m, &DroppedError[T]{SubscriberID: s.id, Message: m.Value}) //nolint:contextcheck // reported with the message's ctx, not the one bounding the wait
 
-			return true
-		default:
-			s.counters.dropped.Add(1)
-			s.report(m, &DroppedError[T]{SubscriberID: s.id, Message: m.Value}) //nolint:contextcheck // reported with the message's ctx, not the one bounding the wait
-
-			return false
-		}
+		return false
 	}
 
 	sendCtx := ctx
@@ -211,6 +229,10 @@ func (s *Subscriber[T]) send(ctx context.Context, m message.Message[T]) bool {
 		s.counters.delivered.Add(1)
 
 		return true
+	case <-s.done:
+		s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: m.Value}) //nolint:contextcheck // reported with the message's ctx, not the one bounding the wait
+
+		return false
 	case <-sendCtx.Done():
 		s.counters.timedOut.Add(1)
 		s.report(m, &TimeoutError[T]{SubscriberID: s.id, Message: m.Value, Err: sendCtx.Err()}) //nolint:contextcheck // reported with the message's ctx, not the one bounding the wait

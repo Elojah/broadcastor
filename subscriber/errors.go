@@ -88,8 +88,8 @@ func (e *DroppedError[T]) Is(target error) bool {
 	return target == ErrDropped
 }
 
-// ClosedError is reported for a message a subscriber misses because it was unsubscribed: skipped by a Broadcast under
-// way, left over by a SubscribeSeq loop, or discarded (WithUnsubscribeDiscard). It matches ErrClosed.
+// ClosedError is reported for a message a subscriber misses because it was unsubscribed: skipped or given up on by a
+// Broadcast under way, left over by a SubscribeSeq loop, or discarded (WithUnsubscribeDiscard). It matches ErrClosed.
 type ClosedError[T any] struct {
 	SubscriberID uuid.UUID
 	Message      T

@@ -240,49 +240,98 @@ func TestBroadcast_ContextUnblocksStuckSubscriber(t *testing.T) {
 		if got, want := stuck.messages(), []int{0}; !slices.Equal(got, want) {
 			t.Errorf("stuck subscriber received %v, want %v", got, want)
 		}
-		// The reader is visited before or after the deadline depending on map order, and once ctx is done select picks
-		// at random between sending and giving up.
-		if got := reader.messages(); len(got) != 0 && !slices.Equal(got, []int{2}) {
-			t.Errorf("reader received %v, want [] or [2]", got)
+		// The reader is visited before or after the deadline depending on map order, and takes 2 even once ctx is done,
+		// since it is ready for it.
+		if got, want := reader.messages(), []int{2}; !slices.Equal(got, want) {
+			t.Errorf("reader received %v, want %v", got, want)
 		}
 	})
 }
 
-// Unsubscribing a subscriber stuck in handle, while a Broadcast waits on it: that Broadcast must close the channel
-// when it gives up.
-func TestBroadcast_ContextDoneAfterUnsubscribe(t *testing.T) {
+// Removing a subscriber stuck in handle frees a Broadcast waiting on it right away, with a ctx that is never done, however
+// the subscriber is removed and the message sent: the message is reported as a *subscriber.ClosedError, and what the
+// subscriber took is still handled.
+func TestUnsubscribe_FreesBroadcast(t *testing.T) {
 	t.Parallel()
 
-	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
-		stuck, id := hold(t, b)
-		b.Broadcast(t.Context(), 0) // stuck is now processing 0 and not reading
+	removals := []struct {
+		name   string
+		remove func(t *testing.T, b *broadcastor.Broadcastor[int], id uuid.UUID, cancel context.CancelFunc)
+	}{
+		{"Unsubscribe", func(t *testing.T, b *broadcastor.Broadcastor[int], id uuid.UUID, _ context.CancelFunc) {
+			t.Helper()
+			unsubscribe(t, b, id)
+		}},
+		{"Close", func(t *testing.T, b *broadcastor.Broadcastor[int], _ uuid.UUID, _ context.CancelFunc) {
+			t.Helper()
+			if err := b.Close(); err != nil {
+				t.Fatalf("Close: %v", err)
+			}
+		}},
+		{"ContextDone", func(t *testing.T, _ *broadcastor.Broadcastor[int], _ uuid.UUID, cancel context.CancelFunc) {
+			t.Helper()
+			cancel()
+		}},
+	}
+	deliveries := []struct {
+		name   string
+		option message.Option[int]
+	}{
+		{"Sync", message.WithSync[int]()},
+		{"Parallel", message.WithParallel[int]()},
+		{"Async", message.WithAsync[int]()},
+	}
+	for _, removal := range removals {
+		for _, delivery := range deliveries {
+			t.Run(removal.name+"/"+delivery.name, func(t *testing.T) {
+				t.Parallel()
 
-		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-		defer cancel()
-		start := time.Now()
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			b.Broadcast(ctx, 1)
-		}()
-		synctest.Wait() // the Broadcast of 1 is waiting on stuck
+				synctest.Test(t, func(t *testing.T) {
+					ctx, cancel := context.WithCancel(subscribeCtx(t))
+					defer cancel()
+					b := broadcastor.NewBroadcastor[int]()
+					handled := &recorder[int]{hold: make(chan struct{})}
+					closed := &recorder[int]{}
+					id, err := b.Subscribe(ctx, handled.handle, subscriber.WithBuffer[int](1),
+						subscriber.WithErrorHandler[int](recordClosed(t, closed)))
+					if err != nil {
+						t.Fatalf("Subscribe: %v", err)
+					}
 
-		unsubscribe(t, b, id)
-		waitClosed(t, done, "Broadcast to an unsubscribed stuck subscriber")
-		if elapsed := time.Since(start); elapsed != time.Second {
-			t.Errorf("Broadcast returned after %v, want it to give up at the %v deadline", elapsed, time.Second)
+					// handle holds on to 0, 1 fills the buffer, and the Broadcast of 2 waits.
+					b.Broadcast(t.Context(), 0)
+					b.Broadcast(t.Context(), 1)
+					done := make(chan struct{})
+					go func() {
+						defer close(done)
+						b.Broadcast(t.Context(), 2, delivery.option)
+					}()
+					synctest.Wait()
+
+					removal.remove(t, b, id, cancel)
+					synctest.Wait()
+					select {
+					case <-done:
+					default:
+						t.Errorf("Broadcast still waits on its subscriber once removed")
+					}
+					if got, want := closed.messages(), []int{2}; !slices.Equal(got, want) {
+						t.Errorf("error handler got *subscriber.ClosedError for messages %v, want %v", got, want)
+					}
+
+					handled.release()
+					synctest.Wait()
+					if got, want := handled.messages(), []int{0, 1}; !slices.Equal(got, want) {
+						t.Errorf("handle got %v, want %v", got, want)
+					}
+				})
+			})
 		}
-
-		stuck.release()
-		synctest.Wait()
-		if got, want := stuck.messages(), []int{0}; !slices.Equal(got, want) {
-			t.Errorf("stuck subscriber received %v, want %v", got, want)
-		}
-	})
+	}
 }
 
-// handle unsubscribes itself while a Broadcast waits on it, so Unsubscribe must not wait for that Broadcast.
+// handle unsubscribes itself while a Broadcast waits on it, so Unsubscribe must not wait for that Broadcast, which gives
+// up instead.
 func TestUnsubscribe_SelfDuringBroadcast(t *testing.T) {
 	t.Parallel()
 
@@ -319,7 +368,7 @@ func TestUnsubscribe_SelfDuringBroadcast(t *testing.T) {
 		unsubscribeAll(t, b, otherID)
 		synctest.Wait()
 
-		if got, want := self.messages(), []int{1, 2}; !slices.Equal(got, want) {
+		if got, want := self.messages(), []int{1}; !slices.Equal(got, want) {
 			t.Errorf("unsubscribed subscriber received %v, want %v", got, want)
 		}
 		if got, want := other.messages(), []int{1, 2, 3}; !slices.Equal(got, want) {
@@ -436,14 +485,16 @@ func TestSubscriberWithBuffer(t *testing.T) {
 	})
 }
 
-// An async Broadcast waits for no stuck subscriber, and takes its references before returning, so subscribers that
-// unsubscribe right after still get the message.
+// An async Broadcast waits for no stuck subscriber, and its send to one gives up once that one is unsubscribed,
+// reporting the message as a *subscriber.ClosedError.
 func TestMessageWithAsync(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
 		b := broadcastor.NewBroadcastor[int]()
-		stuck, stuckID := hold(t, b)
+		stuck := &recorder[int]{hold: make(chan struct{})}
+		closed := &recorder[int]{}
+		stuckID := subscribe(t, b, stuck.handle, subscriber.WithErrorHandler[int](recordClosed(t, closed)))
 		reader, readerID := record(t, b)
 		b.Broadcast(t.Context(), 0) // stuck is now processing 0 and not reading
 
@@ -454,16 +505,20 @@ func TestMessageWithAsync(t *testing.T) {
 		if elapsed := time.Since(start); elapsed != 0 {
 			t.Errorf("async Broadcast returned after %v, want no wait", elapsed)
 		}
-		unsubscribeAll(t, b, stuckID, readerID)
-
 		synctest.Wait()
 		if got, want := reader.messages(), []int{0, 1}; !slices.Equal(got, want) {
 			t.Errorf("reader received %v while stuck was still processing, want %v", got, want)
 		}
 
+		unsubscribeAll(t, b, stuckID, readerID)
+		synctest.Wait()
+		if got, want := closed.messages(), []int{1}; !slices.Equal(got, want) {
+			t.Errorf("stuck subscriber's error handler got *subscriber.ClosedError for %v once unsubscribed, want %v", got, want)
+		}
+
 		stuck.release()
 		synctest.Wait()
-		if got, want := stuck.messages(), []int{0, 1}; !slices.Equal(got, want) {
+		if got, want := stuck.messages(), []int{0}; !slices.Equal(got, want) {
 			t.Errorf("stuck subscriber received %v, want %v", got, want)
 		}
 	})
@@ -612,8 +667,10 @@ func TestSubscriberWithDefaultMessageOptions_Async(t *testing.T) {
 			t.Errorf("reader received %v while stuck was still processing, want %v", got, want)
 		}
 
-		unsubscribeAll(t, b, stuckID, readerID)
+		// Before unsubscribing, which would make the send to stuck give up.
 		stuck.release()
+		synctest.Wait()
+		unsubscribeAll(t, b, stuckID, readerID)
 		synctest.Wait()
 		if got, want := stuck.messages(), []int{0, 1}; !slices.Equal(got, want) {
 			t.Errorf("stuck subscriber received %v, want %v", got, want)
@@ -790,7 +847,8 @@ func TestBroadcast_Concurrent(t *testing.T) {
 }
 
 // Two goroutines broadcasting at once, with an Unsubscribe in between: neither the Unsubscribe nor the second Broadcast
-// may close a channel that the first Broadcast is still sending on.
+// may close a channel that the first Broadcast is still sending on. The Unsubscribe frees the first Broadcast, so the
+// subscriber never gets 1.
 func TestBroadcast_ConcurrentWithUnsubscribe(t *testing.T) {
 	t.Parallel()
 
@@ -807,7 +865,7 @@ func TestBroadcast_ConcurrentWithUnsubscribe(t *testing.T) {
 		unsubscribe(t, b, id)
 		second := make(chan any, 1)
 		go func() { second <- broadcast(ctx, b, 2) }()
-		synctest.Wait() // let the second Broadcast get as far as it can before stuck reads 1
+		synctest.Wait() // let the second Broadcast get as far as it can before stuck returns
 
 		stuck.release()
 		if p := <-first; p != nil {
@@ -817,7 +875,7 @@ func TestBroadcast_ConcurrentWithUnsubscribe(t *testing.T) {
 			t.Errorf("second Broadcast panicked: %v", p)
 		}
 		synctest.Wait()
-		if got, want := stuck.messages(), []int{0, 1}; !slices.Equal(got, want) {
+		if got, want := stuck.messages(), []int{0}; !slices.Equal(got, want) {
 			t.Errorf("subscriber received %v, want %v", got, want)
 		}
 	})
@@ -1233,16 +1291,18 @@ func TestBroadcast_Count(t *testing.T) {
 			t.Errorf("async Broadcast handed the message to %d subscribers, want 3: all of them, stuck or not", n)
 		}
 
-		unsubscribeAll(t, b, stuckID, firstID, secondID)
-		if n := b.Broadcast(t.Context(), 4); n != 0 {
-			t.Errorf("Broadcast with no subscribers handed the message to %d, want 0", n)
-		}
-
+		// Before unsubscribing, which would make the async send to stuck give up.
 		stuck.release()
 		synctest.Wait()
 		if got, want := stuck.messages(), []int{0, 3}; !slices.Equal(got, want) {
 			t.Errorf("stuck subscriber received %v, want %v", got, want)
 		}
+
+		unsubscribeAll(t, b, stuckID, firstID, secondID)
+		if n := b.Broadcast(t.Context(), 4); n != 0 {
+			t.Errorf("Broadcast with no subscribers handed the message to %d, want 0", n)
+		}
+		synctest.Wait()
 	})
 }
 
@@ -1636,7 +1696,8 @@ func TestSubscribeSeq_BreakReportsUnyielded(t *testing.T) {
 		waitClosed(t, done, "Broadcast to a subscriber whose loop has ended")
 		synctest.Wait()
 
-		if got, want := closed.messages(), []int{2, 3}; !slices.Equal(got, want) {
+		// 3 is reported by the Broadcast, and 2 by the loop's discard, in either order.
+		if got, want := slices.Sorted(slices.Values(closed.messages())), []int{2, 3}; !slices.Equal(got, want) {
 			t.Errorf("error handler got *subscriber.ClosedError for messages %v, want %v", got, want)
 		}
 		if err := b.Unsubscribe(t.Context(), id); !isNotFound(err) {
@@ -1847,7 +1908,8 @@ func TestClose(t *testing.T) {
 	})
 }
 
-// handle closes the Broadcastor while a Broadcast waits on it, so Close must not wait for that Broadcast.
+// handle closes the Broadcastor while a Broadcast waits on it, so Close must not wait for that Broadcast, which gives up
+// instead.
 func TestClose_FromHandle(t *testing.T) {
 	t.Parallel()
 
@@ -1881,7 +1943,7 @@ func TestClose_FromHandle(t *testing.T) {
 		waitClosed(t, done, "Broadcast during which handle closed the Broadcastor")
 		synctest.Wait()
 
-		if got, want := self.messages(), []int{1, 2}; !slices.Equal(got, want) {
+		if got, want := self.messages(), []int{1}; !slices.Equal(got, want) {
 			t.Errorf("closing subscriber received %v, want %v", got, want)
 		}
 		// other is visited before or after self depending on map order, and after self it is already unsubscribed.

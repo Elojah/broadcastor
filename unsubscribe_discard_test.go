@@ -13,8 +13,8 @@ import (
 	"github.com/elojah/broadcastor/subscriber"
 )
 
-// Once unsubscribed with WithUnsubscribeDiscard, the subscriber reports what is left in its buffer, and the message of a
-// Broadcast that was already sending to it, instead of passing them to handle.
+// Once unsubscribed with WithUnsubscribeDiscard, the subscriber reports what is left in its buffer instead of passing it
+// to handle, and a Broadcast that was waiting on it reports its message right away.
 func TestWithUnsubscribeDiscard(t *testing.T) {
 	t.Parallel()
 
@@ -49,14 +49,14 @@ func TestWithUnsubscribeDiscard(t *testing.T) {
 		if err := b.Unsubscribe(t.Context(), id, subscriber.WithUnsubscribeDiscard()); err != nil {
 			t.Fatalf("Unsubscribe: %v", err)
 		}
-		handled.release()
 		waitClosed(t, done, "Broadcast to a subscriber unsubscribed with WithUnsubscribeDiscard")
+		handled.release()
 		synctest.Wait()
 
 		if got, want := handled.messages(), []int{1}; !slices.Equal(got, want) {
 			t.Errorf("handle got %v, want %v", got, want)
 		}
-		if got, want := closed.messages(), []int{2, 3, 4}; !slices.Equal(got, want) {
+		if got, want := closed.messages(), []int{4, 2, 3}; !slices.Equal(got, want) {
 			t.Errorf("error handler got *subscriber.ClosedError for messages %v, want %v", got, want)
 		}
 	})
@@ -151,7 +151,7 @@ func TestSubscriberWithUnsubscribeOptions(t *testing.T) {
 }
 
 // A SubscribeSeq loop whose subscriber was unsubscribed with WithUnsubscribeDiscard yields nothing more, and every
-// message the subscriber took is reported, including that of a Broadcast that was waiting on it.
+// message the subscriber took is reported, after that of a Broadcast that was waiting on it, which gives up right away.
 func TestSubscribeSeq_UnsubscribeDiscard(t *testing.T) {
 	t.Parallel()
 
@@ -174,13 +174,13 @@ func TestSubscribeSeq_UnsubscribeDiscard(t *testing.T) {
 		if err := b.Unsubscribe(t.Context(), id, subscriber.WithUnsubscribeDiscard()); err != nil {
 			t.Fatalf("Unsubscribe: %v", err)
 		}
+		waitClosed(t, done, "Broadcast to a subscriber unsubscribed with WithUnsubscribeDiscard")
 		for msg := range seq {
 			t.Errorf("loop got %d, want nothing", msg)
 		}
-		waitClosed(t, done, "Broadcast to a subscriber unsubscribed with WithUnsubscribeDiscard")
 		synctest.Wait()
 
-		if got, want := closed.messages(), []int{1, 2, 3}; !slices.Equal(got, want) {
+		if got, want := closed.messages(), []int{3, 1, 2}; !slices.Equal(got, want) {
 			t.Errorf("error handler got *subscriber.ClosedError for messages %v, want %v", got, want)
 		}
 	})

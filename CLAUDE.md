@@ -38,6 +38,7 @@ Lint (`.golangci.yml`) is `default: all` minus a disable list, tests included: `
 Any change to channels, removal or error reporting must keep these, and pass `make stress`.
 
 - **Only `release` closes a channel.** The subscription holds one reference, and each `Broadcast` sending to a subscriber holds another (`acquire` in `Deliver`). `acquire` refuses a count of 0, so a `Broadcast` that picked a subscriber up just before its removal skips it (`ClosedError`) instead of sending on a closed channel.
+- **Only `Subscriber.Unsubscribe` closes `done`**, once, since only whoever removed the subscriber calls it. `send` checks `done` first, since a select would pick at random, so an unsubscribed subscriber takes no new message but one racing `Unsubscribe`, and a `Broadcast` waiting on it gives up with a `ClosedError` (`TestUnsubscribe_FreesBroadcast`).
 - **Nothing waits for a `Broadcast`**: not `Unsubscribe`, `Close`, the ctx-lifetime removal, nor another `Broadcast`. `handle` often unsubscribes while a `Broadcast` waits on it, and the subscriber is not reading then (`TestUnsubscribe_SelfDuringBroadcast`, `TestUnsubscribe_SeveralThenDrain`, `TestClose_FromHandle`).
 - **Every removal goes through `remove`** (`LoadAndDelete` + `Subscriber.Unsubscribe`), so racing `Unsubscribe`, `Close` and ctx-done drop the reference and apply the unsubscribe options once. `Subscriber.Unsubscribe` stops the ctx-lifetime `AfterFunc` however the subscriber was removed (`TestSubscribe_ContextNoLeak`).
 - **`discarding` is set before `release`**, which may close the channel right away. The existing reader discards, never a second one, which would steal messages. The same goes for the single-use `SubscribeSeq` iterator.
@@ -50,6 +51,7 @@ Any change to channels, removal or error reporting must keep these, and pass `ma
 ## Decisions not to revert
 
 - The `Broadcast` ctx only bounds the wait. Async sends keep using it after `Broadcast` returns. That is documented (`message.WithAsync`, `examples/14-context`) rather than changed: detaching them automatically would leave no way to cancel sends piling up behind a stuck subscriber.
+- `send` tries a send without waiting before its select, so a ready subscriber takes the message even once ctx is done. `selectgo` locks every channel it waits on, and concurrent `Broadcast`s often share a ctx, whose `Done` channel then serialised them: the select alone, with `done` added, made `BenchmarkBroadcast_Concurrent` up to 10× slower than with the try.
 - `message.WithContext` replaces the subscriber's ctx for one message, without merging. nil means none, which overrides a default (staticcheck SA1012 is silenced in the test that does it).
 - The library applies no middleware of its own. The recommended order is `Recover`, `WrapError`, `Retry`, then the user's. Middlewares don't apply to `SubscribeSeq`.
 - `Stats` covers the subscribers still in the map, with no totals across unsubscribes: those would need counters every subscriber goroutine shares, or a fold at removal racing the late `ClosedError`s. So there is no `Closed` counter, since no snapshot could see one. OpenTelemetry goes in its own module.
