@@ -60,7 +60,7 @@ func (b *Broadcastor[T]) SubscribeSeq(ctx context.Context, options ...subscriber
 	}
 	id := s.ID()
 
-	return id, s.Seq(func() { b.remove(id) }), nil
+	return id, s.Seq(), nil
 }
 
 // Unsubscribe removes the subscriber, or returns a *SubscriberNotFoundError. It never waits, so handle can call it, and
@@ -167,7 +167,7 @@ func (b *Broadcastor[T]) add(ctx context.Context, options []subscriber.Option[T]
 	defer b.gate.Leave()
 
 	// Before Store, so whoever removes the subscriber stops the watch.
-	ctx = s.ContextLifetime(ctx, func() { b.remove(id) })
+	ctx = s.Attach(ctx, func(options ...subscriber.UnsubscribeOption) bool { return b.remove(id, options...) })
 	b.subscribers.Store(id, s)
 	// If ctx was already done, the watch may have run before Store and found nothing.
 	if ctx.Err() != nil {

@@ -19,8 +19,11 @@ type Subscriber[T any] struct {
 	ch     chan message.Message[T]
 	config config[T]
 
-	// ctx handles and reports every message that has no ctx of its own. Set by ContextLifetime.
+	// ctx handles and reports every message that has no ctx of its own. Set by Attach.
 	ctx context.Context //nolint:containedctx // the subscription's, which outlives every call
+
+	// remove removes the subscriber from its Broadcastor, as Broadcastor.Unsubscribe does. Set by Attach.
+	remove func(options ...UnsubscribeOption) bool
 
 	// done is closed by Unsubscribe, so that no send waits on a subscriber that is gone.
 	done chan struct{}
@@ -28,12 +31,15 @@ type Subscriber[T any] struct {
 	// discarding makes Consume and pull report messages instead of processing them.
 	discarding atomic.Bool
 
-	// stopContextLifetime cancels the AfterFunc set by ContextLifetime. nil with WithDetachedContext.
+	// stopContextLifetime cancels the AfterFunc set by Attach. nil with WithDetachedContext.
 	stopContextLifetime func() bool
 
 	// refs counts the subscription plus each Broadcast sending on ch. Whoever drops it to 0 closes ch, so ch is never
 	// closed under a sender.
 	refs atomic.Int64
+
+	// misses counts the messages lost in a row, for WithEvictAfter.
+	misses atomic.Int64
 
 	counters counters
 }
@@ -47,6 +53,7 @@ type config[T any] struct {
 	store               Store[T]
 	middlewares         []Middleware[T]
 	detached            bool
+	evictAfter          int
 }
 
 // New returns a subscriber holding the subscription's reference, which Unsubscribe drops.
@@ -66,17 +73,19 @@ func (s *Subscriber[T]) ID() uuid.UUID {
 	return s.id
 }
 
-// ContextLifetime makes the subscriber run with ctx and calls unsubscribe once ctx is done. With WithDetachedContext,
-// it runs with context.WithoutCancel(ctx) instead and never calls unsubscribe. It returns the ctx the subscriber runs
-// with, and must be called once, before anything else.
-func (s *Subscriber[T]) ContextLifetime(ctx context.Context, unsubscribe func()) context.Context {
+// Attach ties the subscriber to its Broadcastor, which remove removes it from. The subscriber runs with ctx, and calls
+// remove once ctx is done, when a Seq loop ends, and to evict itself (WithEvictAfter). With WithDetachedContext, it
+// runs with context.WithoutCancel(ctx) instead, and ctx never removes it. It returns the ctx the subscriber runs with,
+// and must be called once, before anything else.
+func (s *Subscriber[T]) Attach(ctx context.Context, remove func(options ...UnsubscribeOption) bool) context.Context {
+	s.remove = remove
 	if s.config.detached {
 		s.ctx = context.WithoutCancel(ctx)
 
 		return s.ctx
 	}
 	s.ctx = ctx
-	s.stopContextLifetime = context.AfterFunc(ctx, unsubscribe)
+	s.stopContextLifetime = context.AfterFunc(ctx, func() { remove() })
 
 	return ctx
 }
@@ -150,9 +159,9 @@ func (s *Subscriber[T]) Consume(handle Handler[T]) {
 	}
 }
 
-// Seq returns SubscribeSeq's iterator, which can be ranged over once. When the loop ends, it calls unsubscribe and
+// Seq returns SubscribeSeq's iterator, which can be ranged over once. When the loop ends, it removes the subscriber and
 // reports what is left on ch.
-func (s *Subscriber[T]) Seq(unsubscribe func()) iter.Seq[T] {
+func (s *Subscriber[T]) Seq() iter.Seq[T] {
 	var ranged atomic.Bool
 
 	return func(yield func(T) bool) {
@@ -160,7 +169,7 @@ func (s *Subscriber[T]) Seq(unsubscribe func()) iter.Seq[T] {
 			return
 		}
 		defer func() {
-			unsubscribe()
+			s.remove()
 			// In a goroutine: a Broadcast still sending here reports before it releases, and its error handler may be
 			// waiting on this goroutine.
 			go s.discard()
@@ -204,7 +213,7 @@ func (s *Subscriber[T]) send(ctx context.Context, m message.Message[T]) bool {
 	// takes every channel's. Even once ctx is done, it takes m.
 	select {
 	case s.ch <- m:
-		s.counters.delivered.Add(1)
+		s.taken()
 
 		return true
 	default:
@@ -212,7 +221,7 @@ func (s *Subscriber[T]) send(ctx context.Context, m message.Message[T]) bool {
 
 	if m.Config.Delivery == message.DeliveryNonBlocking {
 		s.counters.dropped.Add(1)
-		s.report(m, &DroppedError[T]{SubscriberID: s.id, Message: m.Value}) //nolint:contextcheck // reported with the message's ctx, not the one bounding the wait
+		s.lose(m, &DroppedError[T]{SubscriberID: s.id, Message: m.Value})
 
 		return false
 	}
@@ -226,7 +235,7 @@ func (s *Subscriber[T]) send(ctx context.Context, m message.Message[T]) bool {
 
 	select {
 	case s.ch <- m:
-		s.counters.delivered.Add(1)
+		s.taken()
 
 		return true
 	case <-s.done:
@@ -235,10 +244,28 @@ func (s *Subscriber[T]) send(ctx context.Context, m message.Message[T]) bool {
 		return false
 	case <-sendCtx.Done():
 		s.counters.timedOut.Add(1)
-		s.report(m, &TimeoutError[T]{SubscriberID: s.id, Message: m.Value, Err: sendCtx.Err()}) //nolint:contextcheck // reported with the message's ctx, not the one bounding the wait
+		s.lose(m, &TimeoutError[T]{SubscriberID: s.id, Message: m.Value, Err: sendCtx.Err()})
 
 		return false
 	}
+}
+
+// taken counts a message the subscriber took, which ends a run of losses.
+func (s *Subscriber[T]) taken() {
+	s.counters.delivered.Add(1)
+	if s.config.evictAfter > 0 {
+		s.misses.Store(0)
+	}
+}
+
+// lose reports m, lost to err, and evicts the subscriber once it has lost evictAfter messages in a row (WithEvictAfter).
+// Only the loss whose remove deletes the subscriber is reported as an *EvictedError, once removed: so an eviction is
+// reported once, and never for a subscriber something else removed first.
+func (s *Subscriber[T]) lose(m message.Message[T], err error) {
+	if s.config.evictAfter > 0 && s.misses.Add(1) >= int64(s.config.evictAfter) && s.remove(WithUnsubscribeDiscard()) {
+		err = &EvictedError[T]{SubscriberID: s.id, Message: m.Value, Err: err}
+	}
+	s.report(m, err)
 }
 
 // acquire takes a reference for a Broadcast, unless ch is already closed.

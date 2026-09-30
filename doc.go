@@ -34,8 +34,9 @@
 //
 // Unsubscribe and Close never wait, so handle can call them, and a Broadcast waiting on a subscriber gives up once it is
 // unsubscribed. A subscriber may still process messages it already took, unless unsubscribed with
-// subscriber.WithUnsubscribeDiscard. Once the ctx passed to Subscribe is done, the subscriber
-// is unsubscribed, unless it has subscriber.WithDetachedContext.
+// subscriber.WithUnsubscribeDiscard. Once the ctx passed to Subscribe is done, the subscriber is unsubscribed, unless it
+// has subscriber.WithDetachedContext. subscriber.WithEvictAfter unsubscribes a subscriber that loses too many messages
+// in a row.
 //
 // # Contexts
 //
@@ -48,7 +49,8 @@
 // Errors go to subscriber.WithErrorHandler and message.WithErrorHandler, and are discarded without one. handle's
 // errors arrive as is. Package middleware can recover panics (Recover), wrap errors (WrapError) and retry (Retry).
 // Broadcast reports a message it could not hand over as a *subscriber.TimeoutError, *subscriber.DroppedError or
-// *subscriber.ClosedError. Each error type matches a sentinel with errors.Is.
+// *subscriber.ClosedError, and the loss that evicts a subscriber as a *subscriber.EvictedError. Each error type matches
+// a sentinel with errors.Is.
 //
 // # Storing lost messages
 //

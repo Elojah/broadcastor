@@ -42,7 +42,7 @@ const (
 )
 
 // TestStress runs random interleavings of every method from several goroutines, in real time so that timeouts race
-// sends, over rounds that each have their own Broadcastor. It checks that nothing panics, that every goroutine returns
+// sends and evict subscribers, over rounds that each have their own Broadcastor. It checks that nothing panics, that every goroutine returns
 // once the Broadcastor is closed, that no subscriber gets a message twice, whether handled or reported, that a
 // subscriber gets every message broadcast while it was subscribed and none broadcast outside that, and that Stats add
 // up once nothing is in flight. make stress runs it many times.
@@ -107,6 +107,8 @@ type stressSub struct {
 	id     uuid.UUID
 	seq    bool
 	cancel context.CancelFunc
+	// evictAfter is its subscriber.WithEvictAfter, 0 for none.
+	evictAfter int
 
 	// subscribing and subscribed are the ticks before Subscribe or SubscribeSeq and after it returned.
 	subscribing, subscribed int64
@@ -115,10 +117,14 @@ type stressSub struct {
 	leaving, gone atomic.Int64
 	// leave makes handle unsubscribe itself, or the loop body break, on the next message.
 	leave atomic.Bool
+	// notFound is set once an Unsubscribe found no subscriber before Close, which only an eviction explains.
+	notFound atomic.Bool
 
 	mu     sync.Mutex
 	got    map[int]stressOutcome
 	failed map[int]bool
+	// evicted is the message whose loss evicted the subscriber, and evictions how many said so.
+	evicted, evictions int
 	// twice holds the numbers the subscriber got again, or that handle failed for again.
 	twice      []int
 	unexpected []error
@@ -230,11 +236,21 @@ func (s *stress) subscribe(ctx context.Context, t *testing.T) *stressSub {
 	sub := &stressSub{seq: randN(3) == 0, cancel: cancel, got: map[int]stressOutcome{}, failed: map[int]bool{}}
 	options := []subscriber.Option[int]{
 		subscriber.WithBuffer[int](randN(4)),
-		subscriber.WithErrorHandler[int](sub.report),
+		subscriber.WithErrorHandler[int](func(ctx context.Context, err error) {
+			// Evicted before it is reported.
+			if errors.Is(err, subscriber.ErrEvicted) {
+				earliest(&sub.gone, s.clock.Add(1))
+			}
+			sub.report(ctx, err)
+		}),
 	}
 	// So that ctx and Close discard too.
 	if randN(2) == 0 {
 		options = append(options, subscriber.WithUnsubscribeOptions[int](subscriber.WithUnsubscribeDiscard()))
+	}
+	if randN(2) == 0 {
+		sub.evictAfter = 1 + randN(3)
+		options = append(options, subscriber.WithEvictAfter[int](sub.evictAfter))
 	}
 
 	var (
@@ -312,6 +328,11 @@ func (s *stress) unsubscribe(ctx context.Context, sub *stressSub, id uuid.UUID, 
 
 		return nil
 	case isNotFound(err) && s.closing.Load() != 0:
+		return nil
+	case isNotFound(err) && sub.evictAfter > 0:
+		// Its error handler may not have been told yet: check then that it was.
+		sub.notFound.Store(true)
+
 		return nil
 	default:
 		return err
@@ -472,10 +493,15 @@ func (sub *stressSub) record(n int, outcome stressOutcome) {
 func (sub *stressSub) report(_ context.Context, err error) {
 	var (
 		failed  handleError
+		evicted *subscriber.EvictedError[int]
 		closed  *subscriber.ClosedError[int]
 		timeout *subscriber.TimeoutError[int]
 		dropped *subscriber.DroppedError[int]
 	)
+	// Then recorded as the timeout or drop it wraps.
+	if errors.As(err, &evicted) {
+		sub.evict(evicted.Message)
+	}
 	switch {
 	case errors.As(err, &failed):
 		sub.fail(int(failed))
@@ -502,6 +528,15 @@ func (sub *stressSub) fail(n int) {
 	sub.failed[n] = true
 }
 
+// evict records that the loss of n evicted the subscriber.
+func (sub *stressSub) evict(n int) {
+	sub.mu.Lock()
+	defer sub.mu.Unlock()
+	if sub.evictions++; sub.evictions == 1 {
+		sub.evicted = n
+	}
+}
+
 // unexpect records an error the subscriber should not have got.
 func (sub *stressSub) unexpect(err error) {
 	sub.mu.Lock()
@@ -521,9 +556,19 @@ func (sub *stressSub) problems(broadcasts []stressBroadcast, byNumber map[int]st
 	if len(sub.unexpected) != 0 {
 		problems = append(problems, fmt.Sprintf("got unexpected errors %v", first(sub.unexpected)))
 	}
+	if sub.evictAfter == 0 && sub.evictions != 0 || sub.evictions > 1 {
+		problems = append(problems, fmt.Sprintf("evicted %d times, with WithEvictAfter(%d)", sub.evictions, sub.evictAfter))
+	}
+	if sub.notFound.Load() && sub.evictions == 0 {
+		problems = append(problems, "Unsubscribe found no subscriber before Close, but it was never evicted")
+	}
 
 	// Every message broadcast entirely while it was subscribed, and none broadcast entirely outside that.
 	leaving, gone := min(tickOrNever(&sub.leaving), closing), min(tickOrNever(&sub.gone), closed)
+	if sub.evictions != 0 {
+		// Evicted by that message's Broadcast, once it started.
+		leaving = min(leaving, byNumber[sub.evicted].start)
+	}
 	var missing, extra []int
 	for _, b := range broadcasts {
 		if _, ok := sub.got[b.number]; !ok && b.start > sub.subscribed && b.end < leaving {

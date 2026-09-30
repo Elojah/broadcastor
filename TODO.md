@@ -52,12 +52,6 @@ Each item changes one function or adds one option.
 
 ## Mid-term: slow subscribers and shutdown
 
-- [ ] Evict slow subscribers with `subscriber.WithEvictAfter(n)`. Today a stuck subscriber with a timeout costs every
-  sync `Broadcast` that full timeout, for as long as it stays subscribed. Redis evicts pub/sub clients over
-  `client-output-buffer-limit` for the same reason, and NATS evicts slow consumers. `send` counts consecutive
-  timeouts and drops, and a message taken resets the count. Once the count reaches n, the subscriber is unsubscribed
-  with discard through `remove`, like every other removal. The loss that triggered the eviction is reported once, as
-  an `*EvictedError` wrapping the original error, which matches `ErrEvicted`. It builds on the unblock item above.
 - [ ] `Shutdown(ctx)`: `Close`, then wait until every subscriber's goroutine has returned (`Consume`, or a
   `SubscribeSeq` loop and its discard), or until ctx is done. `Close` never waits, so today a program that exits right
   after it cuts off whatever handle was doing, and cannot flush the buffers first. With `WithUnsubscribeDeliver`,
