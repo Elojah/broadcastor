@@ -20,15 +20,16 @@
 //		fmt.Println(msg)
 //	}
 //
-// The options passed to Subscribe, SubscribeSeq and Unsubscribe are in package subscriber, and those passed to
-// Broadcast in package message. The README covers what follows in more detail.
+// The options passed to NewBroadcastor are in this package, those passed to Subscribe, SubscribeSeq and Unsubscribe in
+// package subscriber, and those passed to Broadcast in package message. The README covers what follows in more detail.
 //
 // # Delivery
 //
 // Delivery is at most once. By default Broadcast waits for each subscriber in turn to take the message, so a slow one
 // holds up those after it. subscriber.WithBuffer, message.WithParallel, message.WithAsync and message.WithNonBlocking
 // change that. Broadcast gives up on a subscriber once its ctx is done or the message's timeout runs out
-// (message.WithTimeout, subscriber.WithTimeout).
+// (message.WithTimeout, subscriber.WithTimeout). WithAsyncLimit bounds the async sends in flight: past it, an async
+// Broadcast waits for one to finish, within the same bounds.
 //
 // # Unsubscribing
 //

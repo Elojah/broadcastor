@@ -36,9 +36,9 @@ if err := b.Unsubscribe(ctx, id); err != nil {
 `Subscribe` is the subscription's: once it is done, the subscriber is unsubscribed (see [Unsubscribing](#unsubscribing)).
 [Contexts](#contexts) tells which ctx does what.
 
-Options live next to what they configure: [`subscriber`](subscriber) holds those passed to `Subscribe`,
-`SubscribeSeq` and `Unsubscribe`, along with `Handler`, `Middleware` and the errors about a subscriber's messages, and
-[`message`](message) those passed to `Broadcast`.
+Options live next to what they configure: the root package holds those passed to `NewBroadcastor`,
+[`subscriber`](subscriber) those passed to `Subscribe`, `SubscribeSeq` and `Unsubscribe`, along with `Handler`,
+`Middleware` and the errors about a subscriber's messages, and [`message`](message) those passed to `Broadcast`.
 
 `SubscribeSeq` returns an iterator instead of taking a `handle` function. The loop body takes the place of `handle`, and
 the loop unsubscribes when it breaks or when `ctx` is done:
@@ -98,7 +98,7 @@ Each `Broadcast` picks a mode with a message option, and a subscriber can set it
 | **Sync** (default, `message.WithSync`) | In `Broadcast` order, for `Broadcast`s from one goroutine. | Each subscriber in turn, until it takes the message. A subscriber takes its next message only once `handle` returns, so a slow subscriber holds up `Broadcast` and every subscriber after it. | The `Broadcast` ctx is done, or the message's timeout runs out, before it takes the message (`*subscriber.TimeoutError`). |
 | **Buffered** (`subscriber.WithBuffer(n)`) | Same as sync. | Nothing while the subscriber's buffer has room, then the same as sync. | Same as sync, once the buffer is full. |
 | **Parallel** (`message.WithParallel`) | Same as sync. | Every subscriber at once, each from a goroutine of its own, until each takes the message or misses it. A slow subscriber holds up `Broadcast`, but nobody else. | Same as sync, reported before `Broadcast` returns. |
-| **Async** (`message.WithAsync`) | None: successive `Broadcast`s may arrive out of order. | Nothing. Each subscriber is sent the message from a goroutine of its own, so a slow subscriber holds up nobody else. | Same as sync, but reported after `Broadcast` has returned: the `Broadcast` ctx still counts then (see [Contexts](#contexts)). |
+| **Async** (`message.WithAsync`) | None: successive `Broadcast`s may arrive out of order. | Nothing. Each subscriber is sent the message from a goroutine of its own, so a slow subscriber holds up nobody else. With `WithAsyncLimit`, a free slot once the limit is reached. | Same as sync, but reported after `Broadcast` has returned: the `Broadcast` ctx still counts then (see [Contexts](#contexts)). With `WithAsyncLimit`, also when no slot frees up in time. |
 | **Non-blocking** (`message.WithNonBlocking`) | Same as sync, for the messages it takes. | Nothing. | It is busy in `handle`, or its buffer is full (`*subscriber.DroppedError`). |
 
 In every mode, a subscriber that is unsubscribed while `Broadcast` is running may miss the message
@@ -108,6 +108,14 @@ In every mode, a subscriber that is unsubscribed while `Broadcast` is running ma
 them. A parallel `Broadcast` gets to every subscriber at once, so it waits at most `d` in all, and a ctx deadline gives
 every subscriber the same time. `subscriber.WithTimeout(d)` sets a default timeout for every message sent to one
 subscriber.
+
+Each async send holds a goroutine until the subscriber takes the message, so a stuck subscriber can pile up any number
+of them. `NewBroadcastor[T](broadcastor.WithAsyncLimit[T](n))` bounds the async sends in flight, to every subscriber
+together, to `n`. Past it, an async `Broadcast` waits for a free slot the way a sync one waits for a subscriber: until
+its ctx is done or the message's timeout runs out, which then covers the wait for a slot and the send together. The
+subscriber then gets a `*subscriber.TimeoutError`. The limit is shared, so a stuck subscriber can hold every slot and
+hold up async `Broadcast`s to every other subscriber. Bound them with a timeout or a ctx deadline: an async `Broadcast`
+from `handle` with neither may wait for good on the sends to its own subscriber.
 
 ## Middleware
 
@@ -174,7 +182,7 @@ Errors go to error handlers, and are discarded when there are none:
 | The error `handle` returned, as is | `handle`, or the outermost middleware, returned an error. |
 | `*subscriber.HandleError` | Same, in a subscriber with `middleware.WrapError`. |
 | `*subscriber.PanicError` | `handle` or a middleware panicked, in a subscriber with `middleware.Recover`. Without it, the panic crashes the program. |
-| `*subscriber.TimeoutError` | `Broadcast` gave up waiting. |
+| `*subscriber.TimeoutError` | `Broadcast` gave up waiting, for the subscriber or for a slot of `WithAsyncLimit`. |
 | `*subscriber.DroppedError` | A non-blocking `Broadcast` found the subscriber busy. |
 | `*subscriber.ClosedError` | The subscriber was unsubscribed while `Broadcast` was running. |
 | `*subscriber.ClosedError` | A `SubscribeSeq` loop ended before yielding a message its subscriber took. |

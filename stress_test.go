@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"runtime/pprof"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -37,32 +38,43 @@ const (
 	stressTimeout = 500 * time.Microsecond
 	// handle fails for every multiple of stressFailEvery.
 	stressFailEvery = 7
+	// stressAsyncLimit is the WithAsyncLimit of the rounds that have one, low enough that async Broadcasts wait.
+	stressAsyncLimit = 4
 	// stressLabel is the pprof label every goroutine of a round carries, the library's included.
 	stressLabel = "broadcastor_stress"
 )
 
 // TestStress runs random interleavings of every method from several goroutines, in real time so that timeouts race
-// sends, over rounds that each have their own Broadcastor. It checks that nothing panics, that every goroutine returns
+// sends, over rounds that each have their own Broadcastor, half of them with WithAsyncLimit. It checks that nothing panics, that every goroutine returns
 // once the Broadcastor is closed, that no subscriber gets a message twice, whether handled or reported, that a
 // subscriber gets every message broadcast while it was subscribed and none broadcast outside that, and that Stats add
 // up once nothing is in flight. make stress runs it many times.
 func TestStress(t *testing.T) {
 	t.Parallel()
 
+	limits := []struct {
+		name    string
+		options []broadcastor.Option[int]
+	}{
+		{name: "none"},
+		{name: strconv.Itoa(stressAsyncLimit), options: []broadcastor.Option[int]{broadcastor.WithAsyncLimit[int](stressAsyncLimit)}},
+	}
 	for round := range stressRounds {
 		// Half the rounds close while everything else runs, the others once nothing is in flight, after checking Stats.
+		// Each of those, with and without an async limit, comes up every 4 rounds.
 		closeEarly := round%2 == 1
-		runStress(t, closeEarly)
+		limit := limits[round/2%len(limits)]
+		runStress(t, closeEarly, limit.options...)
 		if t.Failed() {
-			t.Fatalf("round %d failed, closing early: %t", round, closeEarly)
+			t.Fatalf("round %d failed, closing early: %t, async limit: %s", round, closeEarly, limit.name)
 		}
 	}
 }
 
 // runStress runs one round, then checks it once every goroutine it started has returned.
-func runStress(t *testing.T, closeEarly bool) {
+func runStress(t *testing.T, closeEarly bool, options ...broadcastor.Option[int]) {
 	t.Helper()
-	s := &stress{b: broadcastor.NewBroadcastor[int](), closeEarly: closeEarly, label: uuid.NewString()}
+	s := &stress{b: broadcastor.NewBroadcastor[int](options...), closeEarly: closeEarly, label: uuid.NewString()}
 	// Every goroutine started in f carries the label, and so do those they start, the library's included.
 	pprof.Do(t.Context(), pprof.Labels(stressLabel, s.label), func(ctx context.Context) { s.run(ctx, t) })
 	s.waitGoroutines(t)

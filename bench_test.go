@@ -101,6 +101,46 @@ func BenchmarkBroadcast_Throughput(b *testing.B) {
 	}
 }
 
+// BenchmarkBroadcast_AsyncLimit is BenchmarkBroadcast_Throughput in async mode, from one goroutine and from GOMAXPROCS
+// at once, with no limit and with WithAsyncLimit. The limit makes Broadcast wait whenever it is reached.
+func BenchmarkBroadcast_AsyncLimit(b *testing.B) {
+	limits := []struct {
+		name    string
+		options []broadcastor.Option[int]
+	}{
+		{name: "none"},
+		{name: "64", options: []broadcastor.Option[int]{broadcastor.WithAsyncLimit[int](64)}},
+	}
+
+	for _, subscribers := range benchSubscribers {
+		for _, producers := range []string{"1", "parallel"} {
+			for _, limit := range limits {
+				b.Run(fmt.Sprintf("subscribers=%d/producers=%s/limit=%s", subscribers, producers, limit.name), func(b *testing.B) {
+					bc := broadcastor.NewBroadcastor[int](limit.options...)
+					wait := subscribeCounting(b, bc, subscribers, b.N, subscriber.WithBuffer[int](benchBuffer))
+					async := message.WithAsync[int]()
+
+					b.ReportAllocs()
+					b.ResetTimer()
+					if producers == "1" {
+						for range b.N {
+							bc.Broadcast(b.Context(), 0, async)
+						}
+					} else {
+						b.RunParallel(func(pb *testing.PB) {
+							for pb.Next() {
+								bc.Broadcast(b.Context(), 0, async)
+							}
+						})
+					}
+					wait()
+					reportPerDelivery(b, subscribers)
+				})
+			}
+		}
+	}
+}
+
 // BenchmarkBroadcast_Concurrent is BenchmarkBroadcast_Throughput in sync mode from GOMAXPROCS goroutines at once, so
 // that they contend on each subscriber's reference count, counters and channel.
 func BenchmarkBroadcast_Concurrent(b *testing.B) {

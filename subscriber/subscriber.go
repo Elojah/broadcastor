@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/elojah/broadcastor/message"
+	"github.com/elojah/broadcastor/pkg/limit"
 )
 
 // Subscriber is one subscription of a Broadcastor. Its channel is read either by Consume or by a single Seq loop.
@@ -81,7 +82,10 @@ func (s *Subscriber[T]) ContextLifetime(ctx context.Context, unsubscribe func())
 // Deliver sends value to the subscriber and reports whether it took it, or, for an async message, whether a send was
 // started. A parallel message returns false and a channel that yields the result instead. Failures are reported with
 // the message's ctx, never ctx, which only bounds the wait.
-func (s *Subscriber[T]) Deliver(ctx context.Context, value T, options ...message.Option[T]) (bool, <-chan bool) {
+//
+// An async send first takes a slot of async, waiting until ctx is done or the message's timeout runs out. nil means no
+// limit.
+func (s *Subscriber[T]) Deliver(ctx context.Context, async *limit.Semaphore, value T, options ...message.Option[T]) (bool, <-chan bool) {
 	m := message.New(value, s.config.defaults, options...)
 
 	if !s.acquire() {
@@ -91,6 +95,9 @@ func (s *Subscriber[T]) Deliver(ctx context.Context, value T, options ...message
 	}
 
 	if m.Config.Delivery == message.DeliveryAsync {
+		if async != nil {
+			return s.sendLimited(ctx, async, m), nil
+		}
 		go s.send(ctx, m)
 
 		return true, nil
@@ -217,6 +224,38 @@ func (s *Subscriber[T]) send(ctx context.Context, m message.Message[T]) bool {
 
 		return false
 	}
+}
+
+// sendLimited sends m from a goroutine of its own once it has a slot of async, and reports whether it started. m's
+// timeout counts from here, so it covers the wait for a slot and the send together: send applies it again, which
+// changes nothing since sendCtx's deadline is earlier. If the wait gives up, it releases the caller's reference.
+func (s *Subscriber[T]) sendLimited(ctx context.Context, async *limit.Semaphore, m message.Message[T]) bool {
+	// Assigned once, so that the goroutine's closure copies them instead of moving them to the heap.
+	sendCtx, cancel := withTimeout(ctx, m.Config.Timeout)
+	if err := async.Acquire(sendCtx); err != nil {
+		cancel()
+		defer s.release()
+		s.counters.timedOut.Add(1)
+		s.report(m, &TimeoutError[T]{SubscriberID: s.id, Message: m.Value, Err: err}) //nolint:contextcheck // reported with the message's ctx, not the one bounding the wait
+
+		return false
+	}
+	go func() {
+		defer async.Release()
+		defer cancel()
+		s.send(sendCtx, m)
+	}()
+
+	return true
+}
+
+// withTimeout is context.WithTimeout, or ctx itself if timeout is 0 or less.
+func withTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout > 0 {
+		return context.WithTimeout(ctx, timeout)
+	}
+
+	return ctx, func() {}
 }
 
 // acquire takes a reference for a Broadcast, unless ch is already closed.

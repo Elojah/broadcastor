@@ -11,6 +11,7 @@ import (
 
 	"github.com/elojah/broadcastor/message"
 	"github.com/elojah/broadcastor/pkg/gate"
+	"github.com/elojah/broadcastor/pkg/limit"
 	"github.com/elojah/broadcastor/subscriber"
 )
 
@@ -21,11 +22,23 @@ type Broadcastor[T any] struct {
 
 	// gate makes Close wait for every add under way, so each subscriber is either refused or seen by Close.
 	gate gate.Gate
+
+	// async bounds the async sends in flight. nil without WithAsyncLimit.
+	async *limit.Semaphore
 }
 
-// NewBroadcastor returns an empty Broadcastor.
-func NewBroadcastor[T any]() *Broadcastor[T] {
-	return &Broadcastor[T]{}
+// NewBroadcastor returns an empty Broadcastor, configured by options.
+func NewBroadcastor[T any](options ...Option[T]) *Broadcastor[T] {
+	var config config
+	for _, option := range options {
+		option(&config)
+	}
+	b := &Broadcastor[T]{}
+	if config.asyncLimit > 0 {
+		b.async = limit.NewSemaphore(config.asyncLimit)
+	}
+
+	return b
 }
 
 // Subscribe adds a subscriber and returns its ID. The subscriber's own goroutine calls handle for each message, one at
@@ -99,19 +112,22 @@ func (b *Broadcastor[T]) Close() error {
 //
 // By default it waits for each subscriber in turn, so a slow one holds up those after it. It gives up on a subscriber
 // once ctx is done or the message's timeout runs out, and tells its error handlers why. ctx only bounds the wait, and
-// reaches neither handle nor the error handlers, although async sends keep using it (see message.WithAsync).
+// reaches neither handle nor the error handlers, although async sends keep using it (see message.WithAsync). With
+// WithAsyncLimit, an async Broadcast also waits for a free slot, within the same bounds.
 func (b *Broadcastor[T]) Broadcast(ctx context.Context, msg T, options ...message.Option[T]) int {
 	var (
 		n int
 		// One per parallel send, yielding whether the subscriber took the message.
 		pending []<-chan bool
+		// Read once: it shares a cache line with gate, which every Subscribe writes.
+		async = b.async
 	)
 	b.subscribers.Range(func(_, value any) bool {
 		s, ok := value.(*subscriber.Subscriber[T])
 		if !ok {
 			return true
 		}
-		taken, parallel := s.Deliver(ctx, msg, options...)
+		taken, parallel := s.Deliver(ctx, async, msg, options...)
 		if taken {
 			n++
 		}

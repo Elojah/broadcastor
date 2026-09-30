@@ -6,10 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `github.com/elojah/broadcastor` is a Go library: a generic in-process fan-out, where one `Broadcast` hands a message to every subscriber. Its only dependency is `github.com/google/uuid`. Go 1.26.1.
 
-- `broadcastor` (root): `Broadcastor`, `ErrClosed`, `SubscriberNotFoundError`.
+- `broadcastor` (root): `Broadcastor`, its options (`WithAsyncLimit`), `ErrClosed`, `SubscriberNotFoundError`.
 - `subscriber`: `Subscriber`, the options for `Subscribe`/`SubscribeSeq`/`Unsubscribe`, `Handler`/`Middleware`, `Store`/`Record`, `Stats`, and the errors about messages.
 - `message`: `Message`, `Config`, `Delivery`, the options for `Broadcast`.
-- `middleware` (`Recover`, `WrapError`, `Retry`), `store` (`Queue`, `Ring`, `Drain`, `Enqueue`, `Filter`), `pkg/gate`, `examples/`.
+- `middleware` (`Recover`, `WrapError`, `Retry`), `store` (`Queue`, `Ring`, `Drain`, `Enqueue`, `Filter`), `pkg/gate`, `pkg/limit`, `examples/`.
 
 Imports go one way: `broadcastor` → `subscriber` → `message`. `middleware` and `store` import `subscriber`, never `broadcastor`. Planned work is in TODO.md.
 
@@ -38,7 +38,7 @@ Lint (`.golangci.yml`) is `default: all` minus a disable list, tests included: `
 Any change to channels, removal or error reporting must keep these, and pass `make stress`.
 
 - **Only `release` closes a channel.** The subscription holds one reference, and each `Broadcast` sending to a subscriber holds another (`acquire` in `Deliver`). `acquire` refuses a count of 0, so a `Broadcast` that picked a subscriber up just before its removal skips it (`ClosedError`) instead of sending on a closed channel.
-- **Nothing waits for a `Broadcast`**: not `Unsubscribe`, `Close`, the ctx-lifetime removal, nor another `Broadcast`. `handle` often unsubscribes while a `Broadcast` waits on it, and the subscriber is not reading then (`TestUnsubscribe_SelfDuringBroadcast`, `TestUnsubscribe_SeveralThenDrain`, `TestClose_FromHandle`).
+- **Nothing waits for a `Broadcast`**: not `Unsubscribe`, `Close`, the ctx-lifetime removal, nor another `Broadcast`. `handle` often unsubscribes while a `Broadcast` waits on it, and the subscriber is not reading then (`TestUnsubscribe_SelfDuringBroadcast`, `TestUnsubscribe_SeveralThenDrain`, `TestClose_FromHandle`). The one exception is `WithAsyncLimit`: an async `Broadcast` waits for other `Broadcast`s' sends to free a slot, bounded by its own ctx and the message's timeout (`TestBroadcastorWithAsyncLimit_FromHandle`).
 - **Every removal goes through `remove`** (`LoadAndDelete` + `Subscriber.Unsubscribe`), so racing `Unsubscribe`, `Close` and ctx-done drop the reference and apply the unsubscribe options once. `Subscriber.Unsubscribe` stops the ctx-lifetime `AfterFunc` however the subscriber was removed (`TestSubscribe_ContextNoLeak`).
 - **`discarding` is set before `release`**, which may close the channel right away. The existing reader discards, never a second one, which would steal messages. The same goes for the single-use `SubscribeSeq` iterator.
 - **`add` registers the ctx lifetime before `Store`, and rechecks `ctx.Err()` after**, since the callback may run first and find nothing. It stores between `gate.Enter` and `gate.Leave`, and `Close` closes the gate before ranging, so every subscriber is either refused or seen. Every `Close` ranges, not just the first.
@@ -53,6 +53,7 @@ Any change to channels, removal or error reporting must keep these, and pass `ma
 - `message.WithContext` replaces the subscriber's ctx for one message, without merging. nil means none, which overrides a default (staticcheck SA1012 is silenced in the test that does it).
 - The library applies no middleware of its own. The recommended order is `Recover`, `WrapError`, `Retry`, then the user's. Middlewares don't apply to `SubscribeSeq`.
 - `Stats` covers the subscribers still in the map, with no totals across unsubscribes: those would need counters every subscriber goroutine shares, or a fold at removal racing the late `ClosedError`s. So there is no `Closed` counter, since no snapshot could see one. OpenTelemetry goes in its own module.
+- `WithAsyncLimit` is one `limit.Semaphore` for the whole `Broadcastor`. Past it, an async `Broadcast` waits for a slot until its ctx is done or the message's timeout runs out, which covers the wait and the send together, rather than dropping the message. `sendLimited`'s goroutine releases the slot itself, so a limited send allocates no more than an unlimited one. errgroup is ruled out: it is `golang.org/x/sync`, `Go` waits with no bound and `TryGo` never waits. A pool of n long-lived workers was benchmarked against it (`BenchmarkBroadcast_AsyncLimit`, limit 64): 1.7–2.9× slower with one broadcaster on 4 or 8 cores, 5–19% faster with GOMAXPROCS broadcasters, and its workers need stopping at `Close`.
 - `message.Config` has no `T` (`message.Option[T]` keeps it only for the public API), which is why there is no message-level store.
 - In `store`, `Enqueue`'s `Put` and `Drain`'s dead-letter `Put` and `Ack` get `context.WithoutCancel`, like `report`'s `Put`: a done ctx is often why a message is stored, and an entry `Drain` handled must be acked even if ctx ended meanwhile (`TestDrain_AckOnceHandled`). An entry whose handle failed once ctx is done stays in the queue, for the next `Drain`.
 

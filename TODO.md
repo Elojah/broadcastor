@@ -32,12 +32,11 @@ Each item changes one function or adds one option.
   `WithUnsubscribeDeliver`, but a subscriber no longer takes new ones once unsubscribed, except for a send that races
   `Unsubscribe`. `ch` is still closed only by `release`. This is what makes `Close` and ctx-lifetime removal actually
   release a stuck subscriber.
-- [ ] Bound async sends: `subscriber.WithAsyncLimit(n)`. Each async message to a stuck subscriber parks a goroutine
-  that holds the message until the subscriber takes it or ctx ends. With `context.Background()` and no timeout, that
-  may never happen, so the goroutines pile up without limit. Past n sends in flight, an async message is dropped with a
-  `*DroppedError`. It needs an atomic counter per subscriber, which `Stats.Sending` exposes. Decide whether the default
-  stays unlimited (today's behaviour) or becomes a bound, which is safer but drops messages silently when there is no
-  error handler.
+- [ ] A per-subscriber async limit, only if the shared one falls short. `broadcastor.WithAsyncLimit` bounds the async
+  sends of the whole `Broadcastor`, so a stuck subscriber can hold every slot and hold up async `Broadcast`s to all the
+  others (`TestBroadcastorWithAsyncLimit_Shared`). `subscriber.WithAsyncLimit(n)` would give each subscriber a
+  `limit.Semaphore` of its own, with `Stats.Sending` for how many slots it holds. `subscriber.WithEvictAfter` (below)
+  may cover the same need by removing the stuck subscriber instead.
 - [ ] `Stats.Handling`: how long the current handle has been running, 0 when idle. Today a stuck handle shows only
   indirectly, as `Queued == Buffer` with counters that stop moving. `Consume` already reads the clock before handle,
   so storing that time in an atomic is enough for a watchdog to unsubscribe a subscriber stuck for too long.
