@@ -87,6 +87,16 @@ func WithTimeout[T any](timeout time.Duration) Option[T] {
 	}
 }
 
+// WithEvictAfter unsubscribes the subscriber once it has lost n messages in a row as a *TimeoutError or a
+// *DroppedError, so that a stuck subscriber stops costing every Broadcast its timeout. A message it takes starts the
+// count again. It is unsubscribed with WithUnsubscribeDiscard, whatever its defaults, and the loss that evicts it is
+// reported as an *EvictedError instead. 0 or less means never, the default.
+func WithEvictAfter[T any](n int) Option[T] {
+	return func(config *config[T]) {
+		config.evictAfter = n
+	}
+}
+
 // WithUnsubscribeDiscard makes the subscriber report every message it takes once unsubscribed as a *ClosedError,
 // instead of handling it, and ends a SubscribeSeq loop. Unsubscribe still does not wait, so handle may yet run for one
 // message. It has no effect if the subscriber was already unsubscribed.

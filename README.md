@@ -85,6 +85,8 @@ for msg := range seq {
     message in order to an uplink that is down for a while, without holding `Broadcast` up.
 19. [`19-stats`](examples/19-stats/main.go): `Broadcastor.Stats`, for a subscriber stuck with a full buffer and one
     failing on every message.
+20. [`20-evict`](examples/20-evict/main.go): `subscriber.WithEvictAfter` and `*subscriber.EvictedError`, for a stuck
+    subscriber that `Broadcast` stops waiting for.
 
 ## Delivery
 
@@ -107,7 +109,8 @@ In every mode, a subscriber that is unsubscribed while `Broadcast` is running ma
 `message.WithTimeout(d)` bounds the wait for each subscriber separately, while a ctx deadline is used up across all of
 them. A parallel `Broadcast` gets to every subscriber at once, so it waits at most `d` in all, and a ctx deadline gives
 every subscriber the same time. `subscriber.WithTimeout(d)` sets a default timeout for every message sent to one
-subscriber.
+subscriber. `subscriber.WithEvictAfter(n)` unsubscribes a subscriber once it has lost n messages in a row, so that a
+stuck one stops costing every `Broadcast` its timeout (see [Unsubscribing](#unsubscribing)).
 
 ## Middleware
 
@@ -176,9 +179,10 @@ Errors go to error handlers, and are discarded when there are none:
 | `*subscriber.PanicError` | `handle` or a middleware panicked, in a subscriber with `middleware.Recover`. Without it, the panic crashes the program. |
 | `*subscriber.TimeoutError` | `Broadcast` gave up waiting. |
 | `*subscriber.DroppedError` | A non-blocking `Broadcast` found the subscriber busy. |
-| `*subscriber.ClosedError` | The subscriber was unsubscribed while `Broadcast` was running. |
+| `*subscriber.ClosedError` | The subscriber was unsubscribed while `Broadcast` was running, or waiting on it. |
 | `*subscriber.ClosedError` | A `SubscribeSeq` loop ended before yielding a message its subscriber took. |
 | `*subscriber.ClosedError` | A subscriber unsubscribed with `subscriber.WithUnsubscribeDiscard` took a message. |
+| `*subscriber.EvictedError` | Instead of the `*subscriber.TimeoutError` or `*subscriber.DroppedError` that evicted the subscriber (`subscriber.WithEvictAfter`). It still matches the error it replaces with `errors.Is` and `errors.As`. |
 | `*subscriber.StoreError` | Instead of any of the above, the subscriber's store failed to store the message. It still matches the error it replaces with `errors.Is` and `errors.As`. |
 
 Both handlers get every error with the ctx the message is handled with: its own from `message.WithContext`, or else the
@@ -186,7 +190,8 @@ subscription's, never the `Broadcast` one (see [Contexts](#contexts)). Unless th
 only once the subscription is over, even when the error is `Broadcast` giving up because its own ctx is done.
 
 Each error type matches a sentinel with `errors.Is` (`subscriber.ErrTimeout`, `subscriber.ErrDropped`,
-`subscriber.ErrPanic`, `subscriber.ErrClosed`, `subscriber.ErrStore`, and `ErrSubscriberNotFound` for `Unsubscribe`),
+`subscriber.ErrPanic`, `subscriber.ErrClosed`, `subscriber.ErrStore`, `subscriber.ErrEvicted`, and
+`ErrSubscriberNotFound` for `Unsubscribe`),
 without needing to know the message type.
 
 ## Storing lost messages
@@ -273,9 +278,10 @@ it. The counters are always on, and cost a few atomic adds and two clock reads p
 
 ## Unsubscribing
 
-`Unsubscribe` never waits, so `handle` can unsubscribe its own subscriber. A subscriber may still get messages after
-`Unsubscribe` returns: whatever is in its buffer, and the message of a `Broadcast` that was already sending to it. Its
-goroutine ends once it has processed them. The ctx passed to `Subscribe` or `SubscribeSeq` is the subscription's: the
+`Unsubscribe` never waits, so `handle` can unsubscribe its own subscriber. A `Broadcast` waiting on the subscriber gives
+up then, and reports its message as a `*subscriber.ClosedError`. A subscriber may still get messages after
+`Unsubscribe` returns: whatever is in its buffer, and the message of a `Broadcast` racing `Unsubscribe`. Its goroutine
+ends once it has processed them. The ctx passed to `Subscribe` or `SubscribeSeq` is the subscription's: the
 subscriber is unsubscribed as soon as it is done, even while `handle` or the loop body is running, or before the loop
 starts. `handle` gets that ctx, so it gets it done for whatever the subscriber took before being unsubscribed. Pass
 `subscriber.WithDetachedContext` to keep the subscriber subscribed until `Unsubscribe` or `Close` instead: `handle`, its
@@ -296,6 +302,13 @@ to `Unsubscribe`. Those messages are then reported as `*subscriber.ClosedError` 
 a `SubscribeSeq` loop ends right away. `subscriber.WithUnsubscribeOptions(subscriber.WithUnsubscribeDiscard())`
 makes it the subscriber's default, which is the only way `Close` applies it. `subscriber.WithUnsubscribeDeliver`
 overrides that default for one `Unsubscribe`.
+
+A stuck subscriber with a timeout costs every `Broadcast` that timeout, for as long as it stays subscribed.
+`subscriber.WithEvictAfter(n)` unsubscribes it once it has lost n messages in a row, as a `*subscriber.TimeoutError` or
+a `*subscriber.DroppedError`, and a message it takes starts the count again. It is unsubscribed with
+`subscriber.WithUnsubscribeDiscard`, whatever its defaults, so what is left in its buffer is reported rather than
+handled, and a `Broadcast` waiting on it gives up. The loss that evicted it is reported once, as a
+`*subscriber.EvictedError` wrapping the original error.
 
 ## Contexts
 

@@ -14,6 +14,7 @@ var (
 	ErrDropped = errors.New("message dropped")
 	ErrPanic   = errors.New("panic in handle")
 	ErrStore   = errors.New("store failed")
+	ErrEvicted = errors.New("subscriber evicted")
 )
 
 // HandleError is what middleware.WrapError makes of handle's errors.
@@ -88,8 +89,28 @@ func (e *DroppedError[T]) Is(target error) bool {
 	return target == ErrDropped
 }
 
-// ClosedError is reported for a message a subscriber misses because it was unsubscribed: skipped by a Broadcast under
-// way, left over by a SubscribeSeq loop, or discarded (WithUnsubscribeDiscard). It matches ErrClosed.
+// EvictedError replaces the error about the loss that evicted the subscriber (WithEvictAfter): Err is the
+// *TimeoutError or *DroppedError. It matches ErrEvicted, and unwraps to Err.
+type EvictedError[T any] struct {
+	SubscriberID uuid.UUID
+	Message      T
+	Err          error
+}
+
+func (e *EvictedError[T]) Error() string {
+	return "subscriber " + e.SubscriberID.String() + ": evicted: " + e.Err.Error()
+}
+
+func (e *EvictedError[T]) Unwrap() error {
+	return e.Err
+}
+
+func (e *EvictedError[T]) Is(target error) bool {
+	return target == ErrEvicted
+}
+
+// ClosedError is reported for a message a subscriber misses because it was unsubscribed: skipped or given up on by a
+// Broadcast under way, left over by a SubscribeSeq loop, or discarded (WithUnsubscribeDiscard). It matches ErrClosed.
 type ClosedError[T any] struct {
 	SubscriberID uuid.UUID
 	Message      T
