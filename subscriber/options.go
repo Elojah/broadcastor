@@ -35,10 +35,10 @@ func WithErrorHandler[T any](handler func(ctx context.Context, err error)) Optio
 	}
 }
 
-// WithStore gives store every message the subscriber loses, right before the error handlers, so every message is
-// either handled or stored, once. Put runs where the error handlers do, so a slow one holds up Broadcast too. If it
+// WithDeadLetters gives store every message the subscriber loses, right before the error handlers, so every message
+// is either handled or stored, once. Put runs where the error handlers do, so a slow one holds up Broadcast too. If it
 // fails, the error handlers get a *StoreError and the message is not stored again.
-func WithStore[T any](store Store[T]) Option[T] {
+func WithDeadLetters[T any](store Store[T]) Option[T] {
 	return func(config *config[T]) {
 		config.store = store
 	}

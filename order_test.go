@@ -180,7 +180,7 @@ func TestSubscriberWithOrder_Late(t *testing.T) {
 		var id uuid.UUID
 		id = subscribe(t, b, r.handle,
 			subscriber.WithOrder(subscriber.OrderPolicy[int]{Compare: cmp.Compare[int]}),
-			subscriber.WithStore[int](stored),
+			subscriber.WithDeadLetters[int](stored),
 			subscriber.WithErrorHandler[int](func(_ context.Context, err error) {
 				var late *subscriber.LateError[int]
 				if !errors.As(err, &late) || !errors.Is(err, subscriber.ErrLate) {

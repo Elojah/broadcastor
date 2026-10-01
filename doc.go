@@ -66,12 +66,12 @@
 // subscriber.WithOrder reports a message that comes too late as a *subscriber.LateError. Each error type matches a
 // sentinel with errors.Is.
 //
-// # Storing lost messages
+// # Dead letters
 //
-// subscriber.WithStore gives a subscriber.Store every message the subscriber loses, so every message is either handled
-// or stored, once. Package store holds store.Ring, an in-memory queue to read them back from, and store.Drain, which
-// hands them to a handle again. With store.Enqueue as the handle, it forwards messages to a slow sink without holding
-// Broadcast up.
+// subscriber.WithDeadLetters gives a subscriber.Store every message the subscriber loses, so every message is either
+// handled or stored, once. Package store holds store.Ring, an in-memory queue to read them back from, and store.Drain,
+// which hands them to a handle again. With store.Enqueue as the handle, it forwards messages to a slow sink without
+// holding Broadcast up.
 //
 // # Stats
 //

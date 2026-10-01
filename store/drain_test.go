@@ -73,9 +73,9 @@ func TestDrain_DeadLetter(t *testing.T) {
 				put(t, r, subscriber.Record[int]{SubscriberID: id, Message: msg})
 			}
 			var dead []subscriber.Record[int]
-			var deadLetter subscriber.Store[int]
+			var deadLetters subscriber.Store[int]
 			if withDeadLetter {
-				deadLetter = store.PutFunc[int](func(ctx context.Context, r subscriber.Record[int]) error {
+				deadLetters = store.PutFunc[int](func(ctx context.Context, r subscriber.Record[int]) error {
 					if v := ctx.Value(key{}); v != "drain" || ctx.Done() != nil {
 						t.Errorf("dead letter Put got a ctx with value %v that can be done, want Drain's, never done", v)
 					}
@@ -91,7 +91,7 @@ func TestDrain_DeadLetter(t *testing.T) {
 				}
 
 				return nil
-			}, deadLetter)
+			}, deadLetters)
 			synctest.Wait()
 			cancel()
 
@@ -307,10 +307,10 @@ func receiveErr(t *testing.T, done <-chan error) error {
 
 // goDrain calls store.Drain from a goroutine of its own, and returns a channel that yields what it returns.
 func goDrain(
-	ctx context.Context, q store.Queue[int], handle subscriber.Handler[int], deadLetter subscriber.Store[int],
+	ctx context.Context, q store.Queue[int], handle subscriber.Handler[int], deadLetters subscriber.Store[int],
 ) <-chan error {
 	done := make(chan error, 1)
-	go func() { done <- store.Drain(ctx, q, handle, deadLetter) }()
+	go func() { done <- store.Drain(ctx, q, handle, deadLetters) }()
 
 	return done
 }

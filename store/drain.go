@@ -9,12 +9,14 @@ import (
 )
 
 // Drain hands every entry of q to handle, in order, then acks it, until ctx is done or q fails. An entry handle fails
-// on goes to deadLetter, or is dropped if it is nil. One handle fails on once ctx is done stays in q, for the next
+// on goes to deadLetters, or is dropped if it is nil. One handle fails on once ctx is done stays in q, for the next
 // Drain. Wrap handle in middleware.Retry to retry it.
 //
-// deadLetter.Put and Ack get ctx's values but a ctx never done, so that an entry handled just as ctx ends is not handled
-// again.
-func Drain[T any](ctx context.Context, q Queue[T], handle subscriber.Handler[T], deadLetter subscriber.Store[T]) error {
+// deadLetters.Put and Ack get ctx's values but a ctx never done, so that an entry handled just as ctx ends is not
+// handled again.
+func Drain[T any](
+	ctx context.Context, q Queue[T], handle subscriber.Handler[T], deadLetters subscriber.Store[T],
+) error {
 	for {
 		entry, err := q.Next(ctx)
 		if err != nil {
@@ -24,9 +26,9 @@ func Drain[T any](ctx context.Context, q Queue[T], handle subscriber.Handler[T],
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			if deadLetter != nil {
+			if deadLetters != nil {
 				dead := subscriber.Record[T]{SubscriberID: entry.SubscriberID, Message: entry.Message, Err: err}
-				if err := deadLetter.Put(context.WithoutCancel(ctx), dead); err != nil {
+				if err := deadLetters.Put(context.WithoutCancel(ctx), dead); err != nil {
 					return err
 				}
 			}

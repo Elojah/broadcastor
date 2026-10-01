@@ -28,7 +28,7 @@ var (
 
 // The store is given every message handle fails on, with the subscriber's ID and the error as handle returned it, right
 // before the error handler is given that error. Messages handled without error are not stored.
-func TestSubscriberWithStore(t *testing.T) {
+func TestSubscriberWithDeadLetters(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
@@ -43,7 +43,7 @@ func TestSubscriberWithStore(t *testing.T) {
 
 			return nil
 		},
-			subscriber.WithStore[int](storeFunc(func(ctx context.Context, r subscriber.Record[int]) error {
+			subscriber.WithDeadLetters[int](storeFunc(func(ctx context.Context, r subscriber.Record[int]) error {
 				events.record(fmt.Sprintf("stored %d", r.Message))
 
 				return stored.Put(ctx, r)
@@ -82,7 +82,7 @@ func TestSubscriberWithStore(t *testing.T) {
 
 // Whatever the reason a subscriber loses a message, the store is given it, with the error the error handlers would be
 // given, even when the subscriber has no error handler.
-func TestSubscriberWithStore_Lost(t *testing.T) {
+func TestSubscriberWithDeadLetters_Lost(t *testing.T) {
 	t.Parallel()
 
 	for _, tt := range []struct {
@@ -164,7 +164,7 @@ func TestSubscriberWithStore_Lost(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				b := broadcastor.NewBroadcastor[int]()
 				stored := &recordStore{}
-				id := tt.lose(t, b, subscriber.WithStore[int](stored))
+				id := tt.lose(t, b, subscriber.WithDeadLetters[int](stored))
 				synctest.Wait()
 
 				records := stored.messages()
@@ -181,7 +181,7 @@ func TestSubscriberWithStore_Lost(t *testing.T) {
 }
 
 // When Put fails, the error handlers get a *StoreError, once, matching both ErrStore and the original error.
-func TestSubscriberWithStore_PutFails(t *testing.T) {
+func TestSubscriberWithDeadLetters_PutFails(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
@@ -193,7 +193,7 @@ func TestSubscriberWithStore_PutFails(t *testing.T) {
 		id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
 			return handleError(msg)
 		},
-			subscriber.WithStore[int](stored),
+			subscriber.WithDeadLetters[int](stored),
 			subscriber.WithErrorHandler[int](func(ctx context.Context, err error) {
 				errs.record(err)
 				recordFailure(ctx, err)
@@ -229,7 +229,7 @@ func TestSubscriberWithStore_PutFails(t *testing.T) {
 }
 
 // Put gets the values of the message's ctx, but never a done ctx, even when that one is.
-func TestSubscriberWithStore_Context(t *testing.T) {
+func TestSubscriberWithDeadLetters_Context(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
@@ -241,7 +241,7 @@ func TestSubscriberWithStore_Context(t *testing.T) {
 		puts := &recorder[string]{}
 		_, err := b.Subscribe(ctx, handled.handle, subscriber.WithBuffer[int](2),
 			subscriber.WithUnsubscribeOptions[int](subscriber.WithUnsubscribeDiscard()),
-			subscriber.WithStore[int](storeFunc(func(ctx context.Context, r subscriber.Record[int]) error {
+			subscriber.WithDeadLetters[int](storeFunc(func(ctx context.Context, r subscriber.Record[int]) error {
 				puts.record(fmt.Sprintf("%d: %v, %v", r.Message, ctx.Value(key{}), ctx.Err()))
 
 				return nil
@@ -270,7 +270,7 @@ func TestSubscriberWithStore_Context(t *testing.T) {
 }
 
 // Every message is either handled or stored, never both and never twice, whatever the delivery mode and the loss.
-func TestSubscriberWithStore_ExactlyOnce(t *testing.T) {
+func TestSubscriberWithDeadLetters_ExactlyOnce(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
@@ -278,7 +278,7 @@ func TestSubscriberWithStore_ExactlyOnce(t *testing.T) {
 		stored := &recordStore{}
 		options := []subscriber.Option[int]{
 			subscriber.WithBuffer[int](1),
-			subscriber.WithStore[int](stored),
+			subscriber.WithDeadLetters[int](stored),
 			subscriber.WithUnsubscribeOptions[int](subscriber.WithUnsubscribeDiscard()),
 		}
 		handled := &recorder[int]{}
@@ -358,7 +358,7 @@ func TestSubscriberWithStore_ExactlyOnce(t *testing.T) {
 
 // A store.Ring can be read back while the subscriber runs: the reader gets every message the subscriber lost, in order,
 // with the subscriber's ID and the error about it.
-func TestSubscriberWithStore_Ring(t *testing.T) {
+func TestSubscriberWithDeadLetters_Ring(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
@@ -370,7 +370,7 @@ func TestSubscriberWithStore_Ring(t *testing.T) {
 			}
 
 			return nil
-		}, subscriber.WithStore[int](lost))
+		}, subscriber.WithDeadLetters[int](lost))
 
 		readBack := &recorder[int]{}
 		ctx, cancel := context.WithCancel(t.Context())

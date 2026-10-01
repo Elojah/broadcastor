@@ -95,7 +95,7 @@ Each item changes one function or adds one option.
   - `Unsubscribe`'s ctx, which is unused: drop it, or make it wait for that one subscriber's goroutine, like
     `Shutdown`.
 - [x] Check that `store.Queue` works with a durable backend before freezing it. That is what store-and-forward across
-  restarts relies on. It does with a Redis stream (`examples/23-redis`), where `Drain` stops up to a second after ctx
+  restarts relies on. It does with a Redis stream (`examples/20-redis`), where `Drain` stops up to a second after ctx
   is done, since go-redis does not end a blocking read when ctx is done.
   - [ ] A durable store keeps only the text of `Record.Err`, so `errors.Is(entry.Err, subscriber.ErrTimeout)` no
     longer holds once read back. Decide whether `Record` should also carry which sentinel its error matches.

@@ -1,4 +1,4 @@
-module github.com/elojah/broadcastor/examples/23-redis
+module github.com/elojah/broadcastor/examples/20-redis
 
 go 1.26.1
 

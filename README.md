@@ -79,27 +79,25 @@ for msg := range seq {
     but `Broadcast` still waits for it.
 14. [`14-context`](examples/14-context/main.go): `message.WithContext`, carrying a request's values to `handle` and the
     error handlers, and an async `Broadcast` that outlives the request.
-15. [`15-store`](examples/15-store/main.go): `subscriber.WithStore`, keeping the messages `handle` fails on and those
-    `Close` discards.
-16. [`16-store-and-forward`](examples/16-store-and-forward/main.go): `store.Enqueue` and `store.Drain`, forwarding every
-    message in order to an uplink that is down for a while, without holding `Broadcast` up.
-19. [`19-stats`](examples/19-stats/main.go): `Broadcastor.Stats`, for a subscriber stuck with a full buffer and one
+15. [`15-dead-letters`](examples/15-dead-letters/main.go): `subscriber.WithDeadLetters`, keeping the messages `handle`
+    fails on and those `Close` discards.
+16. [`16-stats`](examples/16-stats/main.go): `Broadcastor.Stats`, for a subscriber stuck with a full buffer and one
     failing on every message.
-20. [`20-evict`](examples/20-evict/main.go): `subscriber.WithEvictAfter` and `*subscriber.EvictedError`, for a stuck
+17. [`17-evict`](examples/17-evict/main.go): `subscriber.WithEvictAfter` and `*subscriber.EvictedError`, for a stuck
     subscriber that `Broadcast` stops waiting for.
-21. [`21-order`](examples/21-order/main.go): `subscriber.WithOrder` and `*subscriber.LateError`, handling readings by
+18. [`18-order`](examples/18-order/main.go): `subscriber.WithOrder` and `*subscriber.LateError`, handling readings by
     the time they were taken rather than the order they arrive in.
-22. [`22-replay`](examples/22-replay/main.go): `broadcastor.WithHistory`, `store.History` and `subscriber.WithReplay`,
+19. [`19-replay`](examples/19-replay/main.go): `broadcastor.WithHistory`, `store.History` and `subscriber.WithReplay`,
     for a subscriber that joins late and handles first the readings it missed.
-23. [`23-redis`](examples/23-redis/main.go): a `subscriber.History` in a Redis sorted set, and a `store.Queue` in a
+20. [`20-redis`](examples/20-redis/main.go): a `subscriber.History` in a Redis sorted set, and a `store.Queue` in a
     Redis stream that `store.Drain` reads back after a restart. It is a module of its own, so that the library does not
-    depend on go-redis: run it with `go run -C examples/23-redis .`, against the Redis at `REDIS_ADDR`
+    depend on go-redis: run it with `go run -C examples/20-redis .`, against the Redis at `REDIS_ADDR`
     (`localhost:6379` by default).
 
 ## Delivery
 
 Delivery is at most once: a subscriber gets a message once, or misses it and never gets it later, although
-`subscriber.WithStore` keeps it so that it can be handled again (see [Storing lost messages](#storing-lost-messages)).
+`subscriber.WithDeadLetters` keeps it so that it can be handled again (see [Dead letters](#dead-letters)).
 Each `Broadcast` picks a mode with a message option, and a subscriber can set its own default with
 `subscriber.WithDefaultMessageOptions`.
 
@@ -145,9 +143,9 @@ A live stream can never tell that nothing earlier is still on its way, so the po
 
 The subscriber keeps taking messages while it holds others, so holding them does not hold `Broadcast` up, but it takes
 none while a message is due, so a slow `handle` still does. A message that should have come before one already handled
-is late: it is reported as a `*subscriber.LateError`, and stored with `subscriber.WithStore`, instead of being handled
-out of order. Equal messages keep the order they arrived in. Once unsubscribed, the subscriber handles what it holds
-right away, in order, or reports it as a `*subscriber.ClosedError` with `subscriber.WithUnsubscribeDiscard`.
+is late: it is reported as a `*subscriber.LateError`, and stored with `subscriber.WithDeadLetters`, instead of being
+handled out of order. Equal messages keep the order they arrived in. Once unsubscribed, the subscriber handles what it
+holds right away, in order, or reports it as a `*subscriber.ClosedError` with `subscriber.WithUnsubscribeDiscard`.
 `WithOrder` applies to `SubscribeSeq` too.
 
 `broadcastor.WithHistory(h)` makes `Broadcast` give every message to a `subscriber.History` before handing it to
@@ -177,7 +175,7 @@ handles only live messages. The library holds no lock around either.
 
 Offsets count from 1 again with each `Broadcastor`, so a history kept across restarts returns the messages an earlier
 `Broadcastor` appended at offset 0. They are replayed first, in the order `Read` returns them, then those broadcast
-since, by offset. [`23-redis`](examples/23-redis/history.go) marks each message with an ID of the history that appended
+since, by offset. [`20-redis`](examples/20-redis/history.go) marks each message with an ID of the history that appended
 it, one per `Broadcastor`, and keeps them in a Redis sorted set, scored by the time they were appended.
 
 The subscriber gets each message once, either replayed or live, with none missed in between, however `Subscribe` races
@@ -272,13 +270,13 @@ Each error type matches a sentinel with `errors.Is` (`subscriber.ErrTimeout`, `s
 `ErrSubscriberNotFound` for `Unsubscribe`),
 without needing to know the message type.
 
-## Storing lost messages
+## Dead letters
 
-`subscriber.WithStore` gives a `subscriber.Store` every message the subscriber loses, as a `subscriber.Record`: the
-subscriber's ID, the message, and the error about it, whatever it is in the table above. So every message a `Broadcast`
-picks the subscriber up for is either handled or stored, once, and the store can be read later to handle the stored
-ones again. Make `subscriber.WithUnsubscribeDiscard` the subscriber's default, and `Close` stores whatever it had not
-handled yet.
+`subscriber.WithDeadLetters` gives a `subscriber.Store` every message the subscriber loses, as a `subscriber.Record`:
+the subscriber's ID, the message, and the error about it, whatever it is in the table above. So every message a
+`Broadcast` picks the subscriber up for is either handled or stored, once, and the store can be read later to handle the
+stored ones again. Make `subscriber.WithUnsubscribeDiscard` the subscriber's default, and `Close` stores whatever it had
+not handled yet.
 
 Package `store` holds ready-made stores. `store.Ring` keeps the records in memory, with room for a fixed number of
 them: `Put` never waits, and once the ring is full it drops the oldest record and counts it (`Dropped`). It is a
@@ -288,7 +286,7 @@ until there is one, and returns the same entry until `Ack` removes it.
 ```go
 lost := store.NewRing[string](1024)
 id, err := b.Subscribe(ctx, handle,
- subscriber.WithStore[string](lost),
+ subscriber.WithDeadLetters[string](lost),
  subscriber.WithUnsubscribeOptions[string](subscriber.WithUnsubscribeDiscard()),
 )
 ...
@@ -303,7 +301,7 @@ for {
 ```
 
 Any type with a `Put(ctx, subscriber.Record[T]) error` method is a store, so it can also write to a database or a log.
-The Redis stream of [`23-redis`](examples/23-redis/dead_letters.go) is a `store.Queue` too, which outlives a restart.
+The Redis stream of [`20-redis`](examples/20-redis/dead_letters.go) is a `store.Queue` too, which outlives a restart.
 
 `Put` is called right before the error handlers, from wherever they are, including from `Broadcast` for the messages it
 could not hand over. So a slow `Put` holds things up like a slow error handler (and makes a non-blocking `Broadcast`
@@ -312,9 +310,10 @@ with, but is never done, since that ctx being done is often why the message was 
 fails, the error handlers get a `*subscriber.StoreError` instead, and the message is not given to the store again.
 
 `store.Drain` does that read-back loop: it hands each entry to a handle, in order, and acks it. An entry the handle fails
-on goes to a dead-letter store, if one is given, and wrapping the handle in `middleware.Retry` retries it. With
-`store.Enqueue` as the subscriber's handle, which only puts each message in the queue, that is store and forward:
-`Broadcast` never waits for the sink, and the sink gets every message in order, even after being down for a while.
+on goes to `Drain`'s own dead letters, a second store, if one is given, and wrapping the handle in `middleware.Retry`
+retries it. With `store.Enqueue` as the subscriber's handle, which only puts each message in the queue, that is store
+and forward: `Broadcast` never waits for the sink, and the sink gets every message in order, even after being down for
+a while.
 
 ```go
 queue := store.NewRing[string](1024)

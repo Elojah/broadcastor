@@ -6,7 +6,7 @@ import (
 	"github.com/google/uuid"
 )
 
-// Store is given every message a subscriber loses (see WithStore). Put may be called concurrently.
+// Store is given every message a subscriber loses (see WithDeadLetters). Put may be called concurrently.
 type Store[T any] interface {
 	// Put stores r. ctx has the values of the message's ctx but is never done, so Put must bound itself.
 	Put(ctx context.Context, r Record[T]) error

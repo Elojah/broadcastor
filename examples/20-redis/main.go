@@ -1,13 +1,13 @@
 // Redis keeps what a Broadcastor must not lose when the process stops. A sorted set, scored by the time each message
 // was broadcast, is the history (broadcastor.WithHistory) that a subscriber joining after a restart replays
 // (subscriber.WithReplay), and a stream is the store.Queue that keeps the messages a subscriber loses
-// (subscriber.WithStore), for store.Drain to hand them back.
+// (subscriber.WithDeadLetters), for store.Drain to hand them back.
 //
 // Here the alerts fail to page while the pager is down, and the process restarts. The alerts then page what they lost,
 // and a dashboard joins, which replays the readings of both runs before the live ones.
 //
 // It is a module of its own, so that the library does not depend on go-redis: run it with
-// `go run -C examples/23-redis .`. It uses the Redis at REDIS_ADDR, localhost:6379 by default, such as
+// `go run -C examples/20-redis .`. It uses the Redis at REDIS_ADDR, localhost:6379 by default, such as
 // `docker run --rm -p 6379:6379 redis`, and deletes its two keys there first, so that it prints the same each time.
 // Its test runs it against miniredis, in memory.
 package main
@@ -89,7 +89,7 @@ func beforeRestart(ctx context.Context, client *redis.Client) {
 
 		return nil
 	},
-		subscriber.WithStore(newDeadLetters[reading](client, deadLettersKey, 10_000)),
+		subscriber.WithDeadLetters(newDeadLetters[reading](client, deadLettersKey, 10_000)),
 		subscriber.WithErrorHandler[reading](func(context.Context, error) { done.Done() }),
 	)
 	if err != nil {
