@@ -17,6 +17,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+          cache-dependency-path: "**/go.sum"
 
       # Pinned, so that lint results are the same locally and in CI. The Makefile uses ./bin/golangci-lint when present.
       - name: Install golangci-lint

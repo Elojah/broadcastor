@@ -186,6 +186,58 @@ func TestSubscriberWithReplay_WaitsForAppend(t *testing.T) {
 	})
 }
 
+// A history that outlives its Broadcastor returns what an earlier one appended at offset 0, which a subscriber replays
+// first, in the order Read returns them, even before anything was broadcast since.
+func TestSubscriberWithReplay_EarlierBroadcastor(t *testing.T) {
+	t.Parallel()
+
+	for _, before := range []int{0, 3} {
+		t.Run(fmt.Sprintf("%dBefore", before), func(t *testing.T) {
+			t.Parallel()
+
+			synctest.Test(t, func(t *testing.T) {
+				earlier := make([]int, 20) // more than slices.SortFunc sorts stably
+				for i := range earlier {
+					earlier[i] = 100 + i
+				}
+				b := broadcastor.NewBroadcastor(broadcastor.WithHistory[int](&restartedHistory{History: store.NewHistory[int](8), earlier: earlier}))
+				for msg := 1; msg <= before; msg++ {
+					b.Broadcast(t.Context(), msg)
+				}
+				r := &recorder[int]{}
+				id := subscribe(t, b, r.handle, subscriber.WithReplay[int](nil))
+				for msg := before + 1; msg <= 5; msg++ {
+					b.Broadcast(t.Context(), msg)
+				}
+				synctest.Wait()
+				if got, want := r.messages(), slices.Concat(earlier, []int{1, 2, 3, 4, 5}); !slices.Equal(got, want) {
+					t.Errorf("handled %v, want %v", got, want)
+				}
+
+				unsubscribe(t, b, id)
+				synctest.Wait()
+			})
+		})
+	}
+}
+
+// restartedHistory is a History that also holds earlier, which an earlier Broadcastor appended, oldest first. Read
+// returns them at offset 0, after the entries appended since.
+type restartedHistory struct {
+	*store.History[int]
+
+	earlier []int
+}
+
+func (h *restartedHistory) Read(ctx context.Context) ([]subscriber.HistoryEntry[int], error) {
+	entries, err := h.History.Read(ctx)
+	for _, msg := range h.earlier {
+		entries = append(entries, subscriber.HistoryEntry[int]{Message: msg})
+	}
+
+	return entries, err
+}
+
 // If Read fails, the error handler gets a *subscriber.ReplayError, and the subscriber handles only live messages.
 func TestSubscriberWithReplay_ReadFails(t *testing.T) {
 	t.Parallel()

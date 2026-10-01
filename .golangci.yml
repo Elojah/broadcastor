@@ -156,6 +156,9 @@ linters:
       line-length: 180
     cyclop:
       max-complexity: 30
+    gomoddirectives:
+      # Modules nested in this one, such as examples/23-redis, build against the working tree.
+      replace-local: true
   # Defines a set of rules to ignore issues.
   # It does not skip the analysis, and so does not ignore "typecheck" errors.
   exclusions:

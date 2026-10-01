@@ -13,9 +13,13 @@ BENCH_FLAGS        = -run '^$$' -bench '$(BENCH)' -benchmem
 # How many times stress runs TestStress.
 STRESS_COUNT      ?= 50
 
+# The modules tidy, lint and test cover. An example with dependencies of its own is a module of its own, so that the
+# library's go.mod lists only uuid.
+MODULES            = . examples/23-redis
+
 # For CI
 ifneq ($(wildcard ./bin/golangci-lint),)
-	GOLINT = ./bin/golangci-lint
+	GOLINT = $(CURDIR)/bin/golangci-lint
 else
 	GOLINT = golangci-lint
 endif
@@ -31,7 +35,7 @@ all: check
 .PHONY: tidy
 tidy: ## Run go mod tidy
 	$(info $(M) running go mod tidy) @
-	$Q $(GO) mod tidy
+	$Q for m in $(MODULES); do (cd $$m && $(GO) mod tidy) || exit 1; done
 
 # Check
 .PHONY: check
@@ -41,7 +45,7 @@ check: lint test ## Run lint and tests
 .PHONY: lint
 lint: ## Run golangci-lint
 	$(info $(M) running $(GOLINT))
-	$Q $(GOLINT) run
+	$Q for m in $(MODULES); do (cd $$m && $(GOLINT) run) || exit 1; done
 
 # Test
 .PHONY: test
@@ -49,7 +53,7 @@ lint: ## Run golangci-lint
 # that depend on each other. Each benchmark runs once too, since go test alone compiles them but never runs them.
 test: ## Run tests with race detector, shuffled, with GOMAXPROCS 1 and 4, and each benchmark once
 	$(info $(M) running go test) @
-	$Q $(GO) test -cover -race -shuffle=on -cpu 1,4 -v -bench . -benchtime 1x ./...
+	$Q for m in $(MODULES); do (cd $$m && $(GO) test -cover -race -shuffle=on -cpu 1,4 -v -bench . -benchtime 1x ./...) || exit 1; done
 
 # Stress
 .PHONY: stress

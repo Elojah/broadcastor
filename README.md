@@ -91,6 +91,10 @@ for msg := range seq {
     the time they were taken rather than the order they arrive in.
 22. [`22-replay`](examples/22-replay/main.go): `broadcastor.WithHistory`, `store.History` and `subscriber.WithReplay`,
     for a subscriber that joins late and handles first the readings it missed.
+23. [`23-redis`](examples/23-redis/main.go): a `subscriber.History` in a Redis sorted set, and a `store.Queue` in a
+    Redis stream that `store.Drain` reads back after a restart. It is a module of its own, so that the library does not
+    depend on go-redis: run it with `go run -C examples/23-redis .`, against the Redis at `REDIS_ADDR`
+    (`localhost:6379` by default).
 
 ## Delivery
 
@@ -167,9 +171,14 @@ type History[T any] interface {
 
 The library numbers the messages itself, from 1, and gives `Append` each one's offset, with the `Broadcast` ctx: a slow
 `Append` holds `Broadcast` up, and concurrent `Broadcast`s call it at once, with offsets out of order. It cannot fail: a
-message it does not keep is broadcast all the same, but never replayed. `Read` returns the messages kept, in any order.
-If it fails, the subscriber's error handler gets a `*subscriber.ReplayError`, and the subscriber handles only live
-messages. The library holds no lock around either.
+message it does not keep is broadcast all the same, but never replayed. `Read` returns the messages kept, which are
+replayed by offset. If it fails, the subscriber's error handler gets a `*subscriber.ReplayError`, and the subscriber
+handles only live messages. The library holds no lock around either.
+
+Offsets count from 1 again with each `Broadcastor`, so a history kept across restarts returns the messages an earlier
+`Broadcastor` appended at offset 0. They are replayed first, in the order `Read` returns them, then those broadcast
+since, by offset. [`23-redis`](examples/23-redis/history.go) marks each message with an ID of the history that appended
+it, one per `Broadcastor`, and keeps them in a Redis sorted set, scored by the time they were appended.
 
 The subscriber gets each message once, either replayed or live, with none missed in between, however `Subscribe` races
 `Broadcast`, as long as `Read` returns every message `Append` was given and the history still keeps. `Subscribe` adds
@@ -294,6 +303,7 @@ for {
 ```
 
 Any type with a `Put(ctx, subscriber.Record[T]) error` method is a store, so it can also write to a database or a log.
+The Redis stream of [`23-redis`](examples/23-redis/dead_letters.go) is a `store.Queue` too, which outlives a restart.
 
 `Put` is called right before the error handlers, from wherever they are, including from `Broadcast` for the messages it
 could not hand over. So a slow `Put` holds things up like a slow error handler (and makes a non-blocking `Broadcast`

@@ -148,7 +148,8 @@ func (s *Subscriber[T]) ReadHistory() {
 	entries = slices.DeleteFunc(entries, func(entry HistoryEntry[T]) bool {
 		return entry.Offset > s.replay.cutoff || !s.config.replay(entry.Message)
 	})
-	slices.SortFunc(entries, func(a, b HistoryEntry[T]) int { return cmp.Compare(a.Offset, b.Offset) })
+	// Stable, so that the entries kept from before the Broadcastor, all at offset 0, stay in the order Read gave them.
+	slices.SortStableFunc(entries, func(a, b HistoryEntry[T]) int { return cmp.Compare(a.Offset, b.Offset) })
 	s.replay.backlog = make([]T, len(entries))
 	for i, entry := range entries {
 		s.replay.backlog[i] = entry.Message

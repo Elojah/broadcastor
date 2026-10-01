@@ -94,8 +94,11 @@ Each item changes one function or adds one option.
     handle's signature, and it is only possible because cross-process transports are out of scope (see below).
   - `Unsubscribe`'s ctx, which is unused: drop it, or make it wait for that one subscriber's goroutine, like
     `Shutdown`.
-- [ ] Check that `store.Queue` works with a durable backend (SQLite, in a scratch branch) before freezing it. That is
-  what store-and-forward across restarts relies on.
+- [x] Check that `store.Queue` works with a durable backend before freezing it. That is what store-and-forward across
+  restarts relies on. It does with a Redis stream (`examples/23-redis`), where `Drain` stops up to a second after ctx
+  is done, since go-redis does not end a blocking read when ctx is done.
+  - [ ] A durable store keeps only the text of `Record.Err`, so `errors.Is(entry.Err, subscriber.ErrTimeout)` no
+    longer holds once read back. Decide whether `Record` should also carry which sentinel its error matches.
 - [ ] Only once someone needs it: an observer hook in the core, where the counters are incremented, so that a separate
   `broadcastor/otel` module can export counters that keep counting after unsubscribes.
 
