@@ -21,7 +21,8 @@
 //	}
 //
 // The options passed to Subscribe, SubscribeSeq and Unsubscribe are in package subscriber, and those passed to
-// Broadcast in package message. The README covers what follows in more detail.
+// Broadcast in package message. Each option's documentation details what follows, and examples/ shows each one in a
+// runnable program.
 //
 // # Delivery
 //
@@ -32,10 +33,11 @@
 //
 // # Ordering
 //
-// A subscriber takes messages in the order Broadcast hands them over: the order of the Broadcasts from one goroutine,
-// but for message.WithAsync, and any order across goroutines. subscriber.WithOrder makes it handle them in their own
-// order instead, such as the time they carry. It holds each one for up to a window, for one that sorts before it to
-// arrive, and reports a message that should have come before one already handled as a *subscriber.LateError.
+// A subscriber takes messages in the order Broadcast hands them over. Those broadcast from one goroutine keep their
+// order, except with message.WithAsync, and those from several goroutines have none. subscriber.WithOrder makes a
+// subscriber handle them in their own order instead, such as the time they carry. It holds each one for up to a
+// window, for an earlier one to arrive, and reports a message that sorts before one already handled as a
+// *subscriber.LateError.
 //
 // # Replay
 //
@@ -60,11 +62,8 @@
 // # Errors
 //
 // Errors go to subscriber.WithErrorHandler and message.WithErrorHandler, and are discarded without one. handle's
-// errors arrive as is. Package middleware can recover panics (Recover), wrap errors (WrapError) and retry (Retry).
-// Broadcast reports a message it could not hand over as a *subscriber.TimeoutError, *subscriber.DroppedError or
-// *subscriber.ClosedError, and the loss that evicts a subscriber as a *subscriber.EvictedError. A subscriber with
-// subscriber.WithOrder reports a message that comes too late as a *subscriber.LateError. Each error type matches a
-// sentinel with errors.Is.
+// errors arrive as is, and a message a subscriber misses as one of package subscriber's error types, each matching a
+// sentinel with errors.Is. Package middleware can recover panics (Recover), wrap errors (WrapError) and retry (Retry).
 //
 // # Dead letters
 //

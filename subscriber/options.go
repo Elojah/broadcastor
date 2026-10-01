@@ -60,8 +60,8 @@ func WithDetachedContext[T any]() Option[T] {
 }
 
 // WithDefaultMessageOptions sets message options for every message sent to the subscriber, which a Broadcast's own
-// options override. A default of message.WithAsync has the same ctx caveat as message.WithAsync, for callers who may
-// not know about it.
+// options override. A default of message.WithAsync brings its ctx caveat to every Broadcast, even one whose caller
+// did not ask for async.
 func WithDefaultMessageOptions[T any](options ...message.Option[T]) Option[T] {
 	return func(config *config[T]) {
 		for _, option := range options {
@@ -97,24 +97,23 @@ func WithEvictAfter[T any](n int) Option[T] {
 	}
 }
 
-// WithOrder makes the subscriber handle its messages in policy's order instead of the order it takes them in, which
-// suits messages that carry their own time or sequence number. It holds each message for up to policy.Window, for one
-// that sorts before it to arrive, and keeps taking messages meanwhile, so holding one does not hold Broadcast up. It
-// takes none while one is due, so a slow handle still does. A message that sorts before one already handled is late:
-// it is reported as a *LateError instead. Once its channel is closed, after Unsubscribe, the subscriber handles
-// everything it holds right away, in order, or reports it with WithUnsubscribeDiscard. It applies to SubscribeSeq too.
+// WithOrder makes the subscriber handle its messages in policy's order, such as the time or sequence number they
+// carry, instead of the order it takes them in. It holds each message for up to policy.Window, for an earlier one to
+// arrive, and keeps taking messages meanwhile, so holding does not hold Broadcast up. While a message is due it takes
+// none, so a slow handle still does. A message that sorts before one already handled is late: it is reported as a
+// *LateError instead. Once unsubscribed, the subscriber handles what it holds right away, in order, or reports it with
+// WithUnsubscribeDiscard. It applies to SubscribeSeq too.
 func WithOrder[T any](policy OrderPolicy[T]) Option[T] {
 	return func(config *config[T]) {
 		config.order = &policy
 	}
 }
 
-// WithReplay makes a new subscriber handle first the messages its Broadcastor's History holds (broadcastor.WithHistory)
-// that keep accepts, oldest first, or merged in order with the live ones with WithOrder. It gets each message once,
-// either from the history or live, with none missed in between. nil keeps every one. Subscribe reads the history once
-// it has subscribed the subscriber, after waiting for the Appends under way, and calls keep, so a slow History.Read
-// holds Subscribe up. A replayed message gets the subscriber's ctx and its default message options, not those its
-// Broadcast was given. Without a history, it has no effect.
+// WithReplay makes a new subscriber first handle the messages of its Broadcastor's History (broadcastor.WithHistory)
+// that keep accepts, or all of them for nil: oldest first, or merged in order with the live ones with WithOrder. It
+// gets each message once, replayed or live, with none missed in between. Subscribe reads the history before returning,
+// once the Appends under way have returned, so a slow History.Read holds Subscribe up. A replayed message gets the
+// subscriber's ctx and default message options, not those of its Broadcast. Without a history, it has no effect.
 func WithReplay[T any](keep func(msg T) bool) Option[T] {
 	return func(config *config[T]) {
 		if keep == nil {

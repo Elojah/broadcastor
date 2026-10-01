@@ -127,11 +127,11 @@ func (b *Broadcastor[T]) Close() error {
 //
 // By default it waits for each subscriber in turn, so a slow one holds up those after it. It gives up on a subscriber
 // once ctx is done or the message's timeout runs out, and tells its error handlers why, but a subscriber ready for the
-// message takes it even then. ctx only bounds the wait, and
-// reaches neither handle nor the error handlers, although async sends keep using it (see message.WithAsync).
+// message takes it even then. ctx only bounds the wait: it reaches neither handle nor the error handlers, although
+// async sends keep using it (see message.WithAsync).
 //
-// With WithHistory, it appends msg to the history, with ctx, before handing it to anyone, so that a subscriber that
-// replays the history gets msg once, either from it or from this Broadcast, which does not count it then.
+// With WithHistory, it first appends msg to the history, with ctx. A subscriber that joins meanwhile and replays the
+// history gets msg from there, so this Broadcast skips it and does not count it.
 func (b *Broadcastor[T]) Broadcast(ctx context.Context, msg T, options ...message.Option[T]) int {
 	var (
 		n int

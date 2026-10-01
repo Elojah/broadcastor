@@ -1,7 +1,7 @@
 // subscriber.WithOrder makes a subscriber handle its messages in their own order, here the time each reading was taken,
-// rather than in the order they come. The sensors' links differ, so their readings arrive out of order. While handle
-// is busy with the first, the others queue in the buffer, and the subscriber handles them by time. East's reading was
-// taken before the one already handled: it is late, and reported as a *subscriber.LateError.
+// rather than the order they arrive in. The sensors' links have different delays, so readings arrive out of order.
+// While handle is busy with the first, the others queue in the buffer, and the subscriber handles them by time. East's
+// reading was taken before the one already handled: it is late, and reported as a *subscriber.LateError.
 //
 // With an OrderPolicy.Window, the subscriber would also wait that long for readings still on their way.
 //

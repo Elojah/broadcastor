@@ -1,5 +1,6 @@
-// subscriber.WithMiddleware wraps handle: middleware.Retry retries a retryable error up to 3 attempts, waiting 10ms then
-// 20ms, logAttempts, our own, sees every attempt, and middleware.WrapError wraps the last error for the error handler.
+// subscriber.WithMiddleware wraps handle, the first middleware outermost. Here middleware.Retry makes up to 3 attempts
+// at a retryable error, waiting 10ms then 20ms. logAttempts, a middleware of our own, prints every failed attempt, and
+// middleware.WrapError wraps the last error for the error handler.
 //
 // Middlewares run in the subscriber's goroutine, so the output is in message order, and Broadcast waits while Retry
 // does.

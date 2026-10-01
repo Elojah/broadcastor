@@ -9,8 +9,8 @@ import (
 )
 
 // Drain hands every entry of q to handle, in order, then acks it, until ctx is done or q fails. An entry handle fails
-// on goes to deadLetters, or is dropped if it is nil. One handle fails on once ctx is done stays in q, for the next
-// Drain. Wrap handle in middleware.Retry to retry it.
+// on goes to deadLetters, or is dropped if deadLetters is nil, unless ctx is done by then, in which case it stays in q
+// for the next Drain. Wrap handle in middleware.Retry to retry it.
 //
 // deadLetters.Put and Ack get ctx's values but a ctx never done, so that an entry handled just as ctx ends is not
 // handled again.
@@ -39,9 +39,9 @@ func Drain[T any](
 	}
 }
 
-// Enqueue returns a handle that only puts each message in q, with no Err, for Drain to hand to the real handle: the
-// subscriber then almost never holds Broadcast up, and the real handle gets every message in order, from one goroutine.
-// Put gets the ctx's values but a ctx never done, and its error is handle's.
+// Enqueue returns a handle that only puts each message in q, with a nil Err, for Drain to hand to the real handle. The
+// subscriber then seldom holds Broadcast up, and the real handle gets every message in order, from one goroutine. Put
+// gets the ctx's values but a ctx never done, and its error is handle's.
 func Enqueue[T any](q subscriber.Store[T]) subscriber.Handler[T] {
 	return func(ctx context.Context, id uuid.UUID, msg T) error {
 		return q.Put(context.WithoutCancel(ctx), subscriber.Record[T]{SubscriberID: id, Message: msg})

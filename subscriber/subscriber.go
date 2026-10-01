@@ -32,7 +32,7 @@ type Subscriber[T any] struct {
 
 	// discarding makes Consume and pull report messages instead of processing them.
 	discarding atomic.Bool
-	// held is how many messages ordering holds, for Stats. Beside discarding, which leaves room for it.
+	// held is how many messages ordering holds, for Stats. Next to discarding, so that they share a word.
 	held atomic.Int32
 
 	// stopContextLifetime cancels the AfterFunc set by Attach. nil with WithDetachedContext.
