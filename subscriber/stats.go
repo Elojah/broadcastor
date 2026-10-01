@@ -8,15 +8,17 @@ import (
 )
 
 // Stats is a snapshot of a subscriber's counters since it subscribed. Each message a Broadcast picks the subscriber up
-// for is counted once in Handled, Failed, TimedOut or Dropped, or is still on its way, so Delivered is Handled + Failed
-// + Queued, plus the message in handle if there is one. The counters are read one at a time, so while messages are in
-// flight they may not add up.
+// for is counted once in Handled, Failed, TimedOut, Dropped or Late, or is still on its way, so Delivered is Handled +
+// Failed + Late + Queued + Held, plus the message in handle if there is one. The counters are read one at a time, so
+// while messages are in flight they may not add up.
 type Stats struct {
 	SubscriberID uuid.UUID
 
 	// Queued is how many messages wait in the subscriber's buffer, which has room for Buffer (WithBuffer).
 	Queued int
 	Buffer int
+	// Held is how many messages the subscriber holds until they are due (WithOrder).
+	Held int
 
 	// Delivered counts the messages the subscriber took.
 	Delivered uint64
@@ -28,6 +30,8 @@ type Stats struct {
 	TimedOut uint64
 	// Dropped counts the messages reported as a *DroppedError.
 	Dropped uint64
+	// Late counts the messages reported as a *LateError.
+	Late uint64
 
 	// HandleTime is the time spent in handle and its middlewares, middleware.Retry's waits included, or in the loop
 	// body, for Handled + Failed messages.
@@ -41,6 +45,8 @@ type counters struct {
 	failed     atomic.Uint64
 	timedOut   atomic.Uint64
 	dropped    atomic.Uint64
+	late       atomic.Uint64
+	held       atomic.Int64
 	handleTime atomic.Int64
 }
 

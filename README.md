@@ -87,6 +87,10 @@ for msg := range seq {
     failing on every message.
 20. [`20-evict`](examples/20-evict/main.go): `subscriber.WithEvictAfter` and `*subscriber.EvictedError`, for a stuck
     subscriber that `Broadcast` stops waiting for.
+21. [`21-order`](examples/21-order/main.go): `subscriber.WithOrder` and `*subscriber.LateError`, handling readings by
+    the time they were taken rather than the order they arrive in.
+22. [`22-replay`](examples/22-replay/main.go): `broadcastor.WithHistory`, `store.History` and `subscriber.WithReplay`,
+    for a subscriber that joins late and handles first the readings it missed.
 
 ## Delivery
 
@@ -111,6 +115,68 @@ them. A parallel `Broadcast` gets to every subscriber at once, so it waits at mo
 every subscriber the same time. `subscriber.WithTimeout(d)` sets a default timeout for every message sent to one
 subscriber. `subscriber.WithEvictAfter(n)` unsubscribes a subscriber once it has lost n messages in a row, so that a
 stuck one stops costing every `Broadcast` its timeout (see [Unsubscribing](#unsubscribing)).
+
+## Ordering and replay
+
+The ordering in the table above is the order a subscriber takes messages in. When messages carry their own order, such
+as a timestamp or a sequence number, `subscriber.WithOrder` makes the subscriber handle them in that order instead,
+whatever mode they were sent with and however many goroutines broadcast them:
+
+```go
+id, err := b.Subscribe(ctx, handle, subscriber.WithOrder(subscriber.OrderPolicy[Event]{
+ Compare: subscriber.ByTime(func(e Event) time.Time { return e.At }), // or subscriber.By(func(e Event) uint64 { return e.Seq })
+ Window:  50 * time.Millisecond,
+ Limit:   1024,
+}))
+```
+
+A live stream can never tell that nothing earlier is still on its way, so the policy bounds the wait:
+
+- `Compare` orders the messages, as in `slices.SortFunc`. `subscriber.ByTime` and `subscriber.By` make one from a
+  field.
+- `Window` is the longest the subscriber holds a message, from when it takes it, for an earlier one to arrive. When a
+  message's window ends, it is handled along with every message held that sorts before it, so none waits longer. With
+  no window, the subscriber orders only the messages queued together in its buffer while `handle` was busy.
+- `Limit` bounds how many messages it holds: past it, the first in order is handled early.
+
+The subscriber keeps taking messages while it holds others, so holding them does not hold `Broadcast` up, but it takes
+none while a message is due, so a slow `handle` still does. A message that should have come before one already handled
+is late: it is reported as a `*subscriber.LateError`, and stored with `subscriber.WithStore`, instead of being handled
+out of order. Equal messages keep the order they arrived in. Once unsubscribed, the subscriber handles what it holds
+right away, in order, or reports it as a `*subscriber.ClosedError` with `subscriber.WithUnsubscribeDiscard`.
+`WithOrder` applies to `SubscribeSeq` too.
+
+`broadcastor.WithHistory(h)` makes `Broadcast` give every message to a `subscriber.History` before handing it to
+anyone, and `subscriber.WithReplay(keep)` hands a new subscriber those of the history `keep` accepts, or all of them for
+nil, before its live messages. `store.History` keeps the last ones in memory:
+
+```go
+b := broadcastor.NewBroadcastor(broadcastor.WithHistory(store.NewHistory[Event](1024)))
+...
+id, err := b.Subscribe(ctx, handle, subscriber.WithReplay(func(e Event) bool { return !e.At.Before(since) }))
+```
+
+Any type with these two methods is a history, so it can also keep messages in a database, across restarts:
+
+```go
+type History[T any] interface {
+ Append(ctx context.Context, offset uint64, msg T)
+ Read(ctx context.Context) ([]subscriber.HistoryEntry[T], error)
+}
+```
+
+The library numbers the messages itself, from 1, and gives `Append` each one's offset, with the `Broadcast` ctx: a slow
+`Append` holds `Broadcast` up, and concurrent `Broadcast`s call it at once, with offsets out of order. It cannot fail: a
+message it does not keep is broadcast all the same, but never replayed. `Read` returns the messages kept, in any order.
+If it fails, the subscriber's error handler gets a `*subscriber.ReplayError`, and the subscriber handles only live
+messages. The library holds no lock around either.
+
+The subscriber gets each message once, either replayed or live, with none missed in between, however `Subscribe` races
+`Broadcast`, as long as `Read` returns every message `Append` was given and the history still keeps. `Subscribe` adds
+the subscriber along with the newest offset, so that every `Broadcast` that finds it skips the older ones. It then
+waits for the `Append`s of those still under way, and reads the history before returning. The replayed messages come
+oldest first, or merged in order with the live ones with `WithOrder`. They get the subscriber's ctx and default message
+options, not those their `Broadcast` was given, since it may be long over.
 
 ## Middleware
 
@@ -179,6 +245,8 @@ Errors go to error handlers, and are discarded when there are none:
 | `*subscriber.PanicError` | `handle` or a middleware panicked, in a subscriber with `middleware.Recover`. Without it, the panic crashes the program. |
 | `*subscriber.TimeoutError` | `Broadcast` gave up waiting. |
 | `*subscriber.DroppedError` | A non-blocking `Broadcast` found the subscriber busy. |
+| `*subscriber.LateError` | A subscriber with `subscriber.WithOrder` took a message that should have come before one it already handled. |
+| `*subscriber.ReplayError` | A subscriber with `subscriber.WithReplay` failed to read the history. It is about no message, so it reaches the subscriber's error handler only, and no store. |
 | `*subscriber.ClosedError` | The subscriber was unsubscribed while `Broadcast` was running, or waiting on it. |
 | `*subscriber.ClosedError` | A `SubscribeSeq` loop ended before yielding a message its subscriber took. |
 | `*subscriber.ClosedError` | A subscriber unsubscribed with `subscriber.WithUnsubscribeDiscard` took a message. |
@@ -190,7 +258,8 @@ subscription's, never the `Broadcast` one (see [Contexts](#contexts)). Unless th
 only once the subscription is over, even when the error is `Broadcast` giving up because its own ctx is done.
 
 Each error type matches a sentinel with `errors.Is` (`subscriber.ErrTimeout`, `subscriber.ErrDropped`,
-`subscriber.ErrPanic`, `subscriber.ErrClosed`, `subscriber.ErrStore`, `subscriber.ErrEvicted`, and
+`subscriber.ErrPanic`, `subscriber.ErrClosed`, `subscriber.ErrStore`, `subscriber.ErrEvicted`, `subscriber.ErrLate`,
+`subscriber.ErrReplay`, and
 `ErrSubscriberNotFound` for `Unsubscribe`),
 without needing to know the message type.
 
@@ -255,16 +324,18 @@ subscribed:
 | Field | What |
 | --- | --- |
 | `Queued`, `Buffer` | Messages waiting in the subscriber's buffer, which has room for `Buffer` (`subscriber.WithBuffer`). |
+| `Held` | Messages a subscriber with `subscriber.WithOrder` holds until they are due. |
 | `Delivered` | Messages the subscriber took. |
 | `Handled` | Messages `handle` returned nil for, or a `SubscribeSeq` loop body got. |
 | `Failed` | Messages `handle`, or its outermost middleware, returned an error for, `*subscriber.PanicError` included. |
-| `TimedOut`, `Dropped` | Messages lost as a `*subscriber.TimeoutError` or a `*subscriber.DroppedError`. |
+| `TimedOut`, `Dropped`, `Late` | Messages lost as a `*subscriber.TimeoutError`, a `*subscriber.DroppedError` or a `*subscriber.LateError`. |
 | `HandleTime` | Time spent in `handle` and its middlewares (`middleware.Retry`'s waits included), or in the loop body, for `Handled + Failed` messages, so dividing gives the mean. |
 
-Each message a `Broadcast` picks a subscriber up for is counted once in `Handled`, `Failed`, `TimedOut` or `Dropped`,
-or is still on its way: `Delivered` is `Handled + Failed + Queued`, plus the message in `handle` if there is one. The
-counters are read one at a time, so they may not add up while messages are in flight. A loss is counted before the
-error handlers are called, so they see it counted.
+Each message a `Broadcast` picks a subscriber up for is counted once in `Handled`, `Failed`, `TimedOut`, `Dropped` or
+`Late`, or is still on its way: `Delivered` is `Handled + Failed + Late + Queued + Held`, plus the message in `handle`
+if there is one. A replayed message counts as delivered once the subscriber takes it from the history. The counters are
+read one at a time, so they may not add up while messages are in flight. A loss is counted before the error handlers
+are called, so they see it counted.
 
 ```go
 for _, s := range b.Stats() {

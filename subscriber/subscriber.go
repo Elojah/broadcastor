@@ -3,8 +3,10 @@
 package subscriber
 
 import (
+	"cmp"
 	"context"
 	"iter"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -41,6 +43,17 @@ type Subscriber[T any] struct {
 	// misses counts the messages lost in a row, for WithEvictAfter.
 	misses atomic.Int64
 
+	// ordering holds messages until they are due. nil without WithOrder.
+	ordering *ordering[T]
+
+	// cutoff is the newest offset when the subscriber was stored, 0 for none: Deliver skips every message up to it,
+	// which read returns once it has been appended. Set by Replay.
+	cutoff uint64
+	read   func(ctx context.Context) ([]HistoryEntry[T], error)
+
+	// backlog holds what is left to replay. Set by ReadHistory, then only the reader uses it.
+	backlog []T
+
 	counters counters
 }
 
@@ -54,6 +67,9 @@ type config[T any] struct {
 	middlewares         []Middleware[T]
 	detached            bool
 	evictAfter          int
+	order               OrderPolicy[T]
+	replay              bool
+	keep                func(msg T) bool
 }
 
 // New returns a subscriber holding the subscription's reference, which Unsubscribe drops.
@@ -64,6 +80,9 @@ func New[T any](id uuid.UUID, options ...Option[T]) *Subscriber[T] {
 	}
 	s := &Subscriber[T]{id: id, ch: make(chan message.Message[T], config.buffer), config: config, done: make(chan struct{})}
 	s.refs.Store(1)
+	if config.order.Compare != nil {
+		s.ordering = newOrdering(config.order)
+	}
 
 	return s
 }
@@ -90,10 +109,51 @@ func (s *Subscriber[T]) Attach(ctx context.Context, remove func(options ...Unsub
 	return ctx
 }
 
-// Deliver sends value to the subscriber and reports whether it took it, or, for an async message, whether a send was
-// started. A parallel message returns false and a channel that yields the result instead. Failures are reported with
-// the message's ctx, never ctx, which only bounds the wait.
-func (s *Subscriber[T]) Deliver(ctx context.Context, value T, options ...message.Option[T]) (bool, <-chan bool) {
+// Replays reports whether the subscriber replays its Broadcastor's history (WithReplay).
+func (s *Subscriber[T]) Replays() bool {
+	return s.config.replay
+}
+
+// Replay makes the subscriber skip every message up to cutoff, the newest offset, and read them back with read in
+// ReadHistory. It must be called before the subscriber is stored, so that every Broadcast that finds it skips them.
+func (s *Subscriber[T]) Replay(cutoff uint64, read func(ctx context.Context) ([]HistoryEntry[T], error)) {
+	s.cutoff, s.read = cutoff, read
+}
+
+// ReadHistory reads into the backlog, oldest first, the messages up to the cutoff that keep accepts: the later ones
+// come live. A failure is reported as a *ReplayError, unless the subscription's ctx is done, which ends it anyway. It
+// must be called once the subscriber is stored, before anything reads it, and does nothing without Replay.
+func (s *Subscriber[T]) ReadHistory() {
+	if s.read == nil {
+		return
+	}
+	entries, err := s.read(s.ctx)
+	if err != nil {
+		// Not through report, since it is about no message to store.
+		if s.ctx.Err() == nil && s.config.errorHandler != nil {
+			s.config.errorHandler(s.ctx, &ReplayError{SubscriberID: s.id, Err: err})
+		}
+
+		return
+	}
+	entries = slices.DeleteFunc(entries, func(entry HistoryEntry[T]) bool {
+		return entry.Offset > s.cutoff || (s.config.keep != nil && !s.config.keep(entry.Message))
+	})
+	slices.SortFunc(entries, func(a, b HistoryEntry[T]) int { return cmp.Compare(a.Offset, b.Offset) })
+	s.backlog = make([]T, len(entries))
+	for i, entry := range entries {
+		s.backlog[i] = entry.Message
+	}
+}
+
+// Deliver sends value, whose offset in the history is offset, 0 without one, to the subscriber and reports whether it
+// took it, or, for an async message, whether a send was started. A parallel message returns false and a channel that
+// yields the result instead. Failures are reported with the message's ctx, never ctx, which only bounds the wait.
+func (s *Subscriber[T]) Deliver(ctx context.Context, offset uint64, value T, options ...message.Option[T]) (bool, <-chan bool) {
+	// Read back from the history instead. Neither reported nor counted, since it is handled once, from there.
+	if offset != 0 && offset <= s.cutoff {
+		return false, nil
+	}
 	m := message.New(value, s.config.defaults, options...)
 
 	if !s.acquire() {
@@ -143,19 +203,23 @@ func (s *Subscriber[T]) Unsubscribe(options ...UnsubscribeOption) {
 // Consume calls handle, wrapped in the middlewares, for every message until ch is closed, and reports its errors.
 func (s *Subscriber[T]) Consume(handle Handler[T]) {
 	handle = chain(handle, s.config.middlewares...)
-	for m := range s.ch {
-		if s.discarding.Load() {
-			s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: m.Value})
+	if s.ordering == nil {
+		for m, ok := s.replayed(); ok; m, ok = s.replayed() {
+			s.process(handle, m)
+		}
+		for m := range s.ch {
+			s.process(handle, m)
+		}
 
-			continue
+		return
+	}
+	s.holdBacklog()
+	for {
+		m, ok := s.next(nil)
+		if !ok {
+			return
 		}
-		start := time.Now()
-		err := handle(s.context(m), s.id, m.Value)
-		s.counters.handle(time.Since(start), err)
-		// Reported outside the chain, so Recover never catches a panic in an error handler.
-		if err != nil {
-			s.report(m, err)
-		}
+		s.process(handle, m)
 	}
 }
 
@@ -190,6 +254,8 @@ func (s *Subscriber[T]) Stats() Stats {
 		Failed:       s.counters.failed.Load(),
 		TimedOut:     s.counters.timedOut.Load(),
 		Dropped:      s.counters.dropped.Load(),
+		Late:         s.counters.late.Load(),
+		Held:         int(s.counters.held.Load()),
 		HandleTime:   time.Duration(s.counters.handleTime.Load()),
 	}
 }
@@ -315,34 +381,191 @@ func (s *Subscriber[T]) report(m message.Message[T], err error) {
 	}
 }
 
+// process calls handle for m and reports its error, or reports m once the subscriber is discarding.
+func (s *Subscriber[T]) process(handle Handler[T], m message.Message[T]) {
+	if s.discarding.Load() {
+		s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: m.Value})
+
+		return
+	}
+	start := time.Now()
+	err := handle(s.context(m), s.id, m.Value)
+	s.counters.handle(time.Since(start), err)
+	// Reported outside the chain, so Recover never catches a panic in an error handler.
+	if err != nil {
+		s.report(m, err)
+	}
+}
+
 // pull is Consume for Seq: it yields messages until yield returns false, ctx is done, ch is closed or the subscriber
 // is discarding.
 func (s *Subscriber[T]) pull(yield func(T) bool) {
+	if s.ordering != nil {
+		s.holdBacklog()
+	}
 	for s.ctx.Err() == nil && !s.discarding.Load() {
-		select {
-		case m, ok := <-s.ch:
-			if !ok {
-				return
-			}
-			if s.discarding.Load() {
-				s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: m.Value})
+		m, ok := s.take()
+		if !ok {
+			return
+		}
+		if s.discarding.Load() {
+			s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: m.Value})
 
-				return
-			}
-			start := time.Now()
-			more := yield(m.Value)
-			s.counters.handle(time.Since(start), nil)
-			if !more {
-				return
-			}
-		case <-s.ctx.Done():
+			return
+		}
+		start := time.Now()
+		more := yield(m.Value)
+		s.counters.handle(time.Since(start), nil)
+		if !more {
 			return
 		}
 	}
 }
 
-// discard reports every message left on ch until it is closed, so no Broadcast waits on a loop that has ended.
+// take returns the next message for pull, or false once ch is closed or ctx is done.
+func (s *Subscriber[T]) take() (message.Message[T], bool) {
+	if s.ordering != nil {
+		return s.next(s.ctx.Done())
+	}
+	if m, ok := s.replayed(); ok {
+		return m, true
+	}
+	select {
+	case m, ok := <-s.ch:
+		return m, ok
+	case <-s.ctx.Done():
+		return message.Message[T]{}, false
+	}
+}
+
+// next returns the first message in order once it is due, or false once ch is closed and nothing is held, or once
+// stop is closed. While nothing is due it takes messages, so that holding them does not hold Broadcast up. Once one is
+// due, it takes none until none is, so that a slow handle holds Broadcast up as it would without WithOrder.
+func (s *Subscriber[T]) next(stop <-chan struct{}) (message.Message[T], bool) {
+	o := s.ordering
+	for {
+		var (
+			m  message.Message[T]
+			ok bool
+		)
+		if o.closed {
+			m, ok = o.buffer.Release()
+		} else {
+			m, ok = o.buffer.Pop(time.Now())
+		}
+		if ok {
+			s.counters.held.Add(-1)
+
+			return m, true
+		}
+		if o.closed {
+			o.stop()
+
+			return m, false
+		}
+
+		// Before waiting, so that the messages queued together are ordered together.
+		taken, open := s.takeQueued()
+		if !open {
+			o.closed = true
+
+			continue
+		}
+		if taken {
+			continue
+		}
+
+		select {
+		case m, ok := <-s.ch:
+			if !ok {
+				o.closed = true
+
+				continue
+			}
+			s.hold(m)
+		case <-o.wait():
+		case <-stop:
+			o.stop()
+
+			return message.Message[T]{}, false
+		}
+	}
+}
+
+// takeQueued holds the messages queued on ch, and reports whether it took any, and false once ch is closed. It takes as
+// many as were queued when it started, plus one, so that it ends however fast messages come, and also takes one from a
+// send waiting on an unbuffered ch.
+func (s *Subscriber[T]) takeQueued() (bool, bool) {
+	taken := false
+	for range len(s.ch) + 1 {
+		select {
+		case m, ok := <-s.ch:
+			if !ok {
+				return taken, false
+			}
+			s.hold(m)
+			taken = true
+		default:
+			return taken, true
+		}
+	}
+
+	return taken, true
+}
+
+// hold holds m until it is due, or reports it as a *LateError, or as a *ClosedError once discarding.
+func (s *Subscriber[T]) hold(m message.Message[T]) {
+	if s.ordering.buffer.Push(m, time.Now()) {
+		s.counters.held.Add(1)
+
+		return
+	}
+	if s.discarding.Load() {
+		s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: m.Value})
+
+		return
+	}
+	last, _ := s.ordering.buffer.Last()
+	s.counters.late.Add(1)
+	s.report(m, &LateError[T]{SubscriberID: s.id, Message: m.Value, After: last.Value})
+}
+
+// replayed returns the next message of the backlog, counted as delivered, or false once there is none left.
+func (s *Subscriber[T]) replayed() (message.Message[T], bool) {
+	if len(s.backlog) == 0 {
+		s.backlog = nil
+
+		return message.Message[T]{}, false
+	}
+	v := s.backlog[0]
+	var zero T
+	s.backlog[0] = zero // so that it can be collected
+	s.backlog = s.backlog[1:]
+	s.counters.delivered.Add(1)
+
+	return message.New(v, s.config.defaults), true
+}
+
+
+// holdBacklog holds the whole backlog, before any live message, so that they are merged in order.
+func (s *Subscriber[T]) holdBacklog() {
+	for m, ok := s.replayed(); ok; m, ok = s.replayed() {
+		s.hold(m)
+	}
+}
+
+// discard reports every message held, then what is left of the backlog, then every message left on ch until it is
+// closed, so no Broadcast waits on a loop that has ended.
 func (s *Subscriber[T]) discard() {
+	if s.ordering != nil {
+		for m, ok := s.ordering.buffer.Release(); ok; m, ok = s.ordering.buffer.Release() {
+			s.counters.held.Add(-1)
+			s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: m.Value})
+		}
+	}
+	for m, ok := s.replayed(); ok; m, ok = s.replayed() {
+		s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: m.Value})
+	}
 	for m := range s.ch {
 		s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: m.Value})
 	}

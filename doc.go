@@ -30,6 +30,19 @@
 // change that. Broadcast gives up on a subscriber once its ctx is done or the message's timeout runs out
 // (message.WithTimeout, subscriber.WithTimeout).
 //
+// # Ordering
+//
+// A subscriber takes messages in the order Broadcast hands them over: the order of the Broadcasts from one goroutine,
+// but for message.WithAsync, and any order across goroutines. subscriber.WithOrder makes it handle them in their own
+// order instead, such as the time they carry. It holds each one for up to a window, for one that sorts before it to
+// arrive, and reports a message that should have come before one already handled as a *subscriber.LateError.
+//
+// # Replay
+//
+// WithHistory gives every message broadcast to a subscriber.History, such as store.History, which keeps the last ones
+// in memory, and subscriber.WithReplay hands them to a new subscriber before the live ones: each once, with none missed
+// in between.
+//
 // # Unsubscribing
 //
 // Unsubscribe and Close never wait, so handle can call them, and a Broadcast waiting on a subscriber gives up once it is
@@ -49,8 +62,9 @@
 // Errors go to subscriber.WithErrorHandler and message.WithErrorHandler, and are discarded without one. handle's
 // errors arrive as is. Package middleware can recover panics (Recover), wrap errors (WrapError) and retry (Retry).
 // Broadcast reports a message it could not hand over as a *subscriber.TimeoutError, *subscriber.DroppedError or
-// *subscriber.ClosedError, and the loss that evicts a subscriber as a *subscriber.EvictedError. Each error type matches
-// a sentinel with errors.Is.
+// *subscriber.ClosedError, and the loss that evicts a subscriber as a *subscriber.EvictedError. A subscriber with
+// subscriber.WithOrder reports a message that comes too late as a *subscriber.LateError. Each error type matches a
+// sentinel with errors.Is.
 //
 // # Storing lost messages
 //
@@ -61,6 +75,7 @@
 //
 // # Stats
 //
-// Broadcastor.Stats returns a snapshot of each subscriber's counters (subscriber.Stats): how many messages are queued,
-// and how many it took, handled, failed on, and missed by timeout or drop, with the time spent in handle.
+// Broadcastor.Stats returns a snapshot of each subscriber's counters (subscriber.Stats): how many messages are queued
+// or held, and how many it took, handled, failed on, and missed by timeout, drop or coming late, with the time spent in
+// handle.
 package broadcastor

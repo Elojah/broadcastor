@@ -15,6 +15,8 @@ var (
 	ErrPanic   = errors.New("panic in handle")
 	ErrStore   = errors.New("store failed")
 	ErrEvicted = errors.New("subscriber evicted")
+	ErrLate    = errors.New("message late")
+	ErrReplay  = errors.New("replay failed")
 )
 
 // HandleError is what middleware.WrapError makes of handle's errors.
@@ -107,6 +109,42 @@ func (e *EvictedError[T]) Unwrap() error {
 
 func (e *EvictedError[T]) Is(target error) bool {
 	return target == ErrEvicted
+}
+
+// LateError is reported for a message a subscriber with WithOrder takes once it has handled After, which the message
+// sorts before. It matches ErrLate.
+type LateError[T any] struct {
+	SubscriberID uuid.UUID
+	Message      T
+	After        T
+}
+
+func (e *LateError[T]) Error() string {
+	return "subscriber " + e.SubscriberID.String() + ": message late, sorts before one already handled"
+}
+
+func (e *LateError[T]) Is(target error) bool {
+	return target == ErrLate
+}
+
+// ReplayError is reported when a subscriber with WithReplay fails to read its Broadcastor's History: Err is Read's.
+// It is about no message, so it reaches the subscriber's error handler only, and no Store. It matches ErrReplay, and
+// unwraps to Err.
+type ReplayError struct {
+	SubscriberID uuid.UUID
+	Err          error
+}
+
+func (e *ReplayError) Error() string {
+	return "subscriber " + e.SubscriberID.String() + ": reading the history: " + e.Err.Error()
+}
+
+func (e *ReplayError) Unwrap() error {
+	return e.Err
+}
+
+func (e *ReplayError) Is(target error) bool {
+	return target == ErrReplay
 }
 
 // ClosedError is reported for a message a subscriber misses because it was unsubscribed: skipped or given up on by a

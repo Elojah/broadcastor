@@ -2,6 +2,7 @@ package broadcastor_test
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/message"
+	"github.com/elojah/broadcastor/store"
 	"github.com/elojah/broadcastor/subscriber"
 )
 
@@ -39,13 +41,16 @@ const (
 	stressFailEvery = 7
 	// stressLabel is the pprof label every goroutine of a round carries, the library's included.
 	stressLabel = "broadcastor_stress"
+	// stressHistory is how many messages the Broadcastor keeps, for the subscribers that replay them.
+	stressHistory = 16
 )
 
 // TestStress runs random interleavings of every method from several goroutines, in real time so that timeouts race
 // sends and evict subscribers, over rounds that each have their own Broadcastor. It checks that nothing panics, that every goroutine returns
 // once the Broadcastor is closed, that no subscriber gets a message twice, whether handled or reported, that a
-// subscriber gets every message broadcast while it was subscribed and none broadcast outside that, and that Stats add
-// up once nothing is in flight. make stress runs it many times.
+// subscriber gets every message broadcast while it was subscribed and none broadcast outside that, that one with
+// WithOrder handles them in order, and that Stats add up once nothing is in flight. One with WithReplay may also get
+// messages broadcast before it subscribed. make stress runs it many times.
 func TestStress(t *testing.T) {
 	t.Parallel()
 
@@ -62,7 +67,7 @@ func TestStress(t *testing.T) {
 // runStress runs one round, then checks it once every goroutine it started has returned.
 func runStress(t *testing.T, closeEarly bool) {
 	t.Helper()
-	s := &stress{b: broadcastor.NewBroadcastor[int](), closeEarly: closeEarly, label: uuid.NewString()}
+	s := &stress{b: broadcastor.NewBroadcastor(broadcastor.WithHistory(store.NewHistory[int](stressHistory))), closeEarly: closeEarly, label: uuid.NewString()}
 	// Every goroutine started in f carries the label, and so do those they start, the library's included.
 	pprof.Do(t.Context(), pprof.Labels(stressLabel, s.label), func(ctx context.Context) { s.run(ctx, t) })
 	s.waitGoroutines(t)
@@ -109,6 +114,8 @@ type stressSub struct {
 	cancel context.CancelFunc
 	// evictAfter is its subscriber.WithEvictAfter, 0 for none.
 	evictAfter int
+	// ordered is set with subscriber.WithOrder, by number, and replays with subscriber.WithReplay.
+	ordered, replays bool
 
 	// subscribing and subscribed are the ticks before Subscribe or SubscribeSeq and after it returned.
 	subscribing, subscribed int64
@@ -123,6 +130,8 @@ type stressSub struct {
 	mu     sync.Mutex
 	got    map[int]stressOutcome
 	failed map[int]bool
+	// handled holds the messages handled, in the order they were.
+	handled []int
 	// evicted is the message whose loss evicted the subscriber, and evictions how many said so.
 	evicted, evictions int
 	// twice holds the numbers the subscriber got again, or that handle failed for again.
@@ -138,6 +147,7 @@ const (
 	stressClosed
 	stressTimedOut
 	stressDropped
+	stressLate
 )
 
 // run starts the broadcasters and churners, checks Stats once they are done unless it closed early, then closes.
@@ -251,6 +261,17 @@ func (s *stress) subscribe(ctx context.Context, t *testing.T) *stressSub {
 	if randN(2) == 0 {
 		sub.evictAfter = 1 + randN(3)
 		options = append(options, subscriber.WithEvictAfter[int](sub.evictAfter))
+	}
+	if randN(4) == 0 {
+		sub.replays = true
+		options = append(options, subscriber.WithReplay[int](nil))
+	}
+	// The broadcasters interleave, so some messages are late.
+	if randN(3) == 0 {
+		sub.ordered = true
+		options = append(options, subscriber.WithOrder(subscriber.OrderPolicy[int]{
+			Compare: cmp.Compare[int], Window: time.Duration(randN(int(stressTimeout))), Limit: randN(4),
+		}))
 	}
 
 	var (
@@ -487,6 +508,9 @@ func (sub *stressSub) record(n int, outcome stressOutcome) {
 		return
 	}
 	sub.got[n] = outcome
+	if outcome == stressHandled {
+		sub.handled = append(sub.handled, n)
+	}
 }
 
 // report is the subscriber's error handler.
@@ -497,6 +521,7 @@ func (sub *stressSub) report(_ context.Context, err error) {
 		closed  *subscriber.ClosedError[int]
 		timeout *subscriber.TimeoutError[int]
 		dropped *subscriber.DroppedError[int]
+		late    *subscriber.LateError[int]
 	)
 	// Then recorded as the timeout or drop it wraps.
 	if errors.As(err, &evicted) {
@@ -511,6 +536,8 @@ func (sub *stressSub) report(_ context.Context, err error) {
 		sub.record(timeout.Message, stressTimedOut)
 	case errors.As(err, &dropped):
 		sub.record(dropped.Message, stressDropped)
+	case errors.As(err, &late) && sub.ordered:
+		sub.record(late.Message, stressLate)
 	default:
 		sub.unexpect(err)
 	}
@@ -562,6 +589,9 @@ func (sub *stressSub) problems(broadcasts []stressBroadcast, byNumber map[int]st
 	if sub.notFound.Load() && sub.evictions == 0 {
 		problems = append(problems, "Unsubscribe found no subscriber before Close, but it was never evicted")
 	}
+	if sub.ordered && !slices.IsSorted(sub.handled) {
+		problems = append(problems, fmt.Sprintf("handled messages out of order, with WithOrder: %v", first(sub.handled)))
+	}
 
 	// Every message broadcast entirely while it was subscribed, and none broadcast entirely outside that.
 	leaving, gone := min(tickOrNever(&sub.leaving), closing), min(tickOrNever(&sub.gone), closed)
@@ -576,7 +606,7 @@ func (sub *stressSub) problems(broadcasts []stressBroadcast, byNumber map[int]st
 		}
 	}
 	for n := range sub.got {
-		if b, ok := byNumber[n]; !ok || b.end < sub.subscribing || b.start > gone {
+		if b, ok := byNumber[n]; !ok || (b.end < sub.subscribing && !sub.replays) || b.start > gone {
 			extra = append(extra, n)
 		}
 	}
@@ -627,15 +657,16 @@ func statsMismatch(stats []subscriber.Stats, subs map[uuid.UUID]*stressSub) stri
 		failed := uint64(len(sub.failed))
 		sub.mu.Unlock()
 
-		// Nothing queued, and HandleTime cannot be known.
+		// Nothing queued or held, and HandleTime cannot be known.
 		want := subscriber.Stats{
 			SubscriberID: got.SubscriberID,
 			Buffer:       got.Buffer,
-			Delivered:    counts[stressHandled],
+			Delivered:    counts[stressHandled] + counts[stressLate],
 			Handled:      counts[stressHandled] - failed,
 			Failed:       failed,
 			TimedOut:     counts[stressTimedOut],
 			Dropped:      counts[stressDropped],
+			Late:         counts[stressLate],
 			HandleTime:   got.HandleTime,
 		}
 		if got != want || counts[stressClosed] != 0 {

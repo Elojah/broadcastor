@@ -97,6 +97,31 @@ func WithEvictAfter[T any](n int) Option[T] {
 	}
 }
 
+// WithOrder makes the subscriber handle its messages in policy's order instead of the order it takes them in, which
+// suits messages that carry their own time or sequence number. It holds each message for up to policy.Window, for one
+// that sorts before it to arrive, and keeps taking messages meanwhile, so holding one does not hold Broadcast up. It
+// takes none while one is due, so a slow handle still does. A message that sorts before one already handled is late:
+// it is reported as a *LateError instead. Once its channel is closed, after Unsubscribe, the subscriber handles
+// everything it holds right away, in order, or reports it with WithUnsubscribeDiscard. It applies to SubscribeSeq too.
+func WithOrder[T any](policy OrderPolicy[T]) Option[T] {
+	return func(config *config[T]) {
+		config.order = policy
+	}
+}
+
+// WithReplay makes a new subscriber handle first the messages its Broadcastor's History holds (broadcastor.WithHistory)
+// that keep accepts, oldest first, or merged in order with the live ones with WithOrder. It gets each message once,
+// either from the history or live, with none missed in between. nil keeps every one. Subscribe reads the history once
+// it has subscribed the subscriber, after waiting for the Appends under way, and calls keep, so a slow History.Read
+// holds Subscribe up. A replayed message gets the subscriber's ctx and its default message options, not those its
+// Broadcast was given. Without a history, it has no effect.
+func WithReplay[T any](keep func(msg T) bool) Option[T] {
+	return func(config *config[T]) {
+		config.replay = true
+		config.keep = keep
+	}
+}
+
 // WithUnsubscribeDiscard makes the subscriber report every message it takes once unsubscribed as a *ClosedError,
 // instead of handling it, and ends a SubscribeSeq loop. Unsubscribe still does not wait, so handle may yet run for one
 // message. It has no effect if the subscriber was already unsubscribed.
