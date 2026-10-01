@@ -105,7 +105,7 @@ func WithEvictAfter[T any](n int) Option[T] {
 // everything it holds right away, in order, or reports it with WithUnsubscribeDiscard. It applies to SubscribeSeq too.
 func WithOrder[T any](policy OrderPolicy[T]) Option[T] {
 	return func(config *config[T]) {
-		config.order = policy
+		config.order = &policy
 	}
 }
 
@@ -117,8 +117,10 @@ func WithOrder[T any](policy OrderPolicy[T]) Option[T] {
 // Broadcast was given. Without a history, it has no effect.
 func WithReplay[T any](keep func(msg T) bool) Option[T] {
 	return func(config *config[T]) {
-		config.replay = true
-		config.keep = keep
+		if keep == nil {
+			keep = func(T) bool { return true }
+		}
+		config.replay = keep
 	}
 }
 

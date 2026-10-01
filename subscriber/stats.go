@@ -46,7 +46,6 @@ type counters struct {
 	timedOut   atomic.Uint64
 	dropped    atomic.Uint64
 	late       atomic.Uint64
-	held       atomic.Int64
 	handleTime atomic.Int64
 }
 

@@ -32,6 +32,8 @@ type Subscriber[T any] struct {
 
 	// discarding makes Consume and pull report messages instead of processing them.
 	discarding atomic.Bool
+	// held is how many messages ordering holds, for Stats. Beside discarding, which leaves room for it.
+	held atomic.Int32
 
 	// stopContextLifetime cancels the AfterFunc set by Attach. nil with WithDetachedContext.
 	stopContextLifetime func() bool
@@ -46,13 +48,8 @@ type Subscriber[T any] struct {
 	// ordering holds messages until they are due. nil without WithOrder.
 	ordering *ordering[T]
 
-	// cutoff is the newest offset when the subscriber was stored, 0 for none: Deliver skips every message up to it,
-	// which read returns once it has been appended. Set by Replay.
-	cutoff uint64
-	read   func(ctx context.Context) ([]HistoryEntry[T], error)
-
-	// backlog holds what is left to replay. Set by ReadHistory, then only the reader uses it.
-	backlog []T
+	// replay is nil but for a subscriber that replays its Broadcastor's history. Set by Replay.
+	replay *replay[T]
 
 	counters counters
 }
@@ -62,14 +59,26 @@ type config[T any] struct {
 	buffer              int
 	defaults            message.Config
 	unsubscribeDefaults unsubscription
+	detached            bool // beside unsubscribeDefaults, so that they share a word
 	errorHandler        func(ctx context.Context, err error)
 	store               Store[T]
 	middlewares         []Middleware[T]
-	detached            bool
 	evictAfter          int
-	order               OrderPolicy[T]
-	replay              bool
-	keep                func(msg T) bool
+	// Behind pointers, so that a subscriber without them stays small: Subscribe allocates it.
+	order *OrderPolicy[T]
+	// replay is WithReplay's keep, never nil with it.
+	replay func(msg T) bool
+}
+
+// replay is what a subscriber that replays its Broadcastor's history needs.
+type replay[T any] struct {
+	// cutoff is the newest offset when the subscriber was stored: Deliver skips every message up to it, which read
+	// returns once it has been appended.
+	cutoff uint64
+	read   func(ctx context.Context) ([]HistoryEntry[T], error)
+
+	// backlog holds what is left to replay. Set by ReadHistory, then only the reader uses it.
+	backlog []T
 }
 
 // New returns a subscriber holding the subscription's reference, which Unsubscribe drops.
@@ -80,8 +89,8 @@ func New[T any](id uuid.UUID, options ...Option[T]) *Subscriber[T] {
 	}
 	s := &Subscriber[T]{id: id, ch: make(chan message.Message[T], config.buffer), config: config, done: make(chan struct{})}
 	s.refs.Store(1)
-	if config.order.Compare != nil {
-		s.ordering = newOrdering(config.order)
+	if config.order != nil && config.order.Compare != nil {
+		s.ordering = newOrdering(*config.order)
 	}
 
 	return s
@@ -111,23 +120,23 @@ func (s *Subscriber[T]) Attach(ctx context.Context, remove func(options ...Unsub
 
 // Replays reports whether the subscriber replays its Broadcastor's history (WithReplay).
 func (s *Subscriber[T]) Replays() bool {
-	return s.config.replay
+	return s.config.replay != nil
 }
 
 // Replay makes the subscriber skip every message up to cutoff, the newest offset, and read them back with read in
 // ReadHistory. It must be called before the subscriber is stored, so that every Broadcast that finds it skips them.
 func (s *Subscriber[T]) Replay(cutoff uint64, read func(ctx context.Context) ([]HistoryEntry[T], error)) {
-	s.cutoff, s.read = cutoff, read
+	s.replay = &replay[T]{cutoff: cutoff, read: read}
 }
 
 // ReadHistory reads into the backlog, oldest first, the messages up to the cutoff that keep accepts: the later ones
 // come live. A failure is reported as a *ReplayError, unless the subscription's ctx is done, which ends it anyway. It
 // must be called once the subscriber is stored, before anything reads it, and does nothing without Replay.
 func (s *Subscriber[T]) ReadHistory() {
-	if s.read == nil {
+	if s.replay == nil {
 		return
 	}
-	entries, err := s.read(s.ctx)
+	entries, err := s.replay.read(s.ctx)
 	if err != nil {
 		// Not through report, since it is about no message to store.
 		if s.ctx.Err() == nil && s.config.errorHandler != nil {
@@ -137,12 +146,12 @@ func (s *Subscriber[T]) ReadHistory() {
 		return
 	}
 	entries = slices.DeleteFunc(entries, func(entry HistoryEntry[T]) bool {
-		return entry.Offset > s.cutoff || (s.config.keep != nil && !s.config.keep(entry.Message))
+		return entry.Offset > s.replay.cutoff || !s.config.replay(entry.Message)
 	})
 	slices.SortFunc(entries, func(a, b HistoryEntry[T]) int { return cmp.Compare(a.Offset, b.Offset) })
-	s.backlog = make([]T, len(entries))
+	s.replay.backlog = make([]T, len(entries))
 	for i, entry := range entries {
-		s.backlog[i] = entry.Message
+		s.replay.backlog[i] = entry.Message
 	}
 }
 
@@ -151,7 +160,7 @@ func (s *Subscriber[T]) ReadHistory() {
 // yields the result instead. Failures are reported with the message's ctx, never ctx, which only bounds the wait.
 func (s *Subscriber[T]) Deliver(ctx context.Context, offset uint64, value T, options ...message.Option[T]) (bool, <-chan bool) {
 	// Read back from the history instead. Neither reported nor counted, since it is handled once, from there.
-	if offset != 0 && offset <= s.cutoff {
+	if offset != 0 && s.replay != nil && offset <= s.replay.cutoff {
 		return false, nil
 	}
 	m := message.New(value, s.config.defaults, options...)
@@ -255,7 +264,7 @@ func (s *Subscriber[T]) Stats() Stats {
 		TimedOut:     s.counters.timedOut.Load(),
 		Dropped:      s.counters.dropped.Load(),
 		Late:         s.counters.late.Load(),
-		Held:         int(s.counters.held.Load()),
+		Held:         int(s.held.Load()),
 		HandleTime:   time.Duration(s.counters.handleTime.Load()),
 	}
 }
@@ -454,7 +463,7 @@ func (s *Subscriber[T]) next(stop <-chan struct{}) (message.Message[T], bool) {
 			m, ok = o.buffer.Pop(time.Now())
 		}
 		if ok {
-			s.counters.held.Add(-1)
+			s.held.Add(-1)
 
 			return m, true
 		}
@@ -516,7 +525,7 @@ func (s *Subscriber[T]) takeQueued() (bool, bool) {
 // hold holds m until it is due, or reports it as a *LateError, or as a *ClosedError once discarding.
 func (s *Subscriber[T]) hold(m message.Message[T]) {
 	if s.ordering.buffer.Push(m, time.Now()) {
-		s.counters.held.Add(1)
+		s.held.Add(1)
 
 		return
 	}
@@ -532,20 +541,17 @@ func (s *Subscriber[T]) hold(m message.Message[T]) {
 
 // replayed returns the next message of the backlog, counted as delivered, or false once there is none left.
 func (s *Subscriber[T]) replayed() (message.Message[T], bool) {
-	if len(s.backlog) == 0 {
-		s.backlog = nil
-
+	if s.replay == nil || len(s.replay.backlog) == 0 {
 		return message.Message[T]{}, false
 	}
-	v := s.backlog[0]
+	v := s.replay.backlog[0]
 	var zero T
-	s.backlog[0] = zero // so that it can be collected
-	s.backlog = s.backlog[1:]
+	s.replay.backlog[0] = zero // so that it can be collected
+	s.replay.backlog = s.replay.backlog[1:]
 	s.counters.delivered.Add(1)
 
 	return message.New(v, s.config.defaults), true
 }
-
 
 // holdBacklog holds the whole backlog, before any live message, so that they are merged in order.
 func (s *Subscriber[T]) holdBacklog() {
@@ -559,7 +565,7 @@ func (s *Subscriber[T]) holdBacklog() {
 func (s *Subscriber[T]) discard() {
 	if s.ordering != nil {
 		for m, ok := s.ordering.buffer.Release(); ok; m, ok = s.ordering.buffer.Release() {
-			s.counters.held.Add(-1)
+			s.held.Add(-1)
 			s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: m.Value})
 		}
 	}
