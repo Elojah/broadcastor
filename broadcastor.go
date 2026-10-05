@@ -102,7 +102,8 @@ func (b *Broadcastor[T]) Close() error {
 	return nil
 }
 
-// Broadcast hands msg to every subscriber and returns how many took it, counting every async send as taken.
+// Broadcast hands msg to every subscriber and returns how many took it, counting every async send started as taken, and
+// none that skipped it (subscriber.WithFilter).
 //
 // By default it waits for each subscriber in turn, so a slow one holds up those after it. It gives up on a subscriber
 // once ctx is done or the message's timeout runs out, and tells its error handlers why, but a subscriber ready for the
@@ -110,7 +111,9 @@ func (b *Broadcastor[T]) Close() error {
 // async sends keep using it (see message.WithAsync).
 func (b *Broadcastor[T]) Broadcast(ctx context.Context, msg T, options ...message.Option[T]) int {
 	var (
-		n int
+		// Once, rather than per subscriber, and none without options.
+		config = message.NewConfig(options...)
+		n      int
 		// One per parallel send, yielding whether the subscriber took the message.
 		pending []<-chan bool
 	)
@@ -119,7 +122,7 @@ func (b *Broadcastor[T]) Broadcast(ctx context.Context, msg T, options ...messag
 		if !ok {
 			return true
 		}
-		taken, parallel := s.Deliver(ctx, msg, options...)
+		taken, parallel := s.Deliver(ctx, msg, config)
 		if taken {
 			n++
 		}

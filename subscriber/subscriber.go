@@ -19,6 +19,9 @@ type Subscriber[T any] struct {
 	ch     chan message.Message[T]
 	config config[T]
 
+	// created is what counters.handleStart counts from.
+	created time.Time
+
 	// ctx handles and reports every message that has no ctx of its own. Set by Attach.
 	ctx context.Context //nolint:containedctx // the subscription's, which outlives every call
 
@@ -54,6 +57,8 @@ type config[T any] struct {
 	middlewares         []Middleware[T]
 	detached            bool
 	evictAfter          int
+	asyncLimit          int
+	filter              func(msg T) bool
 }
 
 // New returns a subscriber holding the subscription's reference, which Unsubscribe drops.
@@ -62,7 +67,9 @@ func New[T any](id uuid.UUID, options ...Option[T]) *Subscriber[T] {
 	for _, option := range options {
 		option(&config)
 	}
-	s := &Subscriber[T]{id: id, ch: make(chan message.Message[T], config.buffer), config: config, done: make(chan struct{})}
+	s := &Subscriber[T]{
+		id: id, ch: make(chan message.Message[T], config.buffer), config: config, created: time.Now(), done: make(chan struct{}),
+	}
 	s.refs.Store(1)
 
 	return s
@@ -90,11 +97,15 @@ func (s *Subscriber[T]) Attach(ctx context.Context, remove func(options ...Unsub
 	return ctx
 }
 
-// Deliver sends value to the subscriber and reports whether it took it, or, for an async message, whether a send was
-// started. A parallel message returns false and a channel that yields the result instead. Failures are reported with
-// the message's ctx, never ctx, which only bounds the wait.
-func (s *Subscriber[T]) Deliver(ctx context.Context, value T, options ...message.Option[T]) (bool, <-chan bool) {
-	m := message.New(value, s.config.defaults, options...)
+// Deliver sends value to the subscriber, with config (message.NewConfig) laid over its defaults, and reports whether it
+// took it, or, for an async message, whether a send was started. A parallel message returns false and a channel that
+// yields the result instead. Failures are reported with the message's ctx, never ctx, which only bounds the wait.
+// A message the filter (WithFilter) rejects returns false, and nothing else happens.
+func (s *Subscriber[T]) Deliver(ctx context.Context, value T, config message.Config) (bool, <-chan bool) {
+	if s.config.filter != nil && !s.config.filter(value) {
+		return false, nil
+	}
+	m := message.New(value, s.config.defaults, config)
 
 	if !s.acquire() {
 		s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: value}) //nolint:contextcheck // reported with the message's ctx, not the one bounding the wait
@@ -103,7 +114,17 @@ func (s *Subscriber[T]) Deliver(ctx context.Context, value T, options ...message
 	}
 
 	if m.Config.Delivery == message.DeliveryAsync {
-		go s.send(ctx, m)
+		if !s.startSending() {
+			defer s.release()
+			s.counters.dropped.Add(1)
+			s.lose(m, &DroppedError[T]{SubscriberID: s.id, Message: value})
+
+			return false, nil
+		}
+		go func() {
+			s.send(ctx, m)
+			s.counters.sending.Add(-1)
+		}()
 
 		return true, nil
 	}
@@ -150,7 +171,9 @@ func (s *Subscriber[T]) Consume(handle Handler[T]) {
 			continue
 		}
 		start := time.Now()
+		s.counters.handleStart.Store(int64(start.Sub(s.created)) + 1)
 		err := handle(s.context(m), s.id, m.Value)
+		s.counters.handleStart.Store(0)
 		s.counters.handle(time.Since(start), err)
 		// Reported outside the chain, so Recover never catches a panic in an error handler.
 		if err != nil {
@@ -193,12 +216,14 @@ func (s *Subscriber[T]) Stats() Stats {
 		SubscriberID: s.id,
 		Queued:       len(s.ch),
 		Buffer:       cap(s.ch),
+		Sending:      int(s.counters.sending.Load()),
 		Delivered:    s.counters.delivered.Load(),
 		Handled:      s.counters.handled.Load(),
 		Failed:       s.counters.failed.Load(),
 		TimedOut:     s.counters.timedOut.Load(),
 		Dropped:      s.counters.dropped.Load(),
 		HandleTime:   time.Duration(s.counters.handleTime.Load()),
+		Handling:     s.counters.handling(s.created),
 	}
 }
 
@@ -274,6 +299,25 @@ func (s *Subscriber[T]) lose(m message.Message[T], err error) {
 		err = &EvictedError[T]{SubscriberID: s.id, Message: m.Value, Err: err}
 	}
 	s.report(m, err)
+}
+
+// startSending counts an async send under way, unless WithAsyncLimit's are already.
+func (s *Subscriber[T]) startSending() bool {
+	limit := int64(s.config.asyncLimit)
+	if limit <= 0 {
+		s.counters.sending.Add(1)
+
+		return true
+	}
+	for {
+		n := s.counters.sending.Load()
+		if n >= limit {
+			return false
+		}
+		if s.counters.sending.CompareAndSwap(n, n+1) {
+			return true
+		}
+	}
 }
 
 // acquire takes a reference for a Broadcast, unless ch is already closed.

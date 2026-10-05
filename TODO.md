@@ -25,32 +25,32 @@ for 1 to 1000 subscribers:
 
 Each item changes one function or adds one option.
 
-- [ ] Bound async sends: `subscriber.WithAsyncLimit(n)`. Each async message to a stuck subscriber parks a goroutine
+- [x] Bound async sends: `subscriber.WithAsyncLimit(n)`. Each async message to a stuck subscriber parks a goroutine
   that holds the message until the subscriber takes it or ctx ends. With `context.Background()` and no timeout, that
   may never happen, so the goroutines pile up without limit: on a gateway with little memory, the likeliest way to run
   out of it. Past n sends in flight, an async message is dropped with a `*DroppedError`. It needs an atomic counter per
   subscriber, which `Stats.Sending` exposes. Lean towards keeping the default unlimited until v1.0: a bound drops
   messages silently when there is no error handler, whereas `Stats.Sending` shows a pile-up.
-- [ ] A `Broadcast` with no options allocates nothing in sync, buffered and non-blocking modes. Today it allocates
+- [x] A `Broadcast` with no options allocates nothing in sync, buffered and non-blocking modes. Today it allocates
   48 B per subscriber, which at a sensor's rate is garbage on every reading: `message.New` passes `&config` to each
   option, so the config moves to the heap (`go build -gcflags=-m`: `moved to heap: message.config`, at the
   `message.New` call in `Deliver`). With no options, `Deliver` can build the message from the subscriber's defaults
   directly. With options, apply them once per `Broadcast` and record which fields they set in an unexported mask on
   `message.Config`, then merge those fields over each subscriber's defaults by value: one allocation per `Broadcast`
   instead of one per subscriber.
-- [ ] `subscriber.WithFilter(func(T) bool)`. The filter runs in `Broadcast`'s goroutine before `acquire`, so a message
+- [x] `subscriber.WithFilter(func(T) bool)`. The filter runs in `Broadcast`'s goroutine before `acquire`, so a message
   the subscriber skips costs a func call instead of a wake-up (~1 µs). It is neither reported nor counted, including in
   `Broadcast`'s return value.
-  - [ ] A `filter` package, importing nothing from the library, for readings that repeat themselves:
+  - [x] A `filter` package, importing nothing from the library, for readings that repeat themselves:
     `filter.Changed(func(prev, next T) bool)` passes a reading only once it moved past a threshold (a deadband), and
     `filter.Every(d)` passes at most one per period. Concurrent `Broadcast`s may call a filter at once, so these keep
     their state in an atomic or behind a mutex, and "since the last one" is then approximate.
-- [ ] `middleware.MaxAge(d, func(T) time.Time)`: a message older than d when handle would get it is not handled, since
+- [x] `middleware.MaxAge(d, func(T) time.Time)`: a message older than d when handle would get it is not handled, since
   a reading or a command that waited behind a slow handle may be worse than none. The time comes from the message,
   since the library stamps none. It returns a `*subscriber.ExpiredError` (`subscriber.ErrExpired`), so the message
   counts as `Failed` and reaches the dead letters like any handle error. Settle where it goes in the recommended order:
   before `Retry`, so that an expired message is not retried.
-- [ ] `Stats.Handling`: how long the current handle has been running, 0 when idle. Today a stuck handle (a hung serial
+- [x] `Stats.Handling`: how long the current handle has been running, 0 when idle. Today a stuck handle (a hung serial
   or I²C read) shows only indirectly, as `Queued == Buffer` with counters that stop moving. `Consume` already reads the
   clock before handle, so storing that time in an atomic is enough for a watchdog to unsubscribe a subscriber stuck
   for too long.
@@ -87,7 +87,7 @@ Each item changes one function or adds one option.
   - [ ] A durable store keeps only the text of `Record.Err`, so `errors.Is(entry.Err, subscriber.ErrTimeout)` no
     longer holds once read back. Decide whether `Record` should also carry which sentinel its error matches, before
     `store.File` sets its format.
-- [ ] `examples/20-mqtt`, a module of its own like `19-redis` (listed in `MODULES` and the README): MQTT in, then fan
+- [ ] `examples/23-mqtt`, a module of its own like `19-redis` (listed in `MODULES` and the README): MQTT in, then fan
   out to a local rule, a local store, and an uplink through `store.Enqueue` and `store.Drain`. Its `Example()` runs
   against an in-process broker (such as mochi-mqtt), so CI needs none.
 

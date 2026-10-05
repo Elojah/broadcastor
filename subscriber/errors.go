@@ -3,6 +3,7 @@ package subscriber
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -15,6 +16,7 @@ var (
 	ErrPanic   = errors.New("panic in handle")
 	ErrStore   = errors.New("store failed")
 	ErrEvicted = errors.New("subscriber evicted")
+	ErrExpired = errors.New("message expired")
 )
 
 // HandleError is what middleware.WrapError makes of handle's errors.
@@ -55,6 +57,22 @@ func (e *PanicError[T]) Is(target error) bool {
 	return target == ErrPanic
 }
 
+// ExpiredError is what middleware.MaxAge returns for a message too old to handle: Age is how old it was. It matches
+// ErrExpired.
+type ExpiredError[T any] struct {
+	SubscriberID uuid.UUID
+	Message      T
+	Age          time.Duration
+}
+
+func (e *ExpiredError[T]) Error() string {
+	return "subscriber " + e.SubscriberID.String() + ": message expired, " + e.Age.String() + " old"
+}
+
+func (e *ExpiredError[T]) Is(target error) bool {
+	return target == ErrExpired
+}
+
 // TimeoutError is reported when Broadcast gives up on a subscriber: Err is the Broadcast ctx's error, or
 // context.DeadlineExceeded for the message's timeout. It matches ErrTimeout, and unwraps to Err.
 type TimeoutError[T any] struct {
@@ -75,7 +93,8 @@ func (e *TimeoutError[T]) Is(target error) bool {
 	return target == ErrTimeout
 }
 
-// DroppedError is reported when a non-blocking Broadcast finds the subscriber busy. It matches ErrDropped.
+// DroppedError is reported when a non-blocking Broadcast finds the subscriber busy, or an async one finds as many async
+// sends under way to it as WithAsyncLimit allows. It matches ErrDropped.
 type DroppedError[T any] struct {
 	SubscriberID uuid.UUID
 	Message      T

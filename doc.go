@@ -29,8 +29,10 @@
 //
 // Delivery is at most once. By default Broadcast waits for each subscriber in turn to take the message, so a slow one
 // holds up those after it. subscriber.WithBuffer, message.WithParallel, message.WithAsync and message.WithNonBlocking
-// change that. Broadcast gives up on a subscriber once its ctx is done or the message's timeout runs out
-// (message.WithTimeout, subscriber.WithTimeout).
+// change that, and subscriber.WithAsyncLimit bounds the async sends to a subscriber. Broadcast gives up on a subscriber
+// once its ctx is done or the message's timeout runs out (message.WithTimeout, subscriber.WithTimeout).
+// subscriber.WithFilter skips messages before any send, so the subscriber never wakes up for them, and package filter
+// holds filters for readings that repeat themselves.
 //
 // # Ordering
 //
@@ -55,7 +57,8 @@
 //
 // Errors go to subscriber.WithErrorHandler and message.WithErrorHandler, and are discarded without one. handle's
 // errors arrive as is, and a message a subscriber misses as one of package subscriber's error types, each matching a
-// sentinel with errors.Is. Package middleware can recover panics (Recover), wrap errors (WrapError) and retry (Retry).
+// sentinel with errors.Is. Package middleware can recover panics (Recover), keep a history (History), drop stale
+// messages (MaxAge), wrap errors (WrapError) and retry (Retry).
 //
 // # Dead letters
 //
@@ -66,6 +69,7 @@
 //
 // # Stats
 //
-// Broadcastor.Stats returns a snapshot of each subscriber's counters (subscriber.Stats): how many messages are queued,
-// and how many it took, handled, failed on, and missed by timeout or drop, with the time spent in handle.
+// Broadcastor.Stats returns a snapshot of each subscriber's counters (subscriber.Stats): how many messages are queued
+// or being sent async, and how many it took, handled, failed on, and missed by timeout or drop, with the time spent in
+// handle, and how long handle has been running on the current message.
 package broadcastor
