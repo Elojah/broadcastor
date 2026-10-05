@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 240" width="480" height="240" role="img" aria-label="One source sending the same message to every subscriber at once">
+  <defs>
+    <!-- a path, the message on it, and the subscriber at its end -->
+    <g id="spoke">
+      <path d="M0 0 H90" stroke="#00add8" stroke-width="2" stroke-opacity="0.45"/>
+      <circle cx="58" r="5" fill="#fddd00"/>
+      <circle cx="90" r="10" fill="#0b1a2e" stroke="#e6f4f9" stroke-width="2.5"/>
+    </g>
+  </defs>
+
+  <rect width="480" height="240" rx="24" fill="#0b1a2e"/>
+
+  <g transform="translate(240 120)">
+    <use href="#spoke"/>
+    <use href="#spoke" transform="rotate(60)"/>
+    <use href="#spoke" transform="rotate(120)"/>
+    <use href="#spoke" transform="rotate(180)"/>
+    <use href="#spoke" transform="rotate(240)"/>
+    <use href="#spoke" transform="rotate(300)"/>
+    <circle r="28" fill="#00add8"/>
+  </g>
+</svg>

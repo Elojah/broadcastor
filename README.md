@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/gopher.svg" alt="A gopher with a megaphone broadcasting messages to subscribers" width="360">
+  <img src="assets/banner.svg" alt="One source sending the same message to every subscriber at once" width="360">
 </p>
 
 # broadcastor
@@ -27,19 +27,19 @@ go get github.com/elojah/broadcastor
 b := broadcastor.NewBroadcastor[string]()
 
 id, err := b.Subscribe(ctx, func(ctx context.Context, id uuid.UUID, msg string) error {
-	fmt.Println(id, "got", msg)
-	return nil
+ fmt.Println(id, "got", msg)
+ return nil
 }, subscriber.WithErrorHandler[string](func(ctx context.Context, err error) {
-	log.Println(err)
+ log.Println(err)
 }))
 if err != nil {
-	return err
+ return err
 }
 
 n := b.Broadcast(ctx, "hello") // how many subscribers took it
 
 if err := b.Unsubscribe(ctx, id); err != nil {
-	return err
+ return err
 }
 ```
 
@@ -53,10 +53,10 @@ Each message comes with `fail`, which takes the error `handle` would return, so 
 ```go
 _, seq, err := b.SubscribeSeq(ctx)
 if err != nil {
-	return err
+ return err
 }
 for msg, fail := range seq {
-	fail(save(msg)) // nil, or never calling fail, means handled
+ fail(save(msg)) // nil, or never calling fail, means handled
 }
 ```
 
@@ -120,19 +120,19 @@ ready-made ones:
 
 ```go
 logged := func(next subscriber.Handler[string]) subscriber.Handler[string] {
-	return func(ctx context.Context, id uuid.UUID, msg string) error {
-		err := next(ctx, id, msg)
-		log.Println(id, msg, err)
-		return err
-	}
+ return func(ctx context.Context, id uuid.UUID, msg string) error {
+  err := next(ctx, id, msg)
+  log.Println(id, msg, err)
+  return err
+ }
 }
 
 id, err := b.Subscribe(ctx, handle, subscriber.WithMiddleware(
-	middleware.Recover[string](),        // a panic becomes a *subscriber.PanicError
-	middleware.History[string](history), // each message handled is put in history
-	middleware.WrapError[string](),      // an error becomes a *subscriber.HandleError
-	middleware.Retry[string](middleware.RetryPolicy{Attempts: 3, Delay: 10 * time.Millisecond, Multiplier: 2}),
-	logged,
+ middleware.Recover[string](),        // a panic becomes a *subscriber.PanicError
+ middleware.History[string](history), // each message handled is put in history
+ middleware.WrapError[string](),      // an error becomes a *subscriber.HandleError
+ middleware.Retry[string](middleware.RetryPolicy{Attempts: 3, Delay: 10 * time.Millisecond, Multiplier: 2}),
+ logged,
 ))
 ```
 
@@ -152,18 +152,18 @@ is either handled or stored, once. `store.Ring` is an in-memory queue that a sin
 ```go
 lost := store.NewRing[string](1024)
 id, err := b.Subscribe(ctx, handle,
-	subscriber.WithDeadLetters[string](lost),
-	// So that Close stores what the subscriber has not handled yet.
-	subscriber.WithUnsubscribeOptions[string](subscriber.WithUnsubscribeDiscard()),
+ subscriber.WithDeadLetters[string](lost),
+ // So that Close stores what the subscriber has not handled yet.
+ subscriber.WithUnsubscribeOptions[string](subscriber.WithUnsubscribeDiscard()),
 )
 ...
 for {
-	entry, err := lost.Next(ctx) // entry.SubscriberID, entry.Message, entry.Err
-	if err != nil {
-		break // ctx is done
-	}
-	...
-	lost.Ack(ctx, entry.ID)
+ entry, err := lost.Next(ctx) // entry.SubscriberID, entry.Message, entry.Err
+ if err != nil {
+  break // ctx is done
+ }
+ ...
+ lost.Ack(ctx, entry.ID)
 }
 ```
 
@@ -178,8 +178,8 @@ keeps some records out of a store.
 ```go
 history := store.NewRing[string](1024)
 id, err := b.Subscribe(ctx, handle,
-	subscriber.WithMiddleware(middleware.History[string](history)),
-	subscriber.WithDeadLetters[string](history),
+ subscriber.WithMiddleware(middleware.History[string](history)),
+ subscriber.WithDeadLetters[string](history),
 )
 ```
 
@@ -207,7 +207,7 @@ the error handlers can call it.
 
 ```go
 for _, s := range b.Stats() {
-	log.Printf("%s: %d/%d queued, %d failed, %d lost", s.SubscriberID, s.Queued, s.Buffer, s.Failed, s.TimedOut+s.Dropped)
+ log.Printf("%s: %d/%d queued, %d failed, %d lost", s.SubscriberID, s.Queued, s.Buffer, s.Failed, s.TimedOut+s.Dropped)
 }
 ```
 
@@ -293,5 +293,4 @@ make stress    # the stress test, 50 times
 
 ## License
 
-[MIT](LICENSE). The gopher is drawn after the Go gopher, designed by Renée French and licensed under
-[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+[MIT](LICENSE).
