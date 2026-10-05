@@ -1,7 +1,6 @@
 package broadcastor_test
 
 import (
-	"cmp"
 	"context"
 	"fmt"
 	"sync"
@@ -11,7 +10,6 @@ import (
 
 	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/message"
-	"github.com/elojah/broadcastor/store"
 	"github.com/elojah/broadcastor/subscriber"
 )
 
@@ -119,47 +117,6 @@ func BenchmarkBroadcast_Concurrent(b *testing.B) {
 					bc.Broadcast(b.Context(), 0)
 				}
 			})
-			wait()
-			reportPerDelivery(b, subscribers)
-		})
-	}
-}
-
-// BenchmarkBroadcast_History is BenchmarkBroadcast_Concurrent with a store.History, so that the Broadcasts also
-// contend on its mutex.
-func BenchmarkBroadcast_History(b *testing.B) {
-	for _, subscribers := range benchSubscribers {
-		b.Run(fmt.Sprintf("subscribers=%d", subscribers), func(b *testing.B) {
-			bc := broadcastor.NewBroadcastor(broadcastor.WithHistory(store.NewHistory[int](benchBuffer)))
-			wait := subscribeCounting(b, bc, subscribers, b.N, subscriber.WithBuffer[int](benchBuffer))
-
-			b.ReportAllocs()
-			b.ResetTimer()
-			b.RunParallel(func(pb *testing.PB) {
-				for pb.Next() {
-					bc.Broadcast(b.Context(), 0)
-				}
-			})
-			wait()
-			reportPerDelivery(b, subscribers)
-		})
-	}
-}
-
-// BenchmarkBroadcast_Order is BenchmarkBroadcast_Throughput in sync mode to subscribers with subscriber.WithOrder and no
-// window, which order what is queued in their buffer.
-func BenchmarkBroadcast_Order(b *testing.B) {
-	for _, subscribers := range benchSubscribers {
-		b.Run(fmt.Sprintf("subscribers=%d", subscribers), func(b *testing.B) {
-			bc := broadcastor.NewBroadcastor[int]()
-			wait := subscribeCounting(b, bc, subscribers, b.N, subscriber.WithBuffer[int](benchBuffer),
-				subscriber.WithOrder(subscriber.OrderPolicy[int]{Compare: cmp.Compare[int]}))
-
-			b.ReportAllocs()
-			b.ResetTimer()
-			for range b.N {
-				bc.Broadcast(b.Context(), 0)
-			}
 			wait()
 			reportPerDelivery(b, subscribers)
 		})

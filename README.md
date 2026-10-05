@@ -14,8 +14,6 @@ its own goroutine and handles its messages one at a time.
 - **Typed errors**: every message a subscriber misses reaches its error handlers, and can be kept in a dead-letter
   store.
 - **Middleware**: recover panics, wrap errors, retry with backoff, or write your own.
-- **Ordering and replay**: handle messages by their own timestamp or sequence number, and replay recent ones to a
-  subscriber that joins late, with none missed or repeated.
 - **Operations**: evict stuck subscribers, and read each subscriber's counters at any time.
 - One dependency: `github.com/google/uuid`.
 
@@ -64,11 +62,11 @@ Options live in the package of what they configure:
 
 | Package | Holds |
 | --- | --- |
-| [`broadcastor`](https://pkg.go.dev/github.com/elojah/broadcastor) | `Broadcastor` and `WithHistory`. |
+| [`broadcastor`](https://pkg.go.dev/github.com/elojah/broadcastor) | `Broadcastor`. |
 | [`subscriber`](https://pkg.go.dev/github.com/elojah/broadcastor/subscriber) | The options for `Subscribe`, `SubscribeSeq` and `Unsubscribe`, the error types and `Stats`. |
 | [`message`](https://pkg.go.dev/github.com/elojah/broadcastor/message) | The options for `Broadcast`. |
 | [`middleware`](https://pkg.go.dev/github.com/elojah/broadcastor/middleware) | `Recover`, `WrapError` and `Retry`. |
-| [`store`](https://pkg.go.dev/github.com/elojah/broadcastor/store) | Dead-letter queues (`Ring`, `Drain`, `Enqueue`, `Filter`) and an in-memory `History`. |
+| [`store`](https://pkg.go.dev/github.com/elojah/broadcastor/store) | Dead-letter queues (`Ring`, `Drain`, `Enqueue`, `Filter`). |
 
 ## Delivery
 
@@ -106,8 +104,6 @@ Errors go to error handlers, and are discarded when there are none:
 | `*subscriber.TimeoutError` | `Broadcast` gave up waiting. |
 | `*subscriber.DroppedError` | A non-blocking `Broadcast` found the subscriber busy. |
 | `*subscriber.ClosedError` | The subscriber was unsubscribed before handling the message. |
-| `*subscriber.LateError` | With `subscriber.WithOrder`, the message sorts before one already handled. |
-| `*subscriber.ReplayError` | With `subscriber.WithReplay`, reading the history failed. It is about no message, so only the subscriber's error handler gets it. |
 | `*subscriber.EvictedError` | Wraps the loss that evicted the subscriber (`subscriber.WithEvictAfter`). |
 | `*subscriber.StoreError` | Wraps a loss the dead-letter store failed to keep. |
 
@@ -181,53 +177,7 @@ retry := middleware.Retry[string](middleware.RetryPolicy{Attempts: math.MaxInt, 
 go store.Drain(ctx, queue, retry(uplink), nil)
 ```
 
-[`20-redis`](examples/20-redis/dead_letters.go) keeps such a queue in a Redis stream, which outlives a restart.
-
-## Ordering and replay
-
-A subscriber takes messages in the order they are broadcast. When messages carry their own order, such as a timestamp,
-`subscriber.WithOrder` makes it handle them in that order instead, whatever the mode and however many goroutines
-broadcast:
-
-```go
-id, err := b.Subscribe(ctx, handle, subscriber.WithOrder(subscriber.OrderPolicy[Event]{
-	Compare: subscriber.ByTime(func(e Event) time.Time { return e.At }), // or subscriber.By(func(e Event) uint64 { return e.Seq })
-	Window:  50 * time.Millisecond,
-	Limit:   1024,
-}))
-```
-
-- `Compare` orders messages, as in `slices.SortFunc`.
-- `Window` is how long the subscriber holds a message for an earlier one to arrive. Without one, it orders only the
-  messages queued in its buffer while `handle` was busy.
-- `Limit` caps how many messages it holds: past it, the first in order is handled early.
-
-Holding messages does not hold `Broadcast` up, although a slow `handle` still does. A message that sorts before one
-already handled is late: it is reported as a `*subscriber.LateError` instead of being handled out of order.
-
-`broadcastor.WithHistory` keeps every message broadcast, and `subscriber.WithReplay` hands a new subscriber those it
-accepts, or all of them for nil, before its live messages. The subscriber gets each message once, replayed or live,
-with none missed in between:
-
-```go
-b := broadcastor.NewBroadcastor(broadcastor.WithHistory(store.NewHistory[Event](1024)))
-...
-id, err := b.Subscribe(ctx, handle, subscriber.WithReplay(func(e Event) bool { return !e.At.Before(since) }))
-```
-
-`store.History` keeps the last messages in memory. Any type with these two methods is a history, so it can keep them in
-a database across restarts, as [`20-redis`](examples/20-redis/history.go) does:
-
-```go
-type History[T any] interface {
-	Append(ctx context.Context, offset uint64, msg T)
-	Read(ctx context.Context) ([]subscriber.HistoryEntry[T], error)
-}
-```
-
-`Broadcast` calls `Append` before handing the message to anyone, so a slow `Append` holds it up.
-[`subscriber.History`](https://pkg.go.dev/github.com/elojah/broadcastor/subscriber#History) documents the offsets, and
-what a history kept across restarts must return.
+[`18-redis`](examples/18-redis/dead_letters.go) keeps such a queue in a Redis stream, which outlives a restart.
 
 ## Stats
 
@@ -243,13 +193,12 @@ for _, s := range b.Stats() {
 | Field | What |
 | --- | --- |
 | `Queued`, `Buffer` | Messages in the subscriber's buffer, and its size. |
-| `Held` | Messages `subscriber.WithOrder` holds until they are due. |
 | `Delivered` | Messages the subscriber took. |
 | `Handled`, `Failed` | Messages `handle` returned nil or an error for. |
-| `TimedOut`, `Dropped`, `Late` | Messages lost as a `TimeoutError`, a `DroppedError` or a `LateError`. |
+| `TimedOut`, `Dropped` | Messages lost as a `TimeoutError` or a `DroppedError`. |
 | `HandleTime` | Time spent in `handle` and its middlewares. |
 
-Each message is counted once, in `Handled`, `Failed`, `TimedOut`, `Dropped` or `Late`, before the error handlers run.
+Each message is counted once, in `Handled`, `Failed`, `TimedOut` or `Dropped`, before the error handlers run.
 A subscriber leaves the snapshot once unsubscribed. The counters are always on, and cost a few atomic adds and two
 clock reads per message.
 
@@ -306,12 +255,10 @@ The same goes for a subscriber whose default is `message.WithAsync`.
 | [`15-dead-letters`](examples/15-dead-letters/main.go) | `subscriber.WithDeadLetters`, with the messages `Close` discards. |
 | [`16-stats`](examples/16-stats/main.go) | `Broadcastor.Stats`, for a stuck subscriber and a failing one. |
 | [`17-evict`](examples/17-evict/main.go) | `subscriber.WithEvictAfter` and `*subscriber.EvictedError`. |
-| [`18-order`](examples/18-order/main.go) | `subscriber.WithOrder` and `*subscriber.LateError`. |
-| [`19-replay`](examples/19-replay/main.go) | `broadcastor.WithHistory` and `subscriber.WithReplay`, for a subscriber that joins late. |
-| [`20-redis`](examples/20-redis/main.go) | A history and a dead-letter queue in Redis, across a restart. |
+| [`18-redis`](examples/18-redis/main.go) | A dead-letter queue in Redis, across a restart. |
 
-`20-redis` is a module of its own, so that the library does not depend on go-redis. Run it with
-`go run -C examples/20-redis .`, against the Redis at `REDIS_ADDR` (`localhost:6379` by default).
+`18-redis` is a module of its own, so that the library does not depend on go-redis. Run it with
+`go run -C examples/18-redis .`, against the Redis at `REDIS_ADDR` (`localhost:6379` by default).
 
 ## Development
 

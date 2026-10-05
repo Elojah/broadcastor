@@ -63,8 +63,8 @@ Each item changes one function or adds one option.
   oldest message to make room instead of the new one. That suits state broadcasts (prices, positions, config), where a
   slow subscriber wants the latest message rather than the first. `Broadcast` then reads from `ch` too, so it must
   report what it takes as a `*DroppedError`. Settle how `Stats` counts that message, since it was already `Delivered`,
-  before writing any code. `WithBuffer` and `WithNonBlocking` already give ordered, bounded delivery that never waits
-  and drops the newest message, with no sender goroutine, and `WithOrder` reorders async sends within its window.
+  before writing any code. This is all that remains of "ordered async": `WithBuffer` and `WithNonBlocking` already give
+  ordered, bounded delivery that never waits and drops the newest message, with no sender goroutine.
 - [ ] `subscriber.WithFilter(func(T) bool)`, for performance. The filter runs in `Broadcast`'s goroutine before
   `acquire`, so a message the subscriber skips costs a func call instead of a wake-up (~1 µs). It is neither reported
   nor counted, including in `Broadcast`'s return value. It is the cheapest way to cut the cost of subscribers that want
@@ -75,14 +75,6 @@ Each item changes one function or adds one option.
     and `Unsubscribe`. Only worth it if `Range` shows in the `BenchmarkBroadcast_Throughput` or `_Concurrent` profiles.
   - Padding `refs` and the counters `Broadcast` writes away from those the subscriber's goroutine writes, if
     `BenchmarkBroadcast_Concurrent` shows false sharing.
-
-- [ ] Ordering follow-ups, once someone needs them:
-  - An event-time release rule, `OrderPolicy.Settled func(held, newest T) bool` ("newest is 2s past held"), so that
-    a busy stream releases messages as soon as the data says it can, rather than after a processing-time window.
-  - Watermarks sent by producers, which release everything that sorts before them.
-  - A `store.History` bounded by age as well as by count, and a `Stats` field for how much of its backlog a
-    replaying subscriber has left.
-  - `subscriber.WithReplayFrom(offset)`, for a subscriber that resumes, once handle can see offsets.
 
 ## Long-term: v1.0
 
@@ -95,7 +87,7 @@ Each item changes one function or adds one option.
   - `Unsubscribe`'s ctx, which is unused: drop it, or make it wait for that one subscriber's goroutine, like
     `Shutdown`.
 - [x] Check that `store.Queue` works with a durable backend before freezing it. That is what store-and-forward across
-  restarts relies on. It does with a Redis stream (`examples/20-redis`), where `Drain` stops up to a second after ctx
+  restarts relies on. It does with a Redis stream (`examples/18-redis`), where `Drain` stops up to a second after ctx
   is done, since go-redis does not end a blocking read when ctx is done.
   - [ ] A durable store keeps only the text of `Record.Err`, so `errors.Is(entry.Err, subscriber.ErrTimeout)` no
     longer holds once read back. Decide whether `Record` should also carry which sentinel its error matches.
@@ -104,12 +96,12 @@ Each item changes one function or adds one option.
 
 ## Out of scope
 
-- Consumer groups, topics and wildcards, and batching are features built on top of the fan-out, and handle,
-  `SubscribeSeq` or a store can build them in user code. `WithFilter` is the only part kept, because it saves wake-ups.
-  Replay for late subscribers is in the core (`WithHistory`, `WithReplay`), since user code can't close the gap
-  between reading a history and subscribing: only the library knows which `Broadcast`s found the subscriber. Where
-  the history is kept is the user's `subscriber.History`.
+- Consumer groups, topics and wildcards, replay for late subscribers, and batching are features built on top of the
+  fan-out, and handle, `SubscribeSeq` or a store can build them in user code. `WithFilter` is the only part kept,
+  because it saves wake-ups.
+- Ordering by the messages' own key (`WithOrder`) and replay (`WithHistory`, `WithReplay`) were in the core, and were
+  removed: they cost more invariants than they were worth.
 - An error channel or `WithErrorStorage`: an error handler that puts errors into a `store.Ring` already does it.
-- Ordered async as a mode of its own: `WithOrder` orders whatever a subscriber takes, async sends included.
+- Ordered async as a mode of its own: see `WithDropOldest` above.
 - At-least-once delivery with acks and visibility timeouts, and transports such as Redis, NATS or Postgres. Those make
   a different library. This one stays in-process, and `store.Queue` is where durability plugs in.

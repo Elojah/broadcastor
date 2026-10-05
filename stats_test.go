@@ -1,7 +1,6 @@
 package broadcastor_test
 
 import (
-	"cmp"
 	"context"
 	"slices"
 	"sync"
@@ -24,7 +23,7 @@ func TestStats(t *testing.T) {
 	for _, tt := range []struct {
 		name string
 		// run subscribes to b and broadcasts 1, 2 and 3. It returns the subscriber's ID, and what lets its handle return
-		// if it holds on to 1, or lets the messages it holds be handled.
+		// if it holds on to 1.
 		run  func(t *testing.T, b *broadcastor.Broadcastor[int]) (uuid.UUID, func())
 		want subscriber.Stats
 		// released is what the Stats are once released, if run holds.
@@ -107,30 +106,6 @@ func TestStats(t *testing.T) {
 			subscriber.Stats{Queued: 2, Buffer: 2, Delivered: 3},
 			subscriber.Stats{Buffer: 2, Delivered: 3, Handled: 3},
 		},
-		{"Held", func(t *testing.T, b *broadcastor.Broadcastor[int]) (uuid.UUID, func()) {
-			t.Helper()
-			r := &recorder[int]{}
-			id := subscribe(t, b, r.handle, subscriber.WithOrder(subscriber.OrderPolicy[int]{Compare: cmp.Compare[int], Window: time.Second}))
-			for msg := 1; msg <= 3; msg++ {
-				b.Broadcast(t.Context(), msg) // held until their window ends
-			}
-
-			return id, func() { time.Sleep(time.Second) }
-		},
-			subscriber.Stats{Delivered: 3, Held: 3},
-			subscriber.Stats{Delivered: 3, Handled: 3},
-		},
-		{"Late", func(t *testing.T, b *broadcastor.Broadcastor[int]) (uuid.UUID, func()) {
-			t.Helper()
-			r := &recorder[int]{}
-			id := subscribe(t, b, r.handle, subscriber.WithOrder(subscriber.OrderPolicy[int]{Compare: cmp.Compare[int]}))
-			for _, msg := range []int{3, 1, 2} {
-				b.Broadcast(t.Context(), msg)
-				synctest.Wait() // handled before the next comes, so 1 and 2 are late
-			}
-
-			return id, nil
-		}, subscriber.Stats{Delivered: 3, Handled: 1, Late: 2}, subscriber.Stats{}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -224,25 +199,21 @@ func TestStats_AddUp(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		b := broadcastor.NewBroadcastor[int]()
-		var handleErrs, seqErrs, orderErrs atomic.Uint64
+		var handleErrs, seqErrs atomic.Uint64
 		options := func(errs *atomic.Uint64) []subscriber.Option[int] {
 			return []subscriber.Option[int]{
 				subscriber.WithBuffer[int](1),
 				subscriber.WithErrorHandler[int](func(context.Context, error) { errs.Add(1) }),
 			}
 		}
-		handle := func(_ context.Context, _ uuid.UUID, msg int) error {
+		handleID := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
 			time.Sleep(time.Millisecond)
 			if msg%3 == 0 {
 				return handleError(msg)
 			}
 
 			return nil
-		}
-		handleID := subscribe(t, b, handle, options(&handleErrs)...)
-		// The broadcasters interleave, so some messages are late.
-		orderID := subscribe(t, b, handle, append(options(&orderErrs),
-			subscriber.WithOrder(subscriber.OrderPolicy[int]{Compare: cmp.Compare[int], Window: time.Millisecond}))...)
+		}, options(&handleErrs)...)
 		seqID, seq := subscribeSeq(t, b, options(&seqErrs)...)
 		loopDone := make(chan struct{})
 		go func() {
@@ -270,21 +241,21 @@ func TestStats_AddUp(t *testing.T) {
 		synctest.Wait()
 
 		stats := b.Stats()
-		if len(stats) != 3 {
-			t.Fatalf("Stats are for %d subscribers, want 3", len(stats))
+		if len(stats) != 2 {
+			t.Fatalf("Stats are for %d subscribers, want 2", len(stats))
 		}
 		for _, s := range stats {
-			errs := map[uuid.UUID]*atomic.Uint64{handleID: &handleErrs, seqID: &seqErrs, orderID: &orderErrs}[s.SubscriberID]
+			errs := map[uuid.UUID]*atomic.Uint64{handleID: &handleErrs, seqID: &seqErrs}[s.SubscriberID]
 			if errs == nil {
-				t.Fatalf("Stats for subscriber %s, want %s, %s or %s", s.SubscriberID, handleID, seqID, orderID)
+				t.Fatalf("Stats for subscriber %s, want %s or %s", s.SubscriberID, handleID, seqID)
 			}
-			if s.Queued != 0 || s.Held != 0 || s.Delivered != s.Handled+s.Failed+s.Late {
-				t.Errorf("subscriber %s: %+v, want Delivered = Handled + Failed + Late and nothing queued or held", s.SubscriberID, s)
+			if s.Queued != 0 || s.Delivered != s.Handled+s.Failed {
+				t.Errorf("subscriber %s: %+v, want Delivered = Handled + Failed and nothing queued", s.SubscriberID, s)
 			}
-			if got := s.Handled + s.Failed + s.TimedOut + s.Dropped + s.Late; got != broadcasters*perBroadcaster {
+			if got := s.Handled + s.Failed + s.TimedOut + s.Dropped; got != broadcasters*perBroadcaster {
 				t.Errorf("subscriber %s: %+v, counting %d messages, want %d", s.SubscriberID, s, got, broadcasters*perBroadcaster)
 			}
-			if lost, reported := s.Failed+s.TimedOut+s.Dropped+s.Late, errs.Load(); lost != reported {
+			if lost, reported := s.Failed+s.TimedOut+s.Dropped, errs.Load(); lost != reported {
 				t.Errorf("subscriber %s: %+v, counting %d losses, want the %d errors reported", s.SubscriberID, s, lost, reported)
 			}
 			if want := time.Duration(s.Handled+s.Failed) * time.Millisecond; s.HandleTime != want { //nolint:gosec // at most 200

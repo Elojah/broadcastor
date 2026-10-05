@@ -34,16 +34,7 @@
 // # Ordering
 //
 // A subscriber takes messages in the order Broadcast hands them over. Those broadcast from one goroutine keep their
-// order, except with message.WithAsync, and those from several goroutines have none. subscriber.WithOrder makes a
-// subscriber handle them in their own order instead, such as the time they carry. It holds each one for up to a
-// window, for an earlier one to arrive, and reports a message that sorts before one already handled as a
-// *subscriber.LateError.
-//
-// # Replay
-//
-// WithHistory gives every message broadcast to a subscriber.History, such as store.History, which keeps the last ones
-// in memory, and subscriber.WithReplay hands them to a new subscriber before the live ones: each once, with none missed
-// in between.
+// order, except with message.WithAsync, and those from several goroutines have none.
 //
 // # Unsubscribing
 //
@@ -74,7 +65,6 @@
 //
 // # Stats
 //
-// Broadcastor.Stats returns a snapshot of each subscriber's counters (subscriber.Stats): how many messages are queued
-// or held, and how many it took, handled, failed on, and missed by timeout, drop or coming late, with the time spent in
-// handle.
+// Broadcastor.Stats returns a snapshot of each subscriber's counters (subscriber.Stats): how many messages are queued,
+// and how many it took, handled, failed on, and missed by timeout or drop, with the time spent in handle.
 package broadcastor

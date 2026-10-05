@@ -1,16 +1,12 @@
-// Redis keeps what a Broadcastor must not lose when the process stops:
-//   - a sorted set, scored by the time each message was broadcast, is the history (broadcastor.WithHistory) that a
-//     subscriber joining after a restart replays (subscriber.WithReplay);
-//   - a stream is the store.Queue that keeps the messages a subscriber loses (subscriber.WithDeadLetters), for
-//     store.Drain to hand them back.
+// A Redis stream is the store.Queue that keeps the messages a subscriber loses (subscriber.WithDeadLetters), so that
+// they outlive the process, for store.Drain to hand them back.
 //
-// Here the alerts fail to page while the pager is down, and the process restarts. The alerts then page what they lost,
-// and a dashboard joins, which replays the readings of both runs before the live ones.
+// Here the alerts fail to page while the pager is down, and the process restarts. The alerts then page what they lost.
 //
 // It is a module of its own, so that the library does not depend on go-redis: run it with
-// `go run -C examples/20-redis .`. It uses the Redis at REDIS_ADDR, localhost:6379 by default (start one with
-// `docker run --rm -p 6379:6379 redis`), and first deletes its two keys there, so that it prints the same each time.
-// Its test runs it against miniredis, in memory.
+// `go run -C examples/18-redis .`. It uses the Redis at REDIS_ADDR, localhost:6379 by default (start one with
+// `docker run --rm -p 6379:6379 redis`), and first deletes its key there, so that it prints the same each time. Its
+// test runs it against miniredis, in memory.
 package main
 
 import (
@@ -30,10 +26,7 @@ import (
 	"github.com/elojah/broadcastor/subscriber"
 )
 
-const (
-	historyKey     = "broadcastor:examples:redis:history"
-	deadLettersKey = "broadcastor:examples:redis:dead-letters"
-)
+const deadLettersKey = "broadcastor:examples:redis:dead-letters"
 
 var errPagerDown = errors.New("pager unreachable")
 
@@ -62,12 +55,13 @@ func main() {
 func run(addr string) {
 	ctx := context.Background()
 	client := redis.NewClient(&redis.Options{Addr: addr})
-	if err := client.Del(ctx, historyKey, deadLettersKey).Err(); err != nil {
+	if err := client.Del(ctx, deadLettersKey).Err(); err != nil {
 		log.Fatal(err)
 	}
 
 	beforeRestart(ctx, client)
-	afterRestart(ctx, client)
+	// After the restart, with a new queue over the same key.
+	pageAgain(ctx, newDeadLetters[reading](client, deadLettersKey, 10_000))
 
 	if err := client.Close(); err != nil {
 		log.Fatal(err)
@@ -76,7 +70,7 @@ func run(addr string) {
 
 // beforeRestart broadcasts four readings, and the alerts lose the two they fail to page.
 func beforeRestart(ctx context.Context, client *redis.Client) {
-	b := broadcastor.NewBroadcastor(broadcastor.WithHistory(newHistory[reading](client, historyKey, time.Hour)))
+	b := broadcastor.NewBroadcastor[reading]()
 
 	// Every reading is either handled or stored, then reported.
 	var done sync.WaitGroup
@@ -102,33 +96,6 @@ func beforeRestart(ctx context.Context, client *redis.Client) {
 		b.Broadcast(ctx, r)
 	}
 	done.Wait()
-	if err := b.Close(); err != nil {
-		log.Fatal(err)
-	}
-}
-
-// afterRestart pages what the alerts lost, then a dashboard joins, which replays what was broadcast before it.
-func afterRestart(ctx context.Context, client *redis.Client) {
-	pageAgain(ctx, newDeadLetters[reading](client, deadLettersKey, 10_000))
-
-	// A new Broadcastor, with a new history over the same key.
-	b := broadcastor.NewBroadcastor(broadcastor.WithHistory(newHistory[reading](client, historyKey, time.Hour)))
-	fmt.Println(at(4, 21), "handed to", b.Broadcast(ctx, at(4, 21)), "subscribers")
-
-	var handled sync.WaitGroup
-	handled.Add(6) // five replayed, one live
-	_, err := b.Subscribe(ctx, func(_ context.Context, _ uuid.UUID, r reading) error {
-		fmt.Println("dashboard got", r)
-		handled.Done()
-
-		return nil
-	}, subscriber.WithReplay[reading](nil))
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	b.Broadcast(ctx, at(5, 34))
-	handled.Wait()
 	if err := b.Close(); err != nil {
 		log.Fatal(err)
 	}

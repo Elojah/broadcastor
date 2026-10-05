@@ -1180,8 +1180,7 @@ func TestErrors_Is(t *testing.T) {
 	id := uuid.New()
 	targets := []error{
 		broadcastor.ErrSubscriberNotFound, subscriber.ErrClosed, subscriber.ErrTimeout, subscriber.ErrDropped,
-		subscriber.ErrPanic, subscriber.ErrStore, subscriber.ErrEvicted, subscriber.ErrLate, subscriber.ErrReplay,
-		context.DeadlineExceeded, handleError(1),
+		subscriber.ErrPanic, subscriber.ErrStore, subscriber.ErrEvicted, context.DeadlineExceeded, handleError(1),
 	}
 	for _, tc := range []struct {
 		err     error
@@ -1194,8 +1193,6 @@ func TestErrors_Is(t *testing.T) {
 			[]error{subscriber.ErrTimeout, context.DeadlineExceeded},
 		},
 		{&subscriber.DroppedError[int]{SubscriberID: id, Message: 1}, []error{subscriber.ErrDropped}},
-		{&subscriber.LateError[int]{SubscriberID: id, Message: 1, After: 2}, []error{subscriber.ErrLate}},
-		{&subscriber.ReplayError{SubscriberID: id, Err: handleError(1)}, []error{subscriber.ErrReplay, handleError(1)}},
 		{
 			&subscriber.EvictedError[int]{
 				SubscriberID: id, Message: 1,

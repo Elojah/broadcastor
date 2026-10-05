@@ -21,34 +21,11 @@ type Broadcastor[T any] struct {
 
 	// gate makes Close wait for every add under way, so each subscriber is either refused or seen by Close.
 	gate gate.Gate
-
-	// history and sequencer are nil without WithHistory.
-	history   subscriber.History[T]
-	sequencer *sequencer
 }
-
-// Option configures a Broadcastor, when passed to NewBroadcastor.
-type Option[T any] func(b *Broadcastor[T])
 
 // NewBroadcastor returns an empty Broadcastor.
-func NewBroadcastor[T any](options ...Option[T]) *Broadcastor[T] {
-	b := &Broadcastor[T]{}
-	for _, option := range options {
-		option(b)
-	}
-
-	return b
-}
-
-// WithHistory makes Broadcast give every message to h before handing it to anyone, so that a new subscriber can handle
-// them first (subscriber.WithReplay). store.History keeps the last ones in memory. nil means none, the default.
-func WithHistory[T any](h subscriber.History[T]) Option[T] {
-	return func(b *Broadcastor[T]) {
-		b.history, b.sequencer = h, nil
-		if h != nil {
-			b.sequencer = newSequencer()
-		}
-	}
+func NewBroadcastor[T any]() *Broadcastor[T] {
+	return &Broadcastor[T]{}
 }
 
 // Subscribe adds a subscriber and returns its ID. The subscriber's own goroutine calls handle for each message, one at
@@ -57,15 +34,12 @@ func WithHistory[T any](h subscriber.History[T]) Option[T] {
 // ctx is the subscription's lifetime: once it is done, the subscriber is unsubscribed, even while handle runs, unless
 // it has subscriber.WithDetachedContext. handle gets ctx, unless the message has its own (message.WithContext).
 //
-// With subscriber.WithReplay, it reads the history back before returning, with ctx (see subscriber.History).
-//
 // It returns ErrClosed after Close.
 func (b *Broadcastor[T]) Subscribe(ctx context.Context, handle func(ctx context.Context, id uuid.UUID, msg T) error, options ...subscriber.Option[T]) (uuid.UUID, error) {
 	s, err := b.add(ctx, options)
 	if err != nil {
 		return uuid.Nil, err
 	}
-	s.ReadHistory()
 	go s.Consume(handle)
 
 	return s.ID(), nil
@@ -84,7 +58,6 @@ func (b *Broadcastor[T]) SubscribeSeq(ctx context.Context, options ...subscriber
 	if err != nil {
 		return uuid.Nil, nil, err
 	}
-	s.ReadHistory()
 	id := s.ID()
 
 	return id, s.Seq(), nil
@@ -129,26 +102,18 @@ func (b *Broadcastor[T]) Close() error {
 // once ctx is done or the message's timeout runs out, and tells its error handlers why, but a subscriber ready for the
 // message takes it even then. ctx only bounds the wait: it reaches neither handle nor the error handlers, although
 // async sends keep using it (see message.WithAsync).
-//
-// With WithHistory, it first appends msg to the history, with ctx. A subscriber that joins meanwhile and replays the
-// history gets msg from there, so this Broadcast skips it and does not count it.
 func (b *Broadcastor[T]) Broadcast(ctx context.Context, msg T, options ...message.Option[T]) int {
 	var (
 		n int
 		// One per parallel send, yielding whether the subscriber took the message.
 		pending []<-chan bool
-		// 0 without a history.
-		offset uint64
 	)
-	if b.history != nil {
-		offset = b.append(ctx, msg)
-	}
 	b.subscribers.Range(func(_, value any) bool {
 		s, ok := value.(*subscriber.Subscriber[T])
 		if !ok {
 			return true
 		}
-		taken, parallel := s.Deliver(ctx, offset, msg, options...)
+		taken, parallel := s.Deliver(ctx, msg, options...)
 		if taken {
 			n++
 		}
@@ -203,38 +168,13 @@ func (b *Broadcastor[T]) add(ctx context.Context, options []subscriber.Option[T]
 
 	// Before Store, so whoever removes the subscriber stops the watch.
 	ctx = s.Attach(ctx, func(options ...subscriber.UnsubscribeOption) bool { return b.remove(id, options...) })
-	if b.history != nil && s.Replays() {
-		// Under the sequencer's mutex, so that every later offset finds the subscriber stored, and every earlier one is
-		// skipped by a Broadcast that finds it, and read back once appended.
-		b.sequencer.join(func(cutoff uint64) {
-			s.Replay(cutoff, func(ctx context.Context) ([]subscriber.HistoryEntry[T], error) {
-				if err := b.sequencer.wait(ctx, cutoff); err != nil {
-					return nil, err
-				}
-
-				return b.history.Read(ctx)
-			})
-			b.subscribers.Store(id, s)
-		})
-	} else {
-		b.subscribers.Store(id, s)
-	}
+	b.subscribers.Store(id, s)
 	// If ctx was already done, the watch may have run before Store and found nothing.
 	if ctx.Err() != nil {
 		b.remove(id)
 	}
 
 	return s, nil
-}
-
-// append gives msg to the history, and returns its offset.
-func (b *Broadcastor[T]) append(ctx context.Context, msg T) uint64 {
-	offset := b.sequencer.next()
-	// Even if Append panics, so that no replaying subscriber waits for it forever.
-	defer b.sequencer.done(offset)
-	b.history.Append(ctx, offset, msg)
-
-	return offset
 }
 
 // remove deletes the subscriber and drops the subscription's reference, or reports false if there is none. Only

@@ -10,7 +10,4 @@
 //
 // Ring is an in-memory Queue. Drain runs that loop, and with Enqueue as the subscriber's handle, forwards every message
 // to a slow sink in order. Filter keeps some records out of a store.
-//
-// History is an in-memory subscriber.History, for broadcastor.WithHistory, which keeps the last messages broadcast for
-// the subscribers that replay them (subscriber.WithReplay).
 package store
