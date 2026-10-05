@@ -35,6 +35,9 @@ type Stats struct {
 	// HandleTime is the time spent in handle and its middlewares, middleware.Retry's waits included, for Handled +
 	// Failed messages.
 	HandleTime time.Duration
+	// Handling is how long handle and its middlewares have been running on the current message, 0 when idle. A
+	// watchdog can unsubscribe a subscriber whose handle hangs.
+	Handling time.Duration
 }
 
 // counters are what Stats reads. Each is counted before the message is reported, so error handlers see theirs.
@@ -48,6 +51,21 @@ type counters struct {
 
 	// sending counts each async send from before its goroutine starts until send has returned.
 	sending atomic.Int64
+
+	// handleStart is when handle started on the current message, in nanoseconds since the subscriber was created, plus
+	// one so that 0 means idle even when no time has passed, as in a synctest bubble.
+	handleStart atomic.Int64
+}
+
+// handling returns how long handle has been running on the current message, or 0 if it is idle. created is when the
+// subscriber was created.
+func (c *counters) handling(created time.Time) time.Duration {
+	start := c.handleStart.Load()
+	if start == 0 {
+		return 0
+	}
+
+	return time.Since(created) - time.Duration(start-1)
 }
 
 // handle counts a message handle took d on, and failed on if err is not nil.

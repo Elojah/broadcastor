@@ -77,7 +77,7 @@ func TestStats(t *testing.T) {
 
 			return id, stuck.release
 		},
-			subscriber.Stats{Delivered: 1, TimedOut: 2},
+			subscriber.Stats{Delivered: 1, TimedOut: 2, Handling: 2 * time.Second},
 			subscriber.Stats{Delivered: 1, Handled: 1, TimedOut: 2, HandleTime: 2 * time.Second},
 		},
 		{"Dropped", func(t *testing.T, b *broadcastor.Broadcastor[int]) (uuid.UUID, func()) {
@@ -92,6 +92,18 @@ func TestStats(t *testing.T) {
 		},
 			subscriber.Stats{Delivered: 1, Dropped: 2},
 			subscriber.Stats{Delivered: 1, Handled: 1, Dropped: 2},
+		},
+		{"Handling", func(t *testing.T, b *broadcastor.Broadcastor[int]) (uuid.UUID, func()) {
+			t.Helper()
+			stuck := &recorder[int]{hold: make(chan struct{})}
+			id := subscribe(t, b, stuck.handle)
+			b.Broadcast(t.Context(), 1) // stuck holds on to 1
+			time.Sleep(time.Second)
+
+			return id, stuck.release
+		},
+			subscriber.Stats{Delivered: 1, Handling: time.Second},
+			subscriber.Stats{Delivered: 1, Handled: 1, HandleTime: time.Second},
 		},
 		{"Sending", func(t *testing.T, b *broadcastor.Broadcastor[int]) (uuid.UUID, func()) {
 			t.Helper()
@@ -265,8 +277,8 @@ func TestStats_AddUp(t *testing.T) {
 			if errs == nil {
 				t.Fatalf("Stats for subscriber %s, want %s or %s", s.SubscriberID, handleID, seqID)
 			}
-			if s.Queued != 0 || s.Sending != 0 || s.Delivered != s.Handled+s.Failed {
-				t.Errorf("subscriber %s: %+v, want Delivered = Handled + Failed, and nothing queued or sending", s.SubscriberID, s)
+			if s.Queued != 0 || s.Sending != 0 || s.Handling != 0 || s.Delivered != s.Handled+s.Failed {
+				t.Errorf("subscriber %s: %+v, want Delivered = Handled + Failed, and nothing queued, sending or handling", s.SubscriberID, s)
 			}
 			if got := s.Handled + s.Failed + s.TimedOut + s.Dropped; got != broadcasters*perBroadcaster {
 				t.Errorf("subscriber %s: %+v, counting %d messages, want %d", s.SubscriberID, s, got, broadcasters*perBroadcaster)

@@ -50,7 +50,7 @@ Each item changes one function or adds one option.
   since the library stamps none. It returns a `*subscriber.ExpiredError` (`subscriber.ErrExpired`), so the message
   counts as `Failed` and reaches the dead letters like any handle error. Settle where it goes in the recommended order:
   before `Retry`, so that an expired message is not retried.
-- [ ] `Stats.Handling`: how long the current handle has been running, 0 when idle. Today a stuck handle (a hung serial
+- [x] `Stats.Handling`: how long the current handle has been running, 0 when idle. Today a stuck handle (a hung serial
   or I²C read) shows only indirectly, as `Queued == Buffer` with counters that stop moving. `Consume` already reads the
   clock before handle, so storing that time in an atomic is enough for a watchdog to unsubscribe a subscriber stuck
   for too long.

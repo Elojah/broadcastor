@@ -19,6 +19,9 @@ type Subscriber[T any] struct {
 	ch     chan message.Message[T]
 	config config[T]
 
+	// created is what counters.handleStart counts from.
+	created time.Time
+
 	// ctx handles and reports every message that has no ctx of its own. Set by Attach.
 	ctx context.Context //nolint:containedctx // the subscription's, which outlives every call
 
@@ -64,7 +67,9 @@ func New[T any](id uuid.UUID, options ...Option[T]) *Subscriber[T] {
 	for _, option := range options {
 		option(&config)
 	}
-	s := &Subscriber[T]{id: id, ch: make(chan message.Message[T], config.buffer), config: config, done: make(chan struct{})}
+	s := &Subscriber[T]{
+		id: id, ch: make(chan message.Message[T], config.buffer), config: config, created: time.Now(), done: make(chan struct{}),
+	}
 	s.refs.Store(1)
 
 	return s
@@ -166,7 +171,9 @@ func (s *Subscriber[T]) Consume(handle Handler[T]) {
 			continue
 		}
 		start := time.Now()
+		s.counters.handleStart.Store(int64(start.Sub(s.created)) + 1)
 		err := handle(s.context(m), s.id, m.Value)
+		s.counters.handleStart.Store(0)
 		s.counters.handle(time.Since(start), err)
 		// Reported outside the chain, so Recover never catches a panic in an error handler.
 		if err != nil {
@@ -216,6 +223,7 @@ func (s *Subscriber[T]) Stats() Stats {
 		TimedOut:     s.counters.timedOut.Load(),
 		Dropped:      s.counters.dropped.Load(),
 		HandleTime:   time.Duration(s.counters.handleTime.Load()),
+		Handling:     s.counters.handling(s.created),
 	}
 }
 

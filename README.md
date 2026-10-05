@@ -244,10 +244,22 @@ for _, s := range b.Stats() {
 | `Handled`, `Failed` | Messages `handle` returned nil or an error for. |
 | `TimedOut`, `Dropped` | Messages lost as a `TimeoutError` or a `DroppedError`. |
 | `HandleTime` | Time spent in `handle` and its middlewares. |
+| `Handling` | How long `handle` has been running on the current message, 0 when idle. |
 
 Each message is counted once, in `Handled`, `Failed`, `TimedOut` or `Dropped`, before the error handlers run.
-A subscriber leaves the snapshot once unsubscribed. The counters are always on, and cost a few atomic adds and two
-clock reads per message.
+A subscriber leaves the snapshot once unsubscribed. The counters are always on, and cost a few atomic operations and
+two clock reads per message.
+
+A stuck `handle`, such as a hung serial read, shows in `Handling`, so a watchdog can unsubscribe its subscriber. That
+does not end `handle`, but no `Broadcast` waits for the subscriber any more:
+
+```go
+for _, s := range b.Stats() {
+ if s.Handling > time.Minute {
+  b.Unsubscribe(ctx, s.SubscriberID, subscriber.WithUnsubscribeDiscard())
+ }
+}
+```
 
 ## Lifecycle and contexts
 

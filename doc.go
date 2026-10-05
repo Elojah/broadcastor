@@ -71,5 +71,5 @@
 //
 // Broadcastor.Stats returns a snapshot of each subscriber's counters (subscriber.Stats): how many messages are queued
 // or being sent async, and how many it took, handled, failed on, and missed by timeout or drop, with the time spent in
-// handle.
+// handle, and how long handle has been running on the current message.
 package broadcastor
