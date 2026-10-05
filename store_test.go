@@ -320,6 +320,7 @@ func TestSubscriberWithDeadLetters_ExactlyOnce(t *testing.T) {
 			t.Fatalf("Close: %v", err)
 		}
 		waitClosed(t, loopDone, "SubscribeSeq loop ended by Close")
+		time.Sleep(time.Millisecond) // until handle is done with the message it took, which synctest.Wait does not wait for
 		synctest.Wait()
 
 		all := make([]int, broadcasters*perBroadcaster)
