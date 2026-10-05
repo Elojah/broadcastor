@@ -316,6 +316,9 @@ The same goes for a subscriber whose default is `message.WithAsync`.
 | [`17-evict`](examples/17-evict/main.go) | `subscriber.WithEvictAfter` and `*subscriber.EvictedError`. |
 | [`18-history`](examples/18-history/main.go) | `middleware.History` and `subscriber.WithDeadLetters` sharing a store. |
 | [`19-redis`](examples/19-redis/main.go) | A dead-letter queue and a history in Redis, across a restart. |
+| [`20-filter`](examples/20-filter/main.go) | `subscriber.WithFilter` with `filter.Changed` and `filter.Every`, for readings that repeat themselves. |
+| [`21-max-age`](examples/21-max-age/main.go) | `middleware.MaxAge` and `*subscriber.ExpiredError`, for a reading that waited too long. |
+| [`22-watchdog`](examples/22-watchdog/main.go) | `Stats.Handling` to unsubscribe a hung subscriber, and `subscriber.WithAsyncLimit`. |
 
 `19-redis` is a module of its own, so that the library does not depend on go-redis. Run it with
 `go run -C examples/19-redis .`, against the Redis at `REDIS_ADDR` (`localhost:6379` by default).

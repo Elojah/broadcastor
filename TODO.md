@@ -87,7 +87,7 @@ Each item changes one function or adds one option.
   - [ ] A durable store keeps only the text of `Record.Err`, so `errors.Is(entry.Err, subscriber.ErrTimeout)` no
     longer holds once read back. Decide whether `Record` should also carry which sentinel its error matches, before
     `store.File` sets its format.
-- [ ] `examples/20-mqtt`, a module of its own like `19-redis` (listed in `MODULES` and the README): MQTT in, then fan
+- [ ] `examples/23-mqtt`, a module of its own like `19-redis` (listed in `MODULES` and the README): MQTT in, then fan
   out to a local rule, a local store, and an uplink through `store.Enqueue` and `store.Drain`. Its `Example()` runs
   against an in-process broker (such as mochi-mqtt), so CI needs none.
 
