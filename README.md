@@ -16,7 +16,8 @@ its own goroutine and handles its messages one at a time.
   store.
 - **Middleware**: recover panics, keep a history, drop stale messages, wrap errors, retry with backoff, or write your
   own.
-- **Operations**: evict stuck subscribers, bound async sends, and read each subscriber's counters at any time.
+- **Operations**: evict stuck subscribers, bound async sends, read each subscriber's counters at any time, and shut
+  down without cutting off `handle`.
 - One dependency: `github.com/google/uuid`.
 
 ```sh
@@ -178,7 +179,7 @@ is either handled or stored, once. `store.Ring` is an in-memory queue that a sin
 lost := store.NewRing[string](1024)
 id, err := b.Subscribe(ctx, handle,
  subscriber.WithDeadLetters[string](lost),
- // So that Close stores what the subscriber has not handled yet.
+ // So that Close or Shutdown stores what the subscriber has not handled yet.
  subscriber.WithUnsubscribeOptions[string](subscriber.WithUnsubscribeDiscard()),
 )
 ...
@@ -271,6 +272,22 @@ for _, s := range b.Stats() {
   applies it.
 - `subscriber.WithEvictAfter(n)` unsubscribes a subscriber once it has lost n messages in a row, so that a stuck one
   stops costing every `Broadcast` its timeout.
+- `Shutdown(ctx)` is `Close`, then waits until every subscriber has handled what it took, or reported it with
+  `subscriber.WithUnsubscribeDiscard`, or until ctx is done. A program that exits right after `Close` cuts off
+  whatever `handle` was doing, so call `Shutdown` on SIGTERM or a power-fail signal. Called from `handle`, it waits on
+  itself until ctx is done.
+
+```go
+ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
+defer stop()
+<-ctx.Done()
+
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+if err := b.Shutdown(ctx); err != nil {
+ log.Println(err) // context.DeadlineExceeded: a handle is still running
+}
+```
 
 Each ctx has one job:
 
@@ -319,6 +336,7 @@ The same goes for a subscriber whose default is `message.WithAsync`.
 | [`20-filter`](examples/20-filter/main.go) | `subscriber.WithFilter` with `filter.Changed` and `filter.Every`, for readings that repeat themselves. |
 | [`21-max-age`](examples/21-max-age/main.go) | `middleware.MaxAge` and `*subscriber.ExpiredError`, for a reading that waited too long. |
 | [`22-watchdog`](examples/22-watchdog/main.go) | `Stats.Handling` to unsubscribe a hung subscriber, and `subscriber.WithAsyncLimit`. |
+| [`23-shutdown`](examples/23-shutdown/main.go) | `Shutdown`, which waits for a slow `handle` and for the dead letters before the program exits. |
 
 `19-redis` is a module of its own, so that the library does not depend on go-redis. Run it with
 `go run -C examples/19-redis .`, against the Redis at `REDIS_ADDR` (`localhost:6379` by default).

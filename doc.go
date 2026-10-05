@@ -45,7 +45,8 @@
 // unsubscribed. A subscriber may still process messages it already took, unless unsubscribed with
 // subscriber.WithUnsubscribeDiscard. Once the ctx passed to Subscribe is done, the subscriber is unsubscribed, unless it
 // has subscriber.WithDetachedContext. subscriber.WithEvictAfter unsubscribes a subscriber that loses too many messages
-// in a row.
+// in a row. Shutdown is Close, then waits until every subscriber has handled what it took, or until its ctx is done, so
+// that a program can exit right after it, such as on SIGTERM.
 //
 // # Contexts
 //

@@ -57,7 +57,7 @@ Each item changes one function or adds one option.
 
 ## Mid-term: shutdown, latest values, store and forward
 
-- [ ] `Shutdown(ctx)`: `Close`, then wait until every subscriber's goroutine has returned (`Consume`, which a
+- [x] `Shutdown(ctx)`: `Close`, then wait until every subscriber's goroutine has returned (`Consume`, which a
   `SubscribeSeq` loop runs too), or until ctx is done. A device gets SIGTERM, or a power-fail signal, shortly before
   it goes down, but `Close` never waits, so a program that exits right after it cuts off whatever handle was doing,
   and cannot flush the buffers first. With `WithUnsubscribeDeliver`, `Shutdown` flushes the buffers. With discard, it
@@ -87,7 +87,7 @@ Each item changes one function or adds one option.
   - [ ] A durable store keeps only the text of `Record.Err`, so `errors.Is(entry.Err, subscriber.ErrTimeout)` no
     longer holds once read back. Decide whether `Record` should also carry which sentinel its error matches, before
     `store.File` sets its format.
-- [ ] `examples/23-mqtt`, a module of its own like `19-redis` (listed in `MODULES` and the README): MQTT in, then fan
+- [ ] `examples/24-mqtt`, a module of its own like `19-redis` (listed in `MODULES` and the README): MQTT in, then fan
   out to a local rule, a local store, and an uplink through `store.Enqueue` and `store.Drain`. Its `Example()` runs
   against an in-process broker (such as mochi-mqtt), so CI needs none.
 

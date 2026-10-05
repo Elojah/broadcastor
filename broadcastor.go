@@ -6,6 +6,7 @@ import (
 	"iter"
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	"github.com/google/uuid"
 
@@ -21,11 +22,22 @@ type Broadcastor[T any] struct {
 
 	// gate makes Close wait for every add under way, so each subscriber is either refused or seen by Close.
 	gate gate.Gate
+
+	// running counts each subscriber whose Consume has not returned, plus one until the first Close. Only add counts one
+	// in, under gate, so it reaches 0 once, after Close: whoever drops it to 0 closes stopped.
+	running atomic.Int64
+	stopped chan struct{}
+	// exit is stop, which add passes to each subscriber, made once: a method value made in add would allocate.
+	exit func()
 }
 
 // NewBroadcastor returns an empty Broadcastor.
 func NewBroadcastor[T any]() *Broadcastor[T] {
-	return &Broadcastor[T]{}
+	b := &Broadcastor[T]{stopped: make(chan struct{})}
+	b.running.Store(1)
+	b.exit = b.stop
+
+	return b
 }
 
 // Subscribe adds a subscriber and returns its ID. The subscriber's own goroutine calls handle for each message, one at
@@ -82,7 +94,8 @@ func (b *Broadcastor[T]) Unsubscribe(ctx context.Context, id uuid.UUID, options 
 }
 
 // Close unsubscribes every subscriber, and makes later Subscribe and SubscribeSeq calls return ErrClosed. Like
-// Unsubscribe it never waits, so handle can call it. Every call after the first returns ErrClosed.
+// Unsubscribe it never waits, so handle can call it, whereas Shutdown waits for the subscribers. Every call after the
+// first, Shutdown's included, returns ErrClosed.
 func (b *Broadcastor[T]) Close() error {
 	closed := b.gate.Close()
 
@@ -98,8 +111,35 @@ func (b *Broadcastor[T]) Close() error {
 	if closed {
 		return ErrClosed
 	}
+	b.stop()
 
 	return nil
+}
+
+// Shutdown is Close, then waits until every subscriber has handled what it took, or reported it as
+// subscriber.WithUnsubscribeDiscard makes it, so that a program can exit right after, such as on SIGTERM. It returns
+// ctx's error if ctx is done first, else what Close returned.
+//
+// It waits for a Broadcast only through a subscriber, which Close frees right away, unless an error handler or store
+// blocks. A Broadcast racing Shutdown may still report its message as a *subscriber.ClosedError once it has returned.
+// Called from handle or an error handler, it waits on itself until ctx is done, and so it does for a SubscribeSeq loop
+// that was never started.
+func (b *Broadcastor[T]) Shutdown(ctx context.Context) error {
+	err := b.Close()
+
+	// Checked first, since select picks at random among ready cases.
+	select {
+	case <-b.stopped:
+		return err
+	default:
+	}
+
+	select {
+	case <-b.stopped:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // Broadcast hands msg to every subscriber and returns how many took it, counting every async send started as taken, and
@@ -174,9 +214,10 @@ func (b *Broadcastor[T]) add(ctx context.Context, options []subscriber.Option[T]
 		return nil, ErrClosed
 	}
 	defer b.gate.Leave()
+	b.running.Add(1)
 
 	// Before Store, so whoever removes the subscriber stops the watch.
-	ctx = s.Attach(ctx, func(options ...subscriber.UnsubscribeOption) bool { return b.remove(id, options...) })
+	ctx = s.Attach(ctx, func(options ...subscriber.UnsubscribeOption) bool { return b.remove(id, options...) }, b.exit)
 	b.subscribers.Store(id, s)
 	// If ctx was already done, the watch may have run before Store and found nothing.
 	if ctx.Err() != nil {
@@ -197,4 +238,12 @@ func (b *Broadcastor[T]) remove(id uuid.UUID, options ...subscriber.UnsubscribeO
 	s.Unsubscribe(options...)
 
 	return true
+}
+
+// stop drops a count of running, for a Consume that returned or for the first Close, and closes stopped if it was the
+// last.
+func (b *Broadcastor[T]) stop() {
+	if b.running.Add(-1) == 0 {
+		close(b.stopped)
+	}
 }

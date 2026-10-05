@@ -41,28 +41,32 @@ const (
 	stressLabel = "broadcastor_stress"
 )
 
+var errAfterShutdown = errors.New("handled or reported once Shutdown had returned")
+
 // TestStress runs random interleavings of every method from several goroutines, in real time so that timeouts race
 // sends and evict subscribers, over rounds that each have their own Broadcastor. It checks that nothing panics, that every goroutine returns
 // once the Broadcastor is closed, that no subscriber gets a message twice, whether handled or reported, that a
-// subscriber gets every message broadcast while it was subscribed and none broadcast outside that, and that Stats add
-// up once nothing is in flight. make stress runs it many times.
+// subscriber gets every message broadcast while it was subscribed and none broadcast outside that, that Stats add up
+// once nothing is in flight, and that nothing is handled or reported once Shutdown has returned. make stress runs it
+// many times.
 func TestStress(t *testing.T) {
 	t.Parallel()
 
 	for round := range stressRounds {
-		// Half the rounds close while everything else runs, the others once nothing is in flight, after checking Stats.
-		closeEarly := round%2 == 1
-		runStress(t, closeEarly)
+		// Half the rounds close while everything else runs. The others shut down once the broadcasters and churners are
+		// done: half of those once nothing is in flight, after checking Stats, and the others at once.
+		closeEarly, quiet := round%2 == 1, round%4 == 0
+		runStress(t, closeEarly, quiet)
 		if t.Failed() {
-			t.Fatalf("round %d failed, closing early: %t", round, closeEarly)
+			t.Fatalf("round %d failed, closing early: %t, quiet: %t", round, closeEarly, quiet)
 		}
 	}
 }
 
 // runStress runs one round, then checks it once every goroutine it started has returned.
-func runStress(t *testing.T, closeEarly bool) {
+func runStress(t *testing.T, closeEarly, quiet bool) {
 	t.Helper()
-	s := &stress{b: broadcastor.NewBroadcastor[int](), closeEarly: closeEarly, label: uuid.NewString()}
+	s := &stress{b: broadcastor.NewBroadcastor[int](), closeEarly: closeEarly, quiet: quiet, label: uuid.NewString()}
 	// Every goroutine started in f carries the label, and so do those they start, the library's included.
 	pprof.Do(t.Context(), pprof.Labels(stressLabel, s.label), func(ctx context.Context) { s.run(ctx, t) })
 	s.waitGoroutines(t)
@@ -77,6 +81,8 @@ func runStress(t *testing.T, closeEarly bool) {
 type stress struct {
 	b          *broadcastor.Broadcastor[int]
 	closeEarly bool
+	// quiet makes run check Stats once nothing is in flight, before it shuts down. Unless closeEarly is set too.
+	quiet bool
 	// label is the value of stressLabel for the round's goroutines.
 	label string
 
@@ -87,6 +93,8 @@ type stress struct {
 	next atomic.Int64
 	// closing and closed are the ticks before the first Close and after it returned, 0 until then.
 	closing, closed atomic.Int64
+	// shut is set once Shutdown has returned, after which no subscriber may get anything.
+	shut atomic.Bool
 
 	// loops are the SubscribeSeq loops.
 	loops sync.WaitGroup
@@ -109,6 +117,8 @@ type stressSub struct {
 	cancel context.CancelFunc
 	// evictAfter is its subscriber.WithEvictAfter, 0 for none.
 	evictAfter int
+	// shut is the round's stress.shut.
+	shut *atomic.Bool
 
 	// subscribing and subscribed are the ticks before Subscribe or SubscribeSeq and after it returned.
 	subscribing, subscribed int64
@@ -140,7 +150,8 @@ const (
 	stressDropped
 )
 
-// run starts the broadcasters and churners, checks Stats once they are done unless it closed early, then closes.
+// run starts the broadcasters and churners, checks Stats once they are done if quiet and it did not close early, then
+// shuts down.
 func (s *stress) run(ctx context.Context, t *testing.T) {
 	t.Helper()
 	var workers sync.WaitGroup
@@ -164,14 +175,14 @@ func (s *stress) run(ctx context.Context, t *testing.T) {
 	close(start)
 	s.wait(t, &workers, "broadcasters and churners")
 
-	if !s.closeEarly {
+	if s.quiet && !s.closeEarly {
 		s.checkStats(t)
 	}
-	switch err := s.close(); {
+	switch err := s.shutdown(ctx, t); {
 	case s.closeEarly && !errors.Is(err, broadcastor.ErrClosed):
-		t.Errorf("second Close = %v, want ErrClosed", err)
+		t.Errorf("Shutdown after Close = %v, want ErrClosed", err)
 	case !s.closeEarly && err != nil:
-		t.Errorf("Close = %v, want nil", err)
+		t.Errorf("Shutdown = %v, want nil", err)
 	}
 	s.wait(t, &s.loops, "SubscribeSeq loops")
 	if stats := s.b.Stats(); len(stats) != 0 {
@@ -233,7 +244,7 @@ func (s *stress) subscribe(ctx context.Context, t *testing.T) *stressSub {
 	t.Helper()
 	// Done only through cancel, like subscribeCtx, so that a subscriber left over fails the round.
 	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	sub := &stressSub{seq: randN(3) == 0, cancel: cancel, got: map[int]stressOutcome{}, failed: map[int]bool{}}
+	sub := &stressSub{seq: randN(3) == 0, cancel: cancel, shut: &s.shut, got: map[int]stressOutcome{}, failed: map[int]bool{}}
 	options := []subscriber.Option[int]{
 		subscriber.WithBuffer[int](randN(4)),
 		subscriber.WithErrorHandler[int](func(ctx context.Context, err error) {
@@ -317,6 +328,24 @@ func (s *stress) close() error {
 	s.closing.CompareAndSwap(0, s.clock.Add(1))
 	err := s.b.Close()
 	s.closed.CompareAndSwap(0, s.clock.Add(1))
+
+	return err
+}
+
+// shutdown shuts the Broadcastor down, records the ticks around it if it is the first Close, and sets shut once it has
+// returned. It fails with the stacks of the round's goroutines if Shutdown still waits after deadlockTimeout.
+func (s *stress) shutdown(ctx context.Context, t *testing.T) error {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(ctx, deadlockTimeout)
+	defer cancel()
+
+	s.closing.CompareAndSwap(0, s.clock.Add(1))
+	err := s.b.Shutdown(ctx)
+	s.closed.CompareAndSwap(0, s.clock.Add(1))
+	s.shut.Store(true)
+	if errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Shutdown still waiting after %v: deadlock. The round's goroutines:\n%s", deadlockTimeout, strings.Join(s.goroutines(t), "\n\n"))
+	}
 
 	return err
 }
@@ -486,6 +515,7 @@ func (s *stress) goroutines(t *testing.T) []string {
 
 // record records that the subscriber got n, handled or reported as outcome.
 func (sub *stressSub) record(n int, outcome stressOutcome) {
+	sub.checkShut(n)
 	sub.mu.Lock()
 	defer sub.mu.Unlock()
 	if _, ok := sub.got[n]; ok {
@@ -525,6 +555,7 @@ func (sub *stressSub) report(_ context.Context, err error) {
 
 // fail records that handle failed for n.
 func (sub *stressSub) fail(n int) {
+	sub.checkShut(n)
 	sub.mu.Lock()
 	defer sub.mu.Unlock()
 	if sub.failed[n] {
@@ -541,6 +572,14 @@ func (sub *stressSub) evict(n int) {
 	defer sub.mu.Unlock()
 	if sub.evictions++; sub.evictions == 1 {
 		sub.evicted = n
+	}
+}
+
+// checkShut records n as unexpected if Shutdown has returned already. Every Broadcast has returned by then, so nothing
+// else may report n.
+func (sub *stressSub) checkShut(n int) {
+	if sub.shut.Load() {
+		sub.unexpect(fmt.Errorf("%w: %d", errAfterShutdown, n))
 	}
 }
 

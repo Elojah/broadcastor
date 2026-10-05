@@ -2051,7 +2051,8 @@ func TestClose_FromHandle(t *testing.T) {
 	})
 }
 
-// Close races with every other method: exactly one Close succeeds, and every subscription is refused or ended.
+// Close and Shutdown race with every other method: exactly one of them succeeds, and every subscription is refused or
+// ended.
 func TestClose_Parallel(t *testing.T) {
 	t.Parallel()
 
@@ -2084,13 +2085,17 @@ func TestClose_Parallel(t *testing.T) {
 			subscribersWG.Go(func() { subscribeUntilClosed(t, b, i%3) })
 		}
 		var succeeded atomic.Int32
-		for range closers {
+		for i := range closers {
 			closersWG.Go(func() {
-				switch err := b.Close(); {
+				name, closeIt := "Close", b.Close
+				if i%2 == 0 {
+					name, closeIt = "Shutdown", func() error { return b.Shutdown(ctx) }
+				}
+				switch err := closeIt(); {
 				case err == nil:
 					succeeded.Add(1)
 				case !errors.Is(err, broadcastor.ErrClosed):
-					t.Errorf("Close = %v, want nil or ErrClosed", err)
+					t.Errorf("%s = %v, want nil or ErrClosed", name, err)
 				}
 				if n := b.Broadcast(ctx, -1); n != 0 {
 					t.Errorf("Broadcast after Close handed the message to %d subscribers, want 0", n)
@@ -2105,7 +2110,7 @@ func TestClose_Parallel(t *testing.T) {
 		synctest.Wait()
 
 		if n := succeeded.Load(); n != 1 {
-			t.Errorf("%d Close calls succeeded, want 1", n)
+			t.Errorf("%d Close and Shutdown calls succeeded, want 1", n)
 		}
 	})
 }

@@ -28,6 +28,9 @@ type Subscriber[T any] struct {
 	// remove removes the subscriber from its Broadcastor, as Broadcastor.Unsubscribe does. Set by Attach.
 	remove func(options ...UnsubscribeOption) bool
 
+	// exit tells the Broadcastor that Consume has returned, for Broadcastor.Shutdown. Set by Attach.
+	exit func()
+
 	// done is closed by Unsubscribe, so that no send waits on a subscriber that is gone.
 	done chan struct{}
 
@@ -52,10 +55,10 @@ type config[T any] struct {
 	buffer              int
 	defaults            message.Config
 	unsubscribeDefaults unsubscription
+	detached            bool
 	errorHandler        func(ctx context.Context, err error)
 	store               Store[T]
 	middlewares         []Middleware[T]
-	detached            bool
 	evictAfter          int
 	asyncLimit          int
 	filter              func(msg T) bool
@@ -82,10 +85,11 @@ func (s *Subscriber[T]) ID() uuid.UUID {
 
 // Attach ties the subscriber to its Broadcastor, which remove removes it from. The subscriber runs with ctx, and calls
 // remove once ctx is done, when a Seq loop ends, and to evict itself (WithEvictAfter). With WithDetachedContext, it
-// runs with context.WithoutCancel(ctx) instead, and ctx never removes it. It returns the ctx the subscriber runs with,
-// and must be called once, before anything else.
-func (s *Subscriber[T]) Attach(ctx context.Context, remove func(options ...UnsubscribeOption) bool) context.Context {
+// runs with context.WithoutCancel(ctx) instead, and ctx never removes it. It calls exit once Consume has returned. It
+// returns the ctx the subscriber runs with, and must be called once, before anything else.
+func (s *Subscriber[T]) Attach(ctx context.Context, remove func(options ...UnsubscribeOption) bool, exit func()) context.Context {
 	s.remove = remove
+	s.exit = exit
 	if s.config.detached {
 		s.ctx = context.WithoutCancel(ctx)
 
@@ -161,8 +165,10 @@ func (s *Subscriber[T]) Unsubscribe(options ...UnsubscribeOption) {
 	s.release()
 }
 
-// Consume calls handle, wrapped in the middlewares, for every message until ch is closed, and reports its errors.
+// Consume calls handle, wrapped in the middlewares, for every message until ch is closed, and reports its errors. It
+// runs once per subscriber, then calls exit.
 func (s *Subscriber[T]) Consume(handle Handler[T]) {
+	defer s.exit()
 	handle = chain(handle, s.config.middlewares...)
 	for m := range s.ch {
 		if s.discarding.Load() {

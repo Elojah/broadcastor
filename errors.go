@@ -6,7 +6,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// ErrClosed is returned by Subscribe and SubscribeSeq after Close, and by every Close after the first.
+// ErrClosed is returned by Subscribe and SubscribeSeq after Close or Shutdown, and by every Close or Shutdown after the
+// first.
 var ErrClosed = errors.New("broadcastor closed")
 
 // ErrSubscriberNotFound is matched by *SubscriberNotFoundError.
