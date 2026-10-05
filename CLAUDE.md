@@ -59,6 +59,10 @@ Any change to channels, removal or error reporting must keep these, and pass `ma
 - `subscriber.WithAsyncLimit` is unlimited by default until v1.0: a limit drops messages silently without an error
   handler, whereas `Stats.Sending` shows a pile-up. A refused async send is a `*DroppedError`, counted in `Dropped`
   and towards `WithEvictAfter`.
+- `Broadcast` applies its options once (`message.NewConfig`), and `message.New` lays the fields they set, which
+  `Config`'s unexported mask records, over each subscriber's defaults by value. Applying them per subscriber passed
+  `&config` to each option, which moved it to the heap: a `Broadcast` with no options now allocates nothing in sync,
+  buffered and non-blocking modes, and one with options once (`TestBroadcast_Allocs`).
 - `message.WithContext` replaces the subscriber's ctx for one message, without merging. nil means none, which overrides a default (staticcheck SA1012 is silenced in the test that does it).
 - The library applies no middleware of its own. The recommended order is `Recover`, `History`, `WrapError`, `Retry`, then the user's.
 - `SubscribeSeq` runs `Consume` and a `relay`, rather than reading the channel in the loop: calling middlewares around `yield` would crash on `Recover` (Go forbids an iterator to swallow a loop body panic) and on any middleware calling next after a break. The cost is a goroutine per `SubscribeSeq` and two handoffs per message: 1.0 to 2.1 µs per message unbuffered, 0.6 to 1.9 µs with a buffer of 64. `Retry` never retries `ErrClosed`, which a loop that ended returns. The loop body gets no ctx, only `fail`.
@@ -72,6 +76,7 @@ Any change to channels, removal or error reporting must keep these, and pass `ma
 - Most tests run in a `synctest` bubble, where a leaked subscriber goroutine fails the test. So subscribe with `subscribeCtx(t)` (`context.WithoutCancel(t.Context())`): `t.Context()` would unsubscribe a leak instead of failing. `synctest.Wait()` after `Unsubscribe` waits until the subscriber is done. Bound every wait with `deadlockTimeout`.
 - A sleeping `handle` is durably blocked, so `synctest.Wait()` returns before it is done: sleep in the test too before checking `Stats`.
 - A goroutine blocked on a mutex is not durably blocked, so `synctest.Wait()` would hang: `pkg/gate` tests and `TestUnsubscribe_SeveralThenDrain` run in real time.
+- `TestBroadcast_Allocs` does not call `t.Parallel()`, since `AllocsPerRun` counts every goroutine's allocations.
 - `TestStress` runs in real time, so that timeouts race sends, and checks what must hold under any schedule. Every goroutine of a round carries a pprof label (`pprof.Do`), which the library's goroutines inherit, so it can check that none is left once closed although other tests run beside it. It polls until `Stats` add up rather than sleeping.
 - Add `Recover` or `WrapError` only to check a `PanicError` or `HandleError`. Other tests check `handle`'s raw error.
 - Examples (`examples/NN-name/`, listed in the README) each have an `Example()` in `main_test.go`. `19-redis`'s runs against miniredis, in memory, so CI needs no Redis. They run in real time, so their output must not depend on scheduling: synchronise with channels or a `WaitGroup`, or use `// Unordered output:`. A slow `handle` waits on a `release` channel, never sleeps.

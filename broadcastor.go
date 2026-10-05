@@ -110,7 +110,9 @@ func (b *Broadcastor[T]) Close() error {
 // async sends keep using it (see message.WithAsync).
 func (b *Broadcastor[T]) Broadcast(ctx context.Context, msg T, options ...message.Option[T]) int {
 	var (
-		n int
+		// Once, rather than per subscriber, and none without options.
+		config = message.NewConfig(options...)
+		n      int
 		// One per parallel send, yielding whether the subscriber took the message.
 		pending []<-chan bool
 	)
@@ -119,7 +121,7 @@ func (b *Broadcastor[T]) Broadcast(ctx context.Context, msg T, options ...messag
 		if !ok {
 			return true
 		}
-		taken, parallel := s.Deliver(ctx, msg, options...)
+		taken, parallel := s.Deliver(ctx, msg, config)
 		if taken {
 			n++
 		}

@@ -31,7 +31,7 @@ Each item changes one function or adds one option.
   out of it. Past n sends in flight, an async message is dropped with a `*DroppedError`. It needs an atomic counter per
   subscriber, which `Stats.Sending` exposes. Lean towards keeping the default unlimited until v1.0: a bound drops
   messages silently when there is no error handler, whereas `Stats.Sending` shows a pile-up.
-- [ ] A `Broadcast` with no options allocates nothing in sync, buffered and non-blocking modes. Today it allocates
+- [x] A `Broadcast` with no options allocates nothing in sync, buffered and non-blocking modes. Today it allocates
   48 B per subscriber, which at a sensor's rate is garbage on every reading: `message.New` passes `&config` to each
   option, so the config moves to the heap (`go build -gcflags=-m`: `moved to heap: message.config`, at the
   `message.New` call in `Deliver`). With no options, `Deliver` can build the message from the subscriber's defaults

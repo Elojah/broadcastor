@@ -13,6 +13,7 @@ type Option[T any] func(config *Config)
 func WithSync[T any]() Option[T] {
 	return func(config *Config) {
 		config.Delivery = DeliverySync
+		config.set |= fieldDelivery
 	}
 }
 
@@ -22,6 +23,7 @@ func WithSync[T any]() Option[T] {
 func WithParallel[T any]() Option[T] {
 	return func(config *Config) {
 		config.Delivery = DeliveryParallel
+		config.set |= fieldDelivery
 	}
 }
 
@@ -37,6 +39,7 @@ func WithParallel[T any]() Option[T] {
 func WithAsync[T any]() Option[T] {
 	return func(config *Config) {
 		config.Delivery = DeliveryAsync
+		config.set |= fieldDelivery
 	}
 }
 
@@ -45,6 +48,7 @@ func WithAsync[T any]() Option[T] {
 func WithNonBlocking[T any]() Option[T] {
 	return func(config *Config) {
 		config.Delivery = DeliveryNonBlocking
+		config.set |= fieldDelivery
 	}
 }
 
@@ -54,6 +58,7 @@ func WithNonBlocking[T any]() Option[T] {
 func WithContext[T any](ctx context.Context) Option[T] {
 	return func(config *Config) {
 		config.Context = ctx
+		config.set |= fieldContext
 	}
 }
 
@@ -62,6 +67,7 @@ func WithContext[T any](ctx context.Context) Option[T] {
 func WithErrorHandler[T any](handler func(ctx context.Context, err error)) Option[T] {
 	return func(config *Config) {
 		config.ErrorHandler = handler
+		config.set |= fieldErrorHandler
 	}
 }
 
@@ -71,5 +77,6 @@ func WithErrorHandler[T any](handler func(ctx context.Context, err error)) Optio
 func WithTimeout[T any](timeout time.Duration) Option[T] {
 	return func(config *Config) {
 		config.Timeout = timeout
+		config.set |= fieldTimeout
 	}
 }

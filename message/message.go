@@ -38,13 +38,50 @@ type Config struct {
 
 	// Context replaces the subscriber's ctx for this message. nil means none.
 	Context context.Context //nolint:containedctx // it travels with the message, which outlives Broadcast
+
+	// set holds the fields options set, which New lays over a subscriber's defaults even when zero.
+	set fields
 }
 
-// New applies options on top of config, a subscriber's defaults, which are left untouched since config is a copy.
-func New[T any](value T, config Config, options ...Option[T]) Message[T] {
+// fields is a set of Config fields.
+type fields uint8
+
+const (
+	fieldDelivery fields = 1 << iota
+	fieldTimeout
+	fieldErrorHandler
+	fieldContext
+)
+
+// NewConfig applies options once, for New to lay over each subscriber's defaults.
+func NewConfig[T any](options ...Option[T]) Config {
+	// Before declaring config, which passing it to the options moves to the heap.
+	if len(options) == 0 {
+		return Config{}
+	}
+	var config Config
 	for _, option := range options {
 		option(&config)
 	}
 
-	return Message[T]{Value: value, Config: config}
+	return config
+}
+
+// New returns value with config, from NewConfig, laid over defaults, a subscriber's: each field config's options set
+// replaces the default. Both are copies, so nothing escapes.
+func New[T any](value T, defaults, config Config) Message[T] {
+	if config.set&fieldDelivery != 0 {
+		defaults.Delivery = config.Delivery
+	}
+	if config.set&fieldTimeout != 0 {
+		defaults.Timeout = config.Timeout
+	}
+	if config.set&fieldErrorHandler != 0 {
+		defaults.ErrorHandler = config.ErrorHandler
+	}
+	if config.set&fieldContext != 0 {
+		defaults.Context = config.Context
+	}
+
+	return Message[T]{Value: value, Config: defaults}
 }

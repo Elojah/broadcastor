@@ -91,11 +91,11 @@ func (s *Subscriber[T]) Attach(ctx context.Context, remove func(options ...Unsub
 	return ctx
 }
 
-// Deliver sends value to the subscriber and reports whether it took it, or, for an async message, whether a send was
-// started. A parallel message returns false and a channel that yields the result instead. Failures are reported with
-// the message's ctx, never ctx, which only bounds the wait.
-func (s *Subscriber[T]) Deliver(ctx context.Context, value T, options ...message.Option[T]) (bool, <-chan bool) {
-	m := message.New(value, s.config.defaults, options...)
+// Deliver sends value to the subscriber, with config (message.NewConfig) laid over its defaults, and reports whether it
+// took it, or, for an async message, whether a send was started. A parallel message returns false and a channel that
+// yields the result instead. Failures are reported with the message's ctx, never ctx, which only bounds the wait.
+func (s *Subscriber[T]) Deliver(ctx context.Context, value T, config message.Config) (bool, <-chan bool) {
+	m := message.New(value, s.config.defaults, config)
 
 	if !s.acquire() {
 		s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: value}) //nolint:contextcheck // reported with the message's ctx, not the one bounding the wait
