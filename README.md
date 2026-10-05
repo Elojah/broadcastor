@@ -225,6 +225,7 @@ go store.Drain(ctx, queue, retry(uplink), nil)
 ```
 
 [`19-redis`](examples/19-redis/stream.go) keeps such a queue in a Redis stream, which outlives a restart.
+[`24-mqtt`](examples/24-mqtt/main.go) forwards readings from MQTT to an uplink that is down for a while.
 
 ## Stats
 
@@ -337,9 +338,11 @@ The same goes for a subscriber whose default is `message.WithAsync`.
 | [`21-max-age`](examples/21-max-age/main.go) | `middleware.MaxAge` and `*subscriber.ExpiredError`, for a reading that waited too long. |
 | [`22-watchdog`](examples/22-watchdog/main.go) | `Stats.Handling` to unsubscribe a hung subscriber, and `subscriber.WithAsyncLimit`. |
 | [`23-shutdown`](examples/23-shutdown/main.go) | `Shutdown`, which waits for a slow `handle` and for the dead letters before the program exits. |
+| [`24-mqtt`](examples/24-mqtt/main.go) | MQTT in, fanned out to a rule, a local store, and an uplink that stores and forwards with `store.Enqueue` and `store.Drain`. |
 
-`19-redis` is a module of its own, so that the library does not depend on go-redis. Run it with
-`go run -C examples/19-redis .`, against the Redis at `REDIS_ADDR` (`localhost:6379` by default).
+`19-redis` and `24-mqtt` are modules of their own, so that the library depends on neither go-redis nor an MQTT client.
+Run `go run -C examples/19-redis .` against the Redis at `REDIS_ADDR` (`localhost:6379` by default), and
+`go run -C examples/24-mqtt .` against the MQTT broker at `MQTT_ADDR` (`localhost:1883` by default).
 
 ## Development
 

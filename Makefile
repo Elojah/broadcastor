@@ -15,7 +15,7 @@ STRESS_COUNT      ?= 50
 
 # The modules tidy, lint and test cover. An example with dependencies of its own is a module of its own, so that the
 # library's go.mod lists only uuid.
-MODULES            = . examples/19-redis
+MODULES            = . examples/19-redis examples/24-mqtt
 
 # For CI
 ifneq ($(wildcard ./bin/golangci-lint),)

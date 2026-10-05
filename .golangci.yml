@@ -154,6 +154,10 @@ linters:
       min-complexity: 10
     lll:
       line-length: 180
+    misspell:
+      # The MQTT broker examples/24-mqtt names.
+      ignore-rules:
+        - mosquitto
     cyclop:
       max-complexity: 30
     gomoddirectives:
