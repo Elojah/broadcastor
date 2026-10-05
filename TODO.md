@@ -102,9 +102,11 @@ Each item changes one function or adds one option.
     out of scope.
   - `Unsubscribe`'s ctx, which is unused: drop it, or make it wait for that one subscriber's goroutine, like
     `Shutdown`.
-- [ ] Try TinyGo: a CI job that builds the library for one target, to see what breaks. Check `sync.Map`,
-  `context.AfterFunc` and `iter` first. A goroutine per subscriber may be too heavy for a microcontroller, so
-  "Linux gateways only", documented, is an acceptable outcome.
+- [x] Try TinyGo: `make tinygo`, a CI job of its own, runs the examples on Linux and builds them for a Pico. Nothing
+  broke in the library: `sync.Map`, `context.AfterFunc` and `iter` work. TinyGo 0.42's `sync.RWMutex` deadlocks
+  `pkg/gate` (tinygo-org/tinygo#5692), so CI uses a pinned dev build. Whether a goroutine per subscriber fits a
+  microcontroller's RAM is not measured, since nothing runs on the Pico.
+  - [ ] Once TinyGo 0.43.0 is out, install its `.deb` in CI instead of the dev image.
 - [ ] `store.DrainBatch(ctx, q, n, maxWait, handle)`: hands up to n entries at once, or fewer once maxWait has passed,
   and acks them together, since cellular and LoRa uplinks pay per request. Once `store.File` exists, to measure it
   against `Drain`.

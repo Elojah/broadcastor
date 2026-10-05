@@ -5,6 +5,6 @@ func Example() {
 
 	// Output:
 	// 100 / 4 = 25
-	// panic on 0: runtime error: integer divide by zero
+	// panic on 0: division by zero
 	// 100 / 5 = 20
 }

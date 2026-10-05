@@ -351,7 +351,19 @@ make check     # golangci-lint + go test -race -shuffle=on -cpu 1,4, running eac
 make bench     # benchmarks (BENCH=regexp)
 make benchcmp  # benchstat of main against the working tree
 make stress    # the stress test, 50 times
+make tinygo    # the examples with TinyGo, and built for a Raspberry Pi Pico
 ```
+
+## TinyGo
+
+The library works with TinyGo 0.43, a dev build until it is released. `make tinygo` runs each example on Linux and
+checks its output, and builds each one for a Raspberry Pi Pico, about 150 KB of code. Nothing runs on the Pico, so
+whether a goroutine per subscriber fits a microcontroller's RAM is up to the program. Under TinyGo:
+
+- 0.42 and earlier can deadlock a `Close` racing `Subscribe`s, since their `sync.RWMutex` never wakes a writer once a
+  reader queues behind it ([tinygo#5692](https://github.com/tinygo-org/tinygo/issues/5692)).
+- `PanicError.Stack` is nil, since `debug.Stack` returns nil.
+- The tests need Go: most use `testing/synctest`, which TinyGo lacks, as it does the race detector.
 
 ## License
 

@@ -25,3 +25,15 @@ jobs:
 
       - name: Lint and test
         run: make check
+
+  tinygo:
+    runs-on: ubuntu-latest
+    # Pinned, like golangci-lint. A dev build, since TinyGo 0.42.0's sync.RWMutex never wakes a writer once a reader
+    # queues behind it (tinygo-org/tinygo#5692), which deadlocks pkg/gate: use the 0.43.0 release once it is out.
+    container: tinygo/tinygo-dev:sha-f6d269f74ab45bfa53a37c5708c6661ec33531ae
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Run the examples with TinyGo and build them for pico
+        run: make tinygo

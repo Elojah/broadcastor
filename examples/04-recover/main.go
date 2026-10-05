@@ -23,6 +23,9 @@ func main() {
 	// Every message is either handled or reported.
 	var done sync.WaitGroup
 	id, err := b.Subscribe(ctx, func(_ context.Context, _ uuid.UUID, n int) error {
+		if n == 0 {
+			panic("division by zero")
+		}
 		fmt.Println("100 /", n, "=", 100/n)
 		done.Done()
 

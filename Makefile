@@ -17,6 +17,11 @@ STRESS_COUNT      ?= 50
 # library's go.mod lists only uuid.
 MODULES            = . examples/19-redis examples/24-mqtt
 
+# The examples tinygo runs, which leaves out those that are modules of their own, and the target it builds them for.
+TINYGO             = tinygo
+TINYGO_TARGET     ?= pico
+EXAMPLES           = $(filter-out $(MODULES),$(patsubst %/,%,$(wildcard examples/*/)))
+
 # For CI
 ifneq ($(wildcard ./bin/golangci-lint),)
 	GOLINT = $(CURDIR)/bin/golangci-lint
@@ -60,6 +65,28 @@ test: ## Run tests with race detector, shuffled, with GOMAXPROCS 1 and 4, and ea
 stress: ## Run TestStress STRESS_COUNT (50) times with race detector
 	$(info $(M) running TestStress $(STRESS_COUNT) times) @
 	$Q $(GO) test -race -run '^TestStress$$' -count $(STRESS_COUNT) .
+
+# TinyGo
+.PHONY: tinygo
+# tinygo test runs no Example, and testing/synctest, which every test but pkg/gate's uses, does not link. So each
+# example runs with tinygo run instead, and must print what its Example expects, sorted when unordered. It is then
+# built for TINYGO_TARGET, where nothing runs.
+tinygo: ## Run pkg/gate's tests and each example with TinyGo, and build each example for TINYGO_TARGET (pico)
+	$(info $(M) running $(TINYGO)) @
+	$Q $(TINYGO) test ./pkg/gate
+	$Q set -e; \
+	out=$$(mktemp -d); trap 'rm -rf "$$out"' EXIT; \
+	for e in $(EXAMPLES); do \
+		echo "$(M) $$e"; \
+		awk '/\/\/ (Unordered output|Output):/ { f = 1; next } f && /^}/ { f = 0 } f { sub(/^\t\/\/ ?/, ""); print }' \
+			$$e/main_test.go > "$$out/want"; \
+		$(TINYGO) run ./$$e > "$$out/got"; \
+		if grep -q 'Unordered output:' $$e/main_test.go; then \
+			sort -o "$$out/want" "$$out/want"; sort -o "$$out/got" "$$out/got"; \
+		fi; \
+		diff -u "$$out/want" "$$out/got"; \
+		$(TINYGO) build -target=$(TINYGO_TARGET) -o "$$out/main.elf" ./$$e; \
+	done
 
 # Bench
 .PHONY: bench
