@@ -9,9 +9,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `broadcastor` (root): `Broadcastor`, `ErrClosed`, `SubscriberNotFoundError`.
 - `subscriber`: `Subscriber`, the options for `Subscribe`/`SubscribeSeq`/`Unsubscribe`, `Handler`/`Middleware`, `Store`/`Record`, `Stats`, and the errors about messages.
 - `message`: `Message`, `Config`, `Delivery`, the options for `Broadcast`.
-- `middleware` (`Recover`, `History`, `WrapError`, `Retry`), `store` (`Queue`, `Ring`, `Drain`, `Enqueue`, `Filter`), `pkg/gate`, `examples/`.
+- `middleware` (`Recover`, `History`, `WrapError`, `Retry`), `store` (`Queue`, `Ring`, `Drain`, `Enqueue`, `Filter`), `filter` (`Changed`, `Every`), `pkg/gate`, `examples/`.
 
-Imports go one way: `broadcastor` → `subscriber` → `message`. `middleware` and `store` import `subscriber`, never `broadcastor`. Planned work is in TODO.md.
+Imports go one way: `broadcastor` → `subscriber` → `message`. `middleware` and `store` import `subscriber`, never `broadcastor`. `filter` imports nothing from the library: its filters are plain `func(T) bool`. Planned work is in TODO.md.
 
 `examples/19-redis` is a module of its own (`replace` to `../..`), so that go-redis and miniredis stay out of the library's go.mod. `go test ./...` at the root skips it: `make` lists it in `MODULES`, and `go test -C examples/19-redis ./...` tests it alone.
 

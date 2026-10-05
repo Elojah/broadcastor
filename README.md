@@ -70,6 +70,7 @@ Options live in the package of what they configure:
 | [`message`](https://pkg.go.dev/github.com/elojah/broadcastor/message) | The options for `Broadcast`. |
 | [`middleware`](https://pkg.go.dev/github.com/elojah/broadcastor/middleware) | `Recover`, `History`, `WrapError` and `Retry`. |
 | [`store`](https://pkg.go.dev/github.com/elojah/broadcastor/store) | Queues for dead letters and history (`Ring`, `Drain`, `Enqueue`, `Filter`). |
+| [`filter`](https://pkg.go.dev/github.com/elojah/broadcastor/filter) | Filters for `subscriber.WithFilter` (`Changed`, `Every`). |
 
 ## Delivery
 
@@ -91,6 +92,16 @@ message once n sends are under way to the subscriber, and `Stats.Sending` shows 
 
 `subscriber.WithFilter(keep)` skips the messages `keep` rejects, in `Broadcast`'s goroutine before any send, so the
 subscriber never wakes up for them. They are neither reported nor counted, in `Stats` or in what `Broadcast` returns.
+Package `filter` holds filters for readings that repeat themselves, each with state of its own, so give each
+subscriber its own:
+
+```go
+id, err := b.Subscribe(ctx, handle,
+ // Only once the temperature moved by half a degree since the last one passed.
+ subscriber.WithFilter(filter.Changed(func(prev, next float64) bool { return math.Abs(next-prev) >= 0.5 })),
+)
+id, err = b.Subscribe(ctx, uplink, subscriber.WithFilter(filter.Every[float64](time.Minute))) // at most one a minute
+```
 
 Delivery is at most once: a subscriber that misses a message never gets it later, but its error handlers learn why
 (see [Errors](#errors)), and a [dead-letter store](#dead-letters) can keep it. `Broadcast` gives up on a subscriber once

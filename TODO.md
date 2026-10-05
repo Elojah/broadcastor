@@ -41,7 +41,7 @@ Each item changes one function or adds one option.
 - [x] `subscriber.WithFilter(func(T) bool)`. The filter runs in `Broadcast`'s goroutine before `acquire`, so a message
   the subscriber skips costs a func call instead of a wake-up (~1 µs). It is neither reported nor counted, including in
   `Broadcast`'s return value.
-  - [ ] A `filter` package, importing nothing from the library, for readings that repeat themselves:
+  - [x] A `filter` package, importing nothing from the library, for readings that repeat themselves:
     `filter.Changed(func(prev, next T) bool)` passes a reading only once it moved past a threshold (a deadband), and
     `filter.Every(d)` passes at most one per period. Concurrent `Broadcast`s may call a filter at once, so these keep
     their state in an atomic or behind a mutex, and "since the last one" is then approximate.

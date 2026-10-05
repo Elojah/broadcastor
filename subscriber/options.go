@@ -101,7 +101,8 @@ func WithEvictAfter[T any](n int) Option[T] {
 // anything else, so a skipped message costs a call instead of waking the subscriber up, and concurrent Broadcasts may
 // call it at once. A skipped message is neither reported nor counted: not in Stats, nor towards WithEvictAfter, nor in
 // Broadcast's return value. Each WithFilter adds a filter, called in order until one rejects the message, so a filter
-// sees only the messages those before it kept. A nil keep keeps every message.
+// sees only the messages those before it kept. A nil keep keeps every message. Package filter holds filters for
+// readings that repeat themselves.
 func WithFilter[T any](keep func(msg T) bool) Option[T] {
 	return func(config *config[T]) {
 		if keep == nil {

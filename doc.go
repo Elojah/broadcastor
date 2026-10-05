@@ -31,7 +31,8 @@
 // holds up those after it. subscriber.WithBuffer, message.WithParallel, message.WithAsync and message.WithNonBlocking
 // change that, and subscriber.WithAsyncLimit bounds the async sends to a subscriber. Broadcast gives up on a subscriber
 // once its ctx is done or the message's timeout runs out (message.WithTimeout, subscriber.WithTimeout).
-// subscriber.WithFilter skips messages before any send, so the subscriber never wakes up for them.
+// subscriber.WithFilter skips messages before any send, so the subscriber never wakes up for them, and package filter
+// holds filters for readings that repeat themselves.
 //
 // # Ordering
 //
