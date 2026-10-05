@@ -294,6 +294,49 @@ func TestSubscriberWithMiddleware_RetryContextDone(t *testing.T) {
 	})
 }
 
+// Given the same store, middleware.History and subscriber.WithDeadLetters put each message in it once: those handled
+// with a nil Err, the others with the error about them.
+func TestSubscriberWithMiddleware_History(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := broadcastor.NewBroadcastor[int]()
+		history := &recordStore{}
+		id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
+			switch msg {
+			case 2:
+				return handleError(msg)
+			case 3:
+				panic(handleError(msg))
+			default:
+				return nil
+			}
+		},
+			subscriber.WithMiddleware(middleware.Recover[int](), middleware.History[int](history)),
+			subscriber.WithDeadLetters[int](history),
+		)
+
+		for msg := 1; msg <= 4; msg++ {
+			b.Broadcast(t.Context(), msg)
+		}
+		unsubscribe(t, b, id)
+		synctest.Wait()
+
+		records := history.messages()
+		if len(records) != 4 {
+			t.Fatalf("store got %v, want a single record for each of messages 1 to 4", records)
+		}
+		// All from the subscriber's goroutine, so in message order.
+		for i, want := range []error{nil, handleError(2), subscriber.ErrPanic, nil} {
+			msg := i + 1
+			if r := records[i]; r.SubscriberID != id || r.Message != msg || !errors.Is(r.Err, want) {
+				t.Errorf("record %d is for subscriber %s and message %d with error %v, want %s, %d and %v",
+					i, r.SubscriberID, r.Message, r.Err, id, msg, want)
+			}
+		}
+	})
+}
+
 // Middlewares have no effect on SubscribeSeq, whose loop body takes the place of handle.
 func TestSubscriberWithMiddleware_SubscribeSeq(t *testing.T) {
 	t.Parallel()

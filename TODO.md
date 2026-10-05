@@ -87,7 +87,7 @@ Each item changes one function or adds one option.
   - `Unsubscribe`'s ctx, which is unused: drop it, or make it wait for that one subscriber's goroutine, like
     `Shutdown`.
 - [x] Check that `store.Queue` works with a durable backend before freezing it. That is what store-and-forward across
-  restarts relies on. It does with a Redis stream (`examples/18-redis`), where `Drain` stops up to a second after ctx
+  restarts relies on. It does with a Redis stream (`examples/19-redis`), where `Drain` stops up to a second after ctx
   is done, since go-redis does not end a blocking read when ctx is done.
   - [ ] A durable store keeps only the text of `Record.Err`, so `errors.Is(entry.Err, subscriber.ErrTimeout)` no
     longer holds once read back. Decide whether `Record` should also carry which sentinel its error matches.
@@ -100,7 +100,8 @@ Each item changes one function or adds one option.
   fan-out, and handle, `SubscribeSeq` or a store can build them in user code. `WithFilter` is the only part kept,
   because it saves wake-ups.
 - Ordering by the messages' own key (`WithOrder`) and replay (`WithHistory`, `WithReplay`) were in the core, and were
-  removed: they cost more invariants than they were worth.
+  removed: they cost more invariants than they were worth. A history of every message a subscriber handles or loses
+  is `middleware.History` and `subscriber.WithDeadLetters` given the same store.
 - An error channel or `WithErrorStorage`: an error handler that puts errors into a `store.Ring` already does it.
 - Ordered async as a mode of its own: see `WithDropOldest` above.
 - At-least-once delivery with acks and visibility timeouts, and transports such as Redis, NATS or Postgres. Those make

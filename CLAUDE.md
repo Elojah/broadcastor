@@ -9,11 +9,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `broadcastor` (root): `Broadcastor`, `ErrClosed`, `SubscriberNotFoundError`.
 - `subscriber`: `Subscriber`, the options for `Subscribe`/`SubscribeSeq`/`Unsubscribe`, `Handler`/`Middleware`, `Store`/`Record`, `Stats`, and the errors about messages.
 - `message`: `Message`, `Config`, `Delivery`, the options for `Broadcast`.
-- `middleware` (`Recover`, `WrapError`, `Retry`), `store` (`Queue`, `Ring`, `Drain`, `Enqueue`, `Filter`), `pkg/gate`, `examples/`.
+- `middleware` (`Recover`, `History`, `WrapError`, `Retry`), `store` (`Queue`, `Ring`, `Drain`, `Enqueue`, `Filter`), `pkg/gate`, `examples/`.
 
 Imports go one way: `broadcastor` → `subscriber` → `message`. `middleware` and `store` import `subscriber`, never `broadcastor`. Planned work is in TODO.md.
 
-`examples/18-redis` is a module of its own (`replace` to `../..`), so that go-redis and miniredis stay out of the library's go.mod. `go test ./...` at the root skips it: `make` lists it in `MODULES`, and `go test -C examples/18-redis ./...` tests it alone.
+`examples/19-redis` is a module of its own (`replace` to `../..`), so that go-redis and miniredis stay out of the library's go.mod. `go test ./...` at the root skips it: `make` lists it in `MODULES`, and `go test -C examples/19-redis ./...` tests it alone.
 
 ## Commands
 
@@ -56,10 +56,10 @@ Any change to channels, removal or error reporting must keep these, and pass `ma
 - The `Broadcast` ctx only bounds the wait. Async sends keep using it after `Broadcast` returns. That is documented (`message.WithAsync`, `examples/14-context`) rather than changed: detaching them automatically would leave no way to cancel sends piling up behind a stuck subscriber.
 - `send` tries a send without waiting before its select, so a ready subscriber takes the message even once ctx is done. `selectgo` locks every channel it waits on, and concurrent `Broadcast`s often share a ctx, whose `Done` channel then serialised them: the select alone, with `done` added, made `BenchmarkBroadcast_Concurrent` up to 10× slower than with the try.
 - `message.WithContext` replaces the subscriber's ctx for one message, without merging. nil means none, which overrides a default (staticcheck SA1012 is silenced in the test that does it).
-- The library applies no middleware of its own. The recommended order is `Recover`, `WrapError`, `Retry`, then the user's. Middlewares don't apply to `SubscribeSeq`.
+- The library applies no middleware of its own. The recommended order is `Recover`, `History`, `WrapError`, `Retry`, then the user's. Middlewares don't apply to `SubscribeSeq`.
 - `Stats` covers the subscribers still in the map, with no totals across unsubscribes: those would need counters every subscriber goroutine shares, or a fold at removal racing the late `ClosedError`s. So there is no `Closed` counter, since no snapshot could see one. OpenTelemetry goes in its own module.
 - `message.Config` has no `T` (`message.Option[T]` keeps it only for the public API), which is why there is no message-level store.
-- In `store`, `Enqueue`'s `Put` and `Drain`'s dead-letter `Put` and `Ack` get `context.WithoutCancel`, like `report`'s `Put`: a done ctx is often why a message is stored, and an entry `Drain` handled must be acked even if ctx ended meanwhile (`TestDrain_AckOnceHandled`). An entry whose handle failed once ctx is done stays in the queue, for the next `Drain`.
+- In `store`, `Enqueue`'s `Put` and `Drain`'s dead-letter `Put` and `Ack` get `context.WithoutCancel`, like `report`'s `Put` and `middleware.History`'s: a done ctx is often why a message is stored, and an entry `Drain` handled must be acked even if ctx ended meanwhile (`TestDrain_AckOnceHandled`). An entry whose handle failed once ctx is done stays in the queue, for the next `Drain`.
 
 ## Tests
 
@@ -69,6 +69,6 @@ Any change to channels, removal or error reporting must keep these, and pass `ma
 - A goroutine blocked on a mutex is not durably blocked, so `synctest.Wait()` would hang: `pkg/gate` tests and `TestUnsubscribe_SeveralThenDrain` run in real time.
 - `TestStress` runs in real time, so that timeouts race sends, and checks what must hold under any schedule. Every goroutine of a round carries a pprof label (`pprof.Do`), which the library's goroutines inherit, so it can check that none is left once closed although other tests run beside it. It polls until `Stats` add up rather than sleeping.
 - Add `Recover` or `WrapError` only to check a `PanicError` or `HandleError`. Other tests check `handle`'s raw error.
-- Examples (`examples/NN-name/`, listed in the README) each have an `Example()` in `main_test.go`. `18-redis`'s runs against miniredis, in memory, so CI needs no Redis. They run in real time, so their output must not depend on scheduling: synchronise with channels or a `WaitGroup`, or use `// Unordered output:`. A slow `handle` waits on a `release` channel, never sleeps.
+- Examples (`examples/NN-name/`, listed in the README) each have an `Example()` in `main_test.go`. `19-redis`'s runs against miniredis, in memory, so CI needs no Redis. They run in real time, so their output must not depend on scheduling: synchronise with channels or a `WaitGroup`, or use `// Unordered output:`. A slow `handle` waits on a `release` channel, never sleeps.
 - `BenchmarkBroadcast` waits for every subscriber on each op, and subscribes with `context.WithoutCancel(b.Context())`, since `b.Context()` is done before `Cleanup`.
 - `BenchmarkBroadcast_Throughput`, `_Concurrent` and `_Churn` wait once, after the last `Broadcast`, so they loop over `b.N` rather than `b.Loop`, which would stop the timer before that wait: don't modernize them. Each subscriber counts its own messages (`subscribeCounting`), since a shared `WaitGroup` would contend. They subscribe with `b.Context()`, which ends after each run of the benchmark function.

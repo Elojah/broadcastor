@@ -18,24 +18,24 @@ import (
 // is done.
 const nextWait = time.Second
 
-var _ store.Queue[int] = (*deadLetters[int])(nil)
+var _ store.Queue[int] = (*stream[int])(nil)
 
-// deadLetters is a store.Queue kept in a Redis stream, where it outlives the process: Put adds every message a
-// subscriber loses, along with the subscriber's ID and the error's text, and store.Drain hands them back, oldest first.
-// The stream keeps about the last maxLen of them.
-type deadLetters[T any] struct {
+// stream is a store.Queue kept in a Redis stream, where it outlives the process: Put adds each record, along with the
+// subscriber's ID and the error's text, and store.Drain hands them back, oldest first. The stream keeps about the last
+// maxLen of them.
+type stream[T any] struct {
 	client *redis.Client
 	key    string
 	maxLen int64
 }
 
-func newDeadLetters[T any](client *redis.Client, key string, maxLen int64) *deadLetters[T] {
-	return &deadLetters[T]{client: client, key: key, maxLen: maxLen}
+func newStream[T any](client *redis.Client, key string, maxLen int64) *stream[T] {
+	return &stream[T]{client: client, key: key, maxLen: maxLen}
 }
 
-// Put adds r to the stream, with the text of its error if it has one: store.Enqueue puts none. Its ctx is never done,
-// so the client's read and write timeouts bound it.
-func (d *deadLetters[T]) Put(ctx context.Context, r subscriber.Record[T]) error {
+// Put adds r to the stream, with the text of its error if it has one: middleware.History and store.Enqueue put none.
+// Its ctx is never done, so the client's read and write timeouts bound it.
+func (s *stream[T]) Put(ctx context.Context, r subscriber.Record[T]) error {
 	msg, err := json.Marshal(r.Message)
 	if err != nil {
 		return err
@@ -45,39 +45,57 @@ func (d *deadLetters[T]) Put(ctx context.Context, r subscriber.Record[T]) error 
 		values = append(values, "error", r.Err.Error())
 	}
 
-	return d.client.XAdd(ctx, &redis.XAddArgs{Stream: d.key, MaxLen: d.maxLen, Approx: true, Values: values}).Err()
+	return s.client.XAdd(ctx, &redis.XAddArgs{Stream: s.key, MaxLen: s.maxLen, Approx: true, Values: values}).Err()
 }
 
 // Next returns the oldest entry not yet acked, waiting for one, or ctx.Err() once ctx is done, within nextWait.
-func (d *deadLetters[T]) Next(ctx context.Context) (store.Entry[T], error) {
+func (s *stream[T]) Next(ctx context.Context) (store.Entry[T], error) {
 	for {
 		if err := ctx.Err(); err != nil {
 			return store.Entry[T]{}, err
 		}
 		// After ID 0 comes the oldest entry, since Ack deletes those handled.
-		streams, err := d.client.XRead(ctx, &redis.XReadArgs{Streams: []string{d.key, "0"}, Count: 1, Block: nextWait}).Result()
+		streams, err := s.client.XRead(ctx, &redis.XReadArgs{Streams: []string{s.key, "0"}, Count: 1, Block: nextWait}).Result()
 		switch {
 		case errors.Is(err, redis.Nil): // none within nextWait
 		case err != nil:
 			return store.Entry[T]{}, err
 		default:
-			return d.decode(streams[0].Messages[0])
+			return s.decode(streams[0].Messages[0])
 		}
 	}
 }
 
 // Ack deletes the entry with the given ID, if the stream still holds it.
-func (d *deadLetters[T]) Ack(ctx context.Context, id string) error {
-	return d.client.XDel(ctx, d.key, id).Err()
+func (s *stream[T]) Ack(ctx context.Context, id string) error {
+	return s.client.XDel(ctx, s.key, id).Err()
 }
 
 // Len returns how many entries the stream holds.
-func (d *deadLetters[T]) Len(ctx context.Context) (int64, error) {
-	return d.client.XLen(ctx, d.key).Result()
+func (s *stream[T]) Len(ctx context.Context) (int64, error) {
+	return s.client.XLen(ctx, s.key).Result()
+}
+
+// All returns every entry the stream holds, oldest first, without acking any.
+func (s *stream[T]) All(ctx context.Context) ([]store.Entry[T], error) {
+	messages, err := s.client.XRange(ctx, s.key, "-", "+").Result()
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]store.Entry[T], 0, len(messages))
+	for _, x := range messages {
+		entry, err := s.decode(x)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, entry)
+	}
+
+	return entries, nil
 }
 
 // decode reads back an entry Put added. go-redis reads every value as a string.
-func (d *deadLetters[T]) decode(x redis.XMessage) (store.Entry[T], error) {
+func (s *stream[T]) decode(x redis.XMessage) (store.Entry[T], error) {
 	entry := store.Entry[T]{ID: x.ID}
 	id, _ := x.Values["subscriber"].(string)
 	msg, _ := x.Values["message"].(string)

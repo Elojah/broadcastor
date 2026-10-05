@@ -13,7 +13,7 @@ its own goroutine and handles its messages one at a time.
 - **Delivery modes**: sync, buffered, parallel, async or non-blocking, with timeouts per message or per subscriber.
 - **Typed errors**: every message a subscriber misses reaches its error handlers, and can be kept in a dead-letter
   store.
-- **Middleware**: recover panics, wrap errors, retry with backoff, or write your own.
+- **Middleware**: recover panics, keep a history, wrap errors, retry with backoff, or write your own.
 - **Operations**: evict stuck subscribers, and read each subscriber's counters at any time.
 - One dependency: `github.com/google/uuid`.
 
@@ -65,8 +65,8 @@ Options live in the package of what they configure:
 | [`broadcastor`](https://pkg.go.dev/github.com/elojah/broadcastor) | `Broadcastor`. |
 | [`subscriber`](https://pkg.go.dev/github.com/elojah/broadcastor/subscriber) | The options for `Subscribe`, `SubscribeSeq` and `Unsubscribe`, the error types and `Stats`. |
 | [`message`](https://pkg.go.dev/github.com/elojah/broadcastor/message) | The options for `Broadcast`. |
-| [`middleware`](https://pkg.go.dev/github.com/elojah/broadcastor/middleware) | `Recover`, `WrapError` and `Retry`. |
-| [`store`](https://pkg.go.dev/github.com/elojah/broadcastor/store) | Dead-letter queues (`Ring`, `Drain`, `Enqueue`, `Filter`). |
+| [`middleware`](https://pkg.go.dev/github.com/elojah/broadcastor/middleware) | `Recover`, `History`, `WrapError` and `Retry`. |
+| [`store`](https://pkg.go.dev/github.com/elojah/broadcastor/store) | Queues for dead letters and history (`Ring`, `Drain`, `Enqueue`, `Filter`). |
 
 ## Delivery
 
@@ -126,17 +126,18 @@ logged := func(next subscriber.Handler[string]) subscriber.Handler[string] {
 }
 
 id, err := b.Subscribe(ctx, handle, subscriber.WithMiddleware(
-	middleware.Recover[string](),   // a panic becomes a *subscriber.PanicError
-	middleware.WrapError[string](), // an error becomes a *subscriber.HandleError
+	middleware.Recover[string](),        // a panic becomes a *subscriber.PanicError
+	middleware.History[string](history), // each message handled is put in history
+	middleware.WrapError[string](),      // an error becomes a *subscriber.HandleError
 	middleware.Retry[string](middleware.RetryPolicy{Attempts: 3, Delay: 10 * time.Millisecond, Multiplier: 2}),
 	logged,
 ))
 ```
 
-Keep that order: `Recover` first also catches panics in every later middleware, and `Retry` after `WrapError` retries
-`handle`'s raw errors, so only the last one is wrapped and panics are not retried. Middlewares run in the subscriber's
-goroutine, so a slow one, or `Retry` waiting, holds the subscriber up like a slow `handle`. They don't apply to
-`SubscribeSeq`.
+Keep that order: `Recover` first also catches panics in every later middleware, `History` before `WrapError` and
+`Retry` neither wraps nor retries a failed `Put`, and `Retry` after `WrapError` retries `handle`'s raw errors, so only
+the last one is wrapped and panics are not retried. Middlewares run in the subscriber's goroutine, so a slow one, or
+`Retry` waiting, holds the subscriber up like a slow `handle`. They don't apply to `SubscribeSeq`.
 
 ## Dead letters
 
@@ -166,6 +167,21 @@ Any type with a `Put(ctx, subscriber.Record[T]) error` method is a store. `Put` 
 lost, so `Put` must bound itself. When it fails, the error handlers get a `*subscriber.StoreError`. `store.Filter`
 keeps some records out of a store.
 
+`middleware.History` puts every message the subscriber handles in a store, with a nil `Err`. Given the same store,
+`WithDeadLetters` puts the others, so the store gets each message once, handled or lost:
+
+```go
+history := store.NewRing[string](1024)
+id, err := b.Subscribe(ctx, handle,
+	subscriber.WithMiddleware(middleware.History[string](history)),
+	subscriber.WithDeadLetters[string](history),
+)
+```
+
+`History` puts once `handle` has returned, from the subscriber's goroutine, so a slow `Put` holds the subscriber up like
+a slow `handle`. When `Put` fails, `History` returns its error. Losses are put from wherever they happen, `Broadcast`
+included, so the store may get them out of order.
+
 With `store.Enqueue` as the handle, the subscriber only queues each message, and `store.Drain` hands them to the real
 sink in order, from one goroutine. That is store and forward: `Broadcast` never waits for the sink.
 
@@ -177,7 +193,7 @@ retry := middleware.Retry[string](middleware.RetryPolicy{Attempts: math.MaxInt, 
 go store.Drain(ctx, queue, retry(uplink), nil)
 ```
 
-[`18-redis`](examples/18-redis/dead_letters.go) keeps such a queue in a Redis stream, which outlives a restart.
+[`19-redis`](examples/19-redis/stream.go) keeps such a queue in a Redis stream, which outlives a restart.
 
 ## Stats
 
@@ -255,10 +271,11 @@ The same goes for a subscriber whose default is `message.WithAsync`.
 | [`15-dead-letters`](examples/15-dead-letters/main.go) | `subscriber.WithDeadLetters`, with the messages `Close` discards. |
 | [`16-stats`](examples/16-stats/main.go) | `Broadcastor.Stats`, for a stuck subscriber and a failing one. |
 | [`17-evict`](examples/17-evict/main.go) | `subscriber.WithEvictAfter` and `*subscriber.EvictedError`. |
-| [`18-redis`](examples/18-redis/main.go) | A dead-letter queue in Redis, across a restart. |
+| [`18-history`](examples/18-history/main.go) | `middleware.History` and `subscriber.WithDeadLetters` sharing a store. |
+| [`19-redis`](examples/19-redis/main.go) | A dead-letter queue and a history in Redis, across a restart. |
 
-`18-redis` is a module of its own, so that the library does not depend on go-redis. Run it with
-`go run -C examples/18-redis .`, against the Redis at `REDIS_ADDR` (`localhost:6379` by default).
+`19-redis` is a module of its own, so that the library does not depend on go-redis. Run it with
+`go run -C examples/19-redis .`, against the Redis at `REDIS_ADDR` (`localhost:6379` by default).
 
 ## Development
 

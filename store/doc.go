@@ -1,5 +1,5 @@
-// Package store holds ready-made subscriber.Store implementations, for subscriber.WithDeadLetters, to read lost
-// messages back from:
+// Package store holds ready-made subscriber.Store implementations, for subscriber.WithDeadLetters and
+// middleware.History, to read messages back from:
 //
 //	lost := store.NewRing[string](1024)
 //	id, err := b.Subscribe(ctx, handle, subscriber.WithDeadLetters[string](lost))
