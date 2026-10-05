@@ -14,7 +14,7 @@ its own goroutine and handles its messages one at a time.
 - **Typed errors**: every message a subscriber misses reaches its error handlers, and can be kept in a dead-letter
   store.
 - **Middleware**: recover panics, keep a history, wrap errors, retry with backoff, or write your own.
-- **Operations**: evict stuck subscribers, and read each subscriber's counters at any time.
+- **Operations**: evict stuck subscribers, bound async sends, and read each subscriber's counters at any time.
 - One dependency: `github.com/google/uuid`.
 
 ```sh
@@ -85,6 +85,9 @@ The mode is a message option, given to `Broadcast` or as a subscriber's default 
 
 ¹ For `Broadcast`s from one goroutine.
 
+Each async send holds a goroutine until the subscriber takes the message. `subscriber.WithAsyncLimit(n)` drops an async
+message once n sends are under way to the subscriber, and `Stats.Sending` shows how many are.
+
 Delivery is at most once: a subscriber that misses a message never gets it later, but its error handlers learn why
 (see [Errors](#errors)), and a [dead-letter store](#dead-letters) can keep it. `Broadcast` gives up on a subscriber once
 its ctx is done or the message's timeout runs out. `message.WithTimeout(d)` gives each subscriber `d` of its own, while
@@ -104,7 +107,7 @@ Errors go to error handlers, and are discarded when there are none:
 | `*subscriber.HandleError` | The same, wrapped by `middleware.WrapError`. |
 | `*subscriber.PanicError` | `handle` panicked, and `middleware.Recover` recovered it. Without it, the program crashes. |
 | `*subscriber.TimeoutError` | `Broadcast` gave up waiting. |
-| `*subscriber.DroppedError` | A non-blocking `Broadcast` found the subscriber busy. |
+| `*subscriber.DroppedError` | A non-blocking `Broadcast` found the subscriber busy, or an async one found `subscriber.WithAsyncLimit` sends under way. |
 | `*subscriber.ClosedError` | The subscriber was unsubscribed before handling the message. |
 | `*subscriber.EvictedError` | Wraps the loss that evicted the subscriber (`subscriber.WithEvictAfter`). |
 | `*subscriber.StoreError` | Wraps a loss the dead-letter store failed to keep. |
@@ -214,6 +217,7 @@ for _, s := range b.Stats() {
 | Field | What |
 | --- | --- |
 | `Queued`, `Buffer` | Messages in the subscriber's buffer, and its size. |
+| `Sending` | Async sends under way to the subscriber. |
 | `Delivered` | Messages the subscriber took. |
 | `Handled`, `Failed` | Messages `handle` returned nil or an error for. |
 | `TimedOut`, `Dropped` | Messages lost as a `TimeoutError` or a `DroppedError`. |

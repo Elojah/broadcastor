@@ -17,6 +17,9 @@ type Stats struct {
 	// Queued is how many messages wait in the subscriber's buffer, which has room for Buffer (WithBuffer).
 	Queued int
 	Buffer int
+	// Sending is how many async sends (message.WithAsync) are under way to the subscriber, which WithAsyncLimit
+	// bounds.
+	Sending int
 
 	// Delivered counts the messages the subscriber took.
 	Delivered uint64
@@ -42,6 +45,9 @@ type counters struct {
 	timedOut   atomic.Uint64
 	dropped    atomic.Uint64
 	handleTime atomic.Int64
+
+	// sending counts each async send from before its goroutine starts until send has returned.
+	sending atomic.Int64
 }
 
 // handle counts a message handle took d on, and failed on if err is not nil.

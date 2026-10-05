@@ -26,7 +26,8 @@ func WithParallel[T any]() Option[T] {
 }
 
 // WithAsync makes Broadcast send to every subscriber from its own goroutine and return right away. A slow subscriber
-// holds up nobody, but successive messages may arrive out of order.
+// holds up nobody, but successive messages may arrive out of order. Each send holds a goroutine until the subscriber
+// takes the message, which subscriber.WithAsyncLimit bounds.
 //
 // The sends keep using ctx after Broadcast returns, so cancelling it, as a request's deferred cancel does, drops every
 // message not taken yet. To let the sends outlive the caller:

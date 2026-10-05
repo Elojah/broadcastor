@@ -249,6 +249,9 @@ func (s *stress) subscribe(ctx context.Context, t *testing.T) *stressSub {
 		options = append(options, subscriber.WithUnsubscribeOptions[int](subscriber.WithUnsubscribeDiscard()))
 	}
 	if randN(2) == 0 {
+		options = append(options, subscriber.WithAsyncLimit[int](1+randN(2)))
+	}
+	if randN(2) == 0 {
 		sub.evictAfter = 1 + randN(3)
 		options = append(options, subscriber.WithEvictAfter[int](sub.evictAfter))
 	}

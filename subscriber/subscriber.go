@@ -54,6 +54,7 @@ type config[T any] struct {
 	middlewares         []Middleware[T]
 	detached            bool
 	evictAfter          int
+	asyncLimit          int
 }
 
 // New returns a subscriber holding the subscription's reference, which Unsubscribe drops.
@@ -103,7 +104,17 @@ func (s *Subscriber[T]) Deliver(ctx context.Context, value T, options ...message
 	}
 
 	if m.Config.Delivery == message.DeliveryAsync {
-		go s.send(ctx, m)
+		if !s.startSending() {
+			defer s.release()
+			s.counters.dropped.Add(1)
+			s.lose(m, &DroppedError[T]{SubscriberID: s.id, Message: value})
+
+			return false, nil
+		}
+		go func() {
+			s.send(ctx, m)
+			s.counters.sending.Add(-1)
+		}()
 
 		return true, nil
 	}
@@ -193,6 +204,7 @@ func (s *Subscriber[T]) Stats() Stats {
 		SubscriberID: s.id,
 		Queued:       len(s.ch),
 		Buffer:       cap(s.ch),
+		Sending:      int(s.counters.sending.Load()),
 		Delivered:    s.counters.delivered.Load(),
 		Handled:      s.counters.handled.Load(),
 		Failed:       s.counters.failed.Load(),
@@ -274,6 +286,25 @@ func (s *Subscriber[T]) lose(m message.Message[T], err error) {
 		err = &EvictedError[T]{SubscriberID: s.id, Message: m.Value, Err: err}
 	}
 	s.report(m, err)
+}
+
+// startSending counts an async send under way, unless WithAsyncLimit's are already.
+func (s *Subscriber[T]) startSending() bool {
+	limit := int64(s.config.asyncLimit)
+	if limit <= 0 {
+		s.counters.sending.Add(1)
+
+		return true
+	}
+	for {
+		n := s.counters.sending.Load()
+		if n >= limit {
+			return false
+		}
+		if s.counters.sending.CompareAndSwap(n, n+1) {
+			return true
+		}
+	}
 }
 
 // acquire takes a reference for a Broadcast, unless ch is already closed.

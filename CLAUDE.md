@@ -56,6 +56,9 @@ Any change to channels, removal or error reporting must keep these, and pass `ma
 
 - The `Broadcast` ctx only bounds the wait. Async sends keep using it after `Broadcast` returns. That is documented (`message.WithAsync`, `examples/14-context`) rather than changed: detaching them automatically would leave no way to cancel sends piling up behind a stuck subscriber.
 - `send` tries a send without waiting before its select, so a ready subscriber takes the message even once ctx is done. `selectgo` locks every channel it waits on, and concurrent `Broadcast`s often share a ctx, whose `Done` channel then serialised them: the select alone, with `done` added, made `BenchmarkBroadcast_Concurrent` up to 10× slower than with the try.
+- `subscriber.WithAsyncLimit` is unlimited by default until v1.0: a limit drops messages silently without an error
+  handler, whereas `Stats.Sending` shows a pile-up. A refused async send is a `*DroppedError`, counted in `Dropped`
+  and towards `WithEvictAfter`.
 - `message.WithContext` replaces the subscriber's ctx for one message, without merging. nil means none, which overrides a default (staticcheck SA1012 is silenced in the test that does it).
 - The library applies no middleware of its own. The recommended order is `Recover`, `History`, `WrapError`, `Retry`, then the user's.
 - `SubscribeSeq` runs `Consume` and a `relay`, rather than reading the channel in the loop: calling middlewares around `yield` would crash on `Recover` (Go forbids an iterator to swallow a loop body panic) and on any middleware calling next after a break. The cost is a goroutine per `SubscribeSeq` and two handoffs per message: 1.0 to 2.1 µs per message unbuffered, 0.6 to 1.9 µs with a buffer of 64. `Retry` never retries `ErrClosed`, which a loop that ended returns. The loop body gets no ctx, only `fail`.

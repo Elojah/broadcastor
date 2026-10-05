@@ -566,6 +566,51 @@ func TestMessageWithAsync_ContextDone(t *testing.T) {
 	})
 }
 
+// Once a stuck subscriber has subscriber.WithAsyncLimit async sends under way, an async message is dropped right away,
+// and Broadcast does not count it. Once the subscriber has taken them, there is room again.
+func TestSubscriberWithAsyncLimit(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := broadcastor.NewBroadcastor[int]()
+		stuck := &recorder[int]{hold: make(chan struct{})}
+		losses := &recorder[string]{}
+		id := subscribe(t, b, stuck.handle, subscriber.WithAsyncLimit[int](2),
+			subscriber.WithErrorHandler[int](recordLosses(t, losses)))
+
+		b.Broadcast(t.Context(), 1) // stuck holds on to 1, so 2 and 3 wait for it, and 4 is dropped
+		taken := make([]int, 0, 3)
+		for msg := 2; msg <= 4; msg++ {
+			taken = append(taken, b.Broadcast(t.Context(), msg, message.WithAsync[int]()))
+		}
+		if want := []int{1, 1, 0}; !slices.Equal(taken, want) {
+			t.Errorf("async Broadcasts of 2 to 4 handed them to %v subscribers, want %v", taken, want)
+		}
+		synctest.Wait()
+		if got, want := losses.messages(), []string{"4 dropped"}; !slices.Equal(got, want) {
+			t.Errorf("error handler got %q, want %q", got, want)
+		}
+		checkStats(t, b, id, subscriber.Stats{Sending: 2, Delivered: 1, Dropped: 1})
+
+		stuck.release()
+		synctest.Wait()
+		checkStats(t, b, id, subscriber.Stats{Delivered: 3, Handled: 3, Dropped: 1})
+		if n := b.Broadcast(t.Context(), 5, message.WithAsync[int]()); n != 1 {
+			t.Errorf("async Broadcast once the sends were taken handed 5 to %d subscribers, want 1", n)
+		}
+		synctest.Wait()
+		unsubscribe(t, b, id)
+		synctest.Wait()
+
+		// 2 and 3 in any order.
+		got := stuck.messages()
+		slices.Sort(got)
+		if want := []int{1, 2, 3, 5}; !slices.Equal(got, want) {
+			t.Errorf("handle got %v, want %v", got, want)
+		}
+	})
+}
+
 // A message's error handler is given the errors about that message only, with the ctx passed to Subscribe, and the
 // failing subscriber's own error handler still gets them too.
 func TestMessageWithErrorHandler(t *testing.T) {

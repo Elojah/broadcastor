@@ -97,6 +97,17 @@ func WithEvictAfter[T any](n int) Option[T] {
 	}
 }
 
+// WithAsyncLimit bounds the async sends (message.WithAsync) under way to the subscriber at n. Each one holds a
+// goroutine and its message until the subscriber takes it or the Broadcast ctx ends, so without a timeout a stuck
+// subscriber piles them up. Past n, an async message is dropped right away with a *DroppedError, which counts towards
+// WithEvictAfter. 0 or less means no limit, the default: a limit drops messages silently without an error handler,
+// whereas Stats.Sending shows a pile-up.
+func WithAsyncLimit[T any](n int) Option[T] {
+	return func(config *config[T]) {
+		config.asyncLimit = n
+	}
+}
+
 // WithUnsubscribeDiscard makes the subscriber report every message it takes once unsubscribed as a *ClosedError,
 // instead of handling it, and ends a SubscribeSeq loop. Unsubscribe still does not wait, so handle may yet run for one
 // message. It has no effect if the subscriber was already unsubscribed.

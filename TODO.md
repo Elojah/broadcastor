@@ -25,7 +25,7 @@ for 1 to 1000 subscribers:
 
 Each item changes one function or adds one option.
 
-- [ ] Bound async sends: `subscriber.WithAsyncLimit(n)`. Each async message to a stuck subscriber parks a goroutine
+- [x] Bound async sends: `subscriber.WithAsyncLimit(n)`. Each async message to a stuck subscriber parks a goroutine
   that holds the message until the subscriber takes it or ctx ends. With `context.Background()` and no timeout, that
   may never happen, so the goroutines pile up without limit: on a gateway with little memory, the likeliest way to run
   out of it. Past n sends in flight, an async message is dropped with a `*DroppedError`. It needs an atomic counter per
