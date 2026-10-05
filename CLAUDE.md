@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `broadcastor` (root): `Broadcastor`, `ErrClosed`, `SubscriberNotFoundError`.
 - `subscriber`: `Subscriber`, the options for `Subscribe`/`SubscribeSeq`/`Unsubscribe`, `Handler`/`Middleware`, `Store`/`Record`, `Stats`, and the errors about messages.
 - `message`: `Message`, `Config`, `Delivery`, the options for `Broadcast`.
-- `middleware` (`Recover`, `History`, `WrapError`, `Retry`), `store` (`Queue`, `Ring`, `Drain`, `Enqueue`, `Filter`), `filter` (`Changed`, `Every`), `pkg/gate`, `examples/`.
+- `middleware` (`Recover`, `History`, `MaxAge`, `WrapError`, `Retry`), `store` (`Queue`, `Ring`, `Drain`, `Enqueue`, `Filter`), `filter` (`Changed`, `Every`), `pkg/gate`, `examples/`.
 
 Imports go one way: `broadcastor` → `subscriber` → `message`. `middleware` and `store` import `subscriber`, never `broadcastor`. `filter` imports nothing from the library: its filters are plain `func(T) bool`. Planned work is in TODO.md.
 
@@ -64,7 +64,7 @@ Any change to channels, removal or error reporting must keep these, and pass `ma
   `&config` to each option, which moved it to the heap: a `Broadcast` with no options now allocates nothing in sync,
   buffered and non-blocking modes, and one with options once (`TestBroadcast_Allocs`).
 - `message.WithContext` replaces the subscriber's ctx for one message, without merging. nil means none, which overrides a default (staticcheck SA1012 is silenced in the test that does it).
-- The library applies no middleware of its own. The recommended order is `Recover`, `History`, `WrapError`, `Retry`, then the user's.
+- The library applies no middleware of its own. The recommended order is `Recover`, `History`, `MaxAge`, `WrapError`, `Retry`, then the user's. `MaxAge` goes before `Retry` so that an expired message is not retried, and before `WrapError` since its `*ExpiredError` already names the subscriber and the message.
 - `SubscribeSeq` runs `Consume` and a `relay`, rather than reading the channel in the loop: calling middlewares around `yield` would crash on `Recover` (Go forbids an iterator to swallow a loop body panic) and on any middleware calling next after a break. The cost is a goroutine per `SubscribeSeq` and two handoffs per message: 1.0 to 2.1 µs per message unbuffered, 0.6 to 1.9 µs with a buffer of 64. `Retry` never retries `ErrClosed`, which a loop that ended returns. The loop body gets no ctx, only `fail`.
 - `Stats` covers the subscribers still in the map, with no totals across unsubscribes: those would need counters every subscriber goroutine shares, or a fold at removal racing the late `ClosedError`s. So there is no `Closed` counter, since no snapshot could see one. OpenTelemetry goes in its own module.
 - `message.Config` has no `T` (`message.Option[T]` keeps it only for the public API), which is why there is no message-level store.

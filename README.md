@@ -14,7 +14,8 @@ its own goroutine and handles its messages one at a time.
 - **Filters**: a subscriber skips what it does not want before `Broadcast` wakes it up.
 - **Typed errors**: every message a subscriber misses reaches its error handlers, and can be kept in a dead-letter
   store.
-- **Middleware**: recover panics, keep a history, wrap errors, retry with backoff, or write your own.
+- **Middleware**: recover panics, keep a history, drop stale messages, wrap errors, retry with backoff, or write your
+  own.
 - **Operations**: evict stuck subscribers, bound async sends, and read each subscriber's counters at any time.
 - One dependency: `github.com/google/uuid`.
 
@@ -68,7 +69,7 @@ Options live in the package of what they configure:
 | [`broadcastor`](https://pkg.go.dev/github.com/elojah/broadcastor) | `Broadcastor`. |
 | [`subscriber`](https://pkg.go.dev/github.com/elojah/broadcastor/subscriber) | The options for `Subscribe`, `SubscribeSeq` and `Unsubscribe`, the error types and `Stats`. |
 | [`message`](https://pkg.go.dev/github.com/elojah/broadcastor/message) | The options for `Broadcast`. |
-| [`middleware`](https://pkg.go.dev/github.com/elojah/broadcastor/middleware) | `Recover`, `History`, `WrapError` and `Retry`. |
+| [`middleware`](https://pkg.go.dev/github.com/elojah/broadcastor/middleware) | `Recover`, `History`, `MaxAge`, `WrapError` and `Retry`. |
 | [`store`](https://pkg.go.dev/github.com/elojah/broadcastor/store) | Queues for dead letters and history (`Ring`, `Drain`, `Enqueue`, `Filter`). |
 | [`filter`](https://pkg.go.dev/github.com/elojah/broadcastor/filter) | Filters for `subscriber.WithFilter` (`Changed`, `Every`). |
 
@@ -121,6 +122,7 @@ Errors go to error handlers, and are discarded when there are none:
 | `handle`'s error, as is | `handle`, or its outermost middleware, failed. For `SubscribeSeq`, the error passed to `fail`. |
 | `*subscriber.HandleError` | The same, wrapped by `middleware.WrapError`. |
 | `*subscriber.PanicError` | `handle` panicked, and `middleware.Recover` recovered it. Without it, the program crashes. |
+| `*subscriber.ExpiredError` | `middleware.MaxAge` found the message too old to hand to `handle`. |
 | `*subscriber.TimeoutError` | `Broadcast` gave up waiting. |
 | `*subscriber.DroppedError` | A non-blocking `Broadcast` found the subscriber busy, or an async one found `subscriber.WithAsyncLimit` sends under way. |
 | `*subscriber.ClosedError` | The subscriber was unsubscribed before handling the message. |
@@ -156,7 +158,12 @@ id, err := b.Subscribe(ctx, handle, subscriber.WithMiddleware(
 
 Keep that order: `Recover` first also catches panics in every later middleware, `History` before `WrapError` and
 `Retry` neither wraps nor retries a failed `Put`, and `Retry` after `WrapError` retries `handle`'s raw errors, so only
-the last one is wrapped and panics are not retried. Middlewares run in the subscriber's goroutine, so a slow one, or
+the last one is wrapped and panics are not retried.
+
+`middleware.MaxAge(d, at)` does not hand `handle` a message older than `d`, such as a reading that waited behind a slow
+`handle`, and returns a `*subscriber.ExpiredError` instead, so the message counts as `Failed` and reaches the dead
+letters. `at` returns when the message was made, since the library stamps none. It goes between `History` and
+`WrapError`, so that an expired message is neither recorded as handled, wrapped, nor retried. Middlewares run in the subscriber's goroutine, so a slow one, or
 `Retry` waiting, holds the subscriber up like a slow `handle`.
 
 With `SubscribeSeq`, they wrap the loop body, which runs in the caller's goroutine, so `Retry` yields a message again.

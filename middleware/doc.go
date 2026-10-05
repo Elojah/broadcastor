@@ -9,5 +9,7 @@
 //
 // Give them in that order: Recover first also catches panics in later middlewares, History before WrapError and Retry
 // neither wraps nor retries a failed Put, and Retry after WrapError sees handle's raw errors, so only the last one is
-// wrapped and panics are not retried.
+// wrapped and panics are not retried. MaxAge, for messages that carry when they were made, goes between History and
+// WrapError: History does not record an expired message, its error already names the subscriber and the message, and
+// it is not retried.
 package middleware

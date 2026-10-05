@@ -337,6 +337,54 @@ func TestSubscriberWithMiddleware_History(t *testing.T) {
 	})
 }
 
+// middleware.MaxAge does not hand handle a message that waited too long behind a slow one: the error handlers get a
+// *subscriber.ExpiredError, the dead letters get the message, and it counts as Failed.
+func TestSubscriberWithMiddleware_MaxAge(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := broadcastor.NewBroadcastor[int]()
+		// Every message is made now.
+		made := time.Now()
+		handled := &recorder[int]{}
+		errs := &recorder[error]{}
+		lost := &recordStore{}
+		id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
+			handled.record(msg)
+			time.Sleep(2 * time.Second)
+
+			return nil
+		},
+			subscriber.WithBuffer[int](1),
+			subscriber.WithMiddleware(middleware.MaxAge(time.Second, func(int) time.Time { return made })),
+			subscriber.WithErrorHandler[int](func(_ context.Context, err error) { errs.record(err) }),
+			subscriber.WithDeadLetters[int](lost),
+		)
+
+		b.Broadcast(t.Context(), 1) // handle takes 2s on 1, so 2 waits 2s in the buffer
+		b.Broadcast(t.Context(), 2)
+		time.Sleep(2 * time.Second) // until handle is done with 1
+		synctest.Wait()
+
+		if got, want := handled.messages(), []int{1}; !slices.Equal(got, want) {
+			t.Errorf("handle got %v, want %v", got, want)
+		}
+		got := errs.messages()
+		var expired *subscriber.ExpiredError[int]
+		if len(got) != 1 || !errors.As(got[0], &expired) || expired.SubscriberID != id || expired.Message != 2 ||
+			expired.Age != 2*time.Second {
+			t.Errorf("error handler got %v, want a *subscriber.ExpiredError for subscriber %s and message 2, 2s old", got, id)
+		}
+		if records := lost.messages(); len(records) != 1 || records[0].Message != 2 || !errors.Is(records[0].Err, subscriber.ErrExpired) {
+			t.Errorf("dead letters got %v, want message 2 with a *subscriber.ExpiredError", records)
+		}
+		checkStats(t, b, id, subscriber.Stats{Buffer: 1, Delivered: 2, Handled: 1, Failed: 1, HandleTime: 2 * time.Second})
+
+		unsubscribe(t, b, id)
+		synctest.Wait()
+	})
+}
+
 // Middlewares wrap a SubscribeSeq loop body as they wrap handle: they get the error it passes to fail, and Retry yields
 // the message again. Once the loop has ended, the message is a *subscriber.ClosedError, which Retry does not retry.
 func TestSubscriberWithMiddleware_SubscribeSeq(t *testing.T) {

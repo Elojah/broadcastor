@@ -57,7 +57,8 @@
 //
 // Errors go to subscriber.WithErrorHandler and message.WithErrorHandler, and are discarded without one. handle's
 // errors arrive as is, and a message a subscriber misses as one of package subscriber's error types, each matching a
-// sentinel with errors.Is. Package middleware can recover panics (Recover), wrap errors (WrapError) and retry (Retry).
+// sentinel with errors.Is. Package middleware can recover panics (Recover), keep a history (History), drop stale
+// messages (MaxAge), wrap errors (WrapError) and retry (Retry).
 //
 // # Dead letters
 //

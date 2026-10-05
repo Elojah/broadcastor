@@ -45,7 +45,7 @@ Each item changes one function or adds one option.
     `filter.Changed(func(prev, next T) bool)` passes a reading only once it moved past a threshold (a deadband), and
     `filter.Every(d)` passes at most one per period. Concurrent `Broadcast`s may call a filter at once, so these keep
     their state in an atomic or behind a mutex, and "since the last one" is then approximate.
-- [ ] `middleware.MaxAge(d, func(T) time.Time)`: a message older than d when handle would get it is not handled, since
+- [x] `middleware.MaxAge(d, func(T) time.Time)`: a message older than d when handle would get it is not handled, since
   a reading or a command that waited behind a slow handle may be worse than none. The time comes from the message,
   since the library stamps none. It returns a `*subscriber.ExpiredError` (`subscriber.ErrExpired`), so the message
   counts as `Failed` and reaches the dead letters like any handle error. Settle where it goes in the recommended order:
