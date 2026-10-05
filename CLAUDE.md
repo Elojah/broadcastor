@@ -50,7 +50,7 @@ Any change to channels, removal or error reporting must keep these, and pass `ma
 - **No error path the library owns may block.** Errors used to go to a channel returned by `Subscribe`: an unread error blocked the subscriber, then `Broadcast` (`TestSubscribe_ErrorsWithoutHandler`). Only the user's own handler or store may block, and a store the library ships never does.
 - **`report` is the only caller of error handlers and `Store.Put`.** It takes no ctx: every error about a message uses `context(m)` (the message's ctx, else the subscriber's), never the `Broadcast` ctx, hence the `contextcheck` nolints in `Deliver`/`send`. `Put` gets `context.WithoutCancel` of it, and a failed `Put` becomes a `StoreError`, so each loss is reported once and stored at most once (`TestSubscriberWithDeadLetters_ExactlyOnce`).
 - **`report` runs outside the middleware chain** (in `Consume`), so `Recover` never recovers a panic in an error handler.
-- **Each message a `Broadcast` picks a subscriber up for is counted once** in `Handled`, `Failed`, `TimedOut` or `Dropped`, and a loss is counted before `report`, so an error handler sees it (`TestStats/Failed`, `TestStats_AddUp`). `Delivered` is counted once the send succeeded, so it may briefly trail `Handled`.
+- **Each message a `Broadcast` picks a subscriber up for is counted once** in `Handled`, `Failed`, `TimedOut` or `Dropped`, and one its filter rejects (`WithFilter`, first thing in `Deliver`) is not picked up. A loss is counted before `report`, so an error handler sees it (`TestStats/Failed`, `TestStats_AddUp`). `Delivered` is counted once the send succeeded, so it may briefly trail `Handled`.
 
 ## Decisions not to revert
 

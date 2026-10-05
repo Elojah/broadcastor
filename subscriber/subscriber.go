@@ -55,6 +55,7 @@ type config[T any] struct {
 	detached            bool
 	evictAfter          int
 	asyncLimit          int
+	filter              func(msg T) bool
 }
 
 // New returns a subscriber holding the subscription's reference, which Unsubscribe drops.
@@ -94,7 +95,11 @@ func (s *Subscriber[T]) Attach(ctx context.Context, remove func(options ...Unsub
 // Deliver sends value to the subscriber, with config (message.NewConfig) laid over its defaults, and reports whether it
 // took it, or, for an async message, whether a send was started. A parallel message returns false and a channel that
 // yields the result instead. Failures are reported with the message's ctx, never ctx, which only bounds the wait.
+// A message the filter (WithFilter) rejects returns false, and nothing else happens.
 func (s *Subscriber[T]) Deliver(ctx context.Context, value T, config message.Config) (bool, <-chan bool) {
+	if s.config.filter != nil && !s.config.filter(value) {
+		return false, nil
+	}
 	m := message.New(value, s.config.defaults, config)
 
 	if !s.acquire() {

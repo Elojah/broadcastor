@@ -97,6 +97,26 @@ func WithEvictAfter[T any](n int) Option[T] {
 	}
 }
 
+// WithFilter makes the subscriber skip every message keep returns false for. keep runs in Broadcast's goroutine before
+// anything else, so a skipped message costs a call instead of waking the subscriber up, and concurrent Broadcasts may
+// call it at once. A skipped message is neither reported nor counted: not in Stats, nor towards WithEvictAfter, nor in
+// Broadcast's return value. Each WithFilter adds a filter, called in order until one rejects the message, so a filter
+// sees only the messages those before it kept. A nil keep keeps every message.
+func WithFilter[T any](keep func(msg T) bool) Option[T] {
+	return func(config *config[T]) {
+		if keep == nil {
+			return
+		}
+		previous := config.filter
+		if previous == nil {
+			config.filter = keep
+
+			return
+		}
+		config.filter = func(msg T) bool { return previous(msg) && keep(msg) }
+	}
+}
+
 // WithAsyncLimit bounds the async sends (message.WithAsync) under way to the subscriber at n. Each one holds a
 // goroutine and its message until the subscriber takes it or the Broadcast ctx ends, so without a timeout a stuck
 // subscriber piles them up. Past n, an async message is dropped right away with a *DroppedError, which counts towards

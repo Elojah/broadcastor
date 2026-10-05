@@ -11,6 +11,7 @@ A generic in-process fan-out for Go: one `Broadcast` call hands a message to eve
 its own goroutine and handles its messages one at a time.
 
 - **Delivery modes**: sync, buffered, parallel, async or non-blocking, with timeouts per message or per subscriber.
+- **Filters**: a subscriber skips what it does not want before `Broadcast` wakes it up.
 - **Typed errors**: every message a subscriber misses reaches its error handlers, and can be kept in a dead-letter
   store.
 - **Middleware**: recover panics, keep a history, wrap errors, retry with backoff, or write your own.
@@ -87,6 +88,9 @@ The mode is a message option, given to `Broadcast` or as a subscriber's default 
 
 Each async send holds a goroutine until the subscriber takes the message. `subscriber.WithAsyncLimit(n)` drops an async
 message once n sends are under way to the subscriber, and `Stats.Sending` shows how many are.
+
+`subscriber.WithFilter(keep)` skips the messages `keep` rejects, in `Broadcast`'s goroutine before any send, so the
+subscriber never wakes up for them. They are neither reported nor counted, in `Stats` or in what `Broadcast` returns.
 
 Delivery is at most once: a subscriber that misses a message never gets it later, but its error handlers learn why
 (see [Errors](#errors)), and a [dead-letter store](#dead-letters) can keep it. `Broadcast` gives up on a subscriber once

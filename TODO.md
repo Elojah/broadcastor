@@ -38,7 +38,7 @@ Each item changes one function or adds one option.
   directly. With options, apply them once per `Broadcast` and record which fields they set in an unexported mask on
   `message.Config`, then merge those fields over each subscriber's defaults by value: one allocation per `Broadcast`
   instead of one per subscriber.
-- [ ] `subscriber.WithFilter(func(T) bool)`. The filter runs in `Broadcast`'s goroutine before `acquire`, so a message
+- [x] `subscriber.WithFilter(func(T) bool)`. The filter runs in `Broadcast`'s goroutine before `acquire`, so a message
   the subscriber skips costs a func call instead of a wake-up (~1 µs). It is neither reported nor counted, including in
   `Broadcast`'s return value.
   - [ ] A `filter` package, importing nothing from the library, for readings that repeat themselves:
