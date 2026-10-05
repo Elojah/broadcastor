@@ -13,7 +13,7 @@ import (
 	"github.com/elojah/broadcastor/message"
 )
 
-// Subscriber is one subscription of a Broadcastor. Its channel is read either by Consume or by a single Seq loop.
+// Subscriber is one subscription of a Broadcastor. Consume reads its channel, for handle or for a single Seq loop.
 type Subscriber[T any] struct {
 	id     uuid.UUID
 	ch     chan message.Message[T]
@@ -28,7 +28,7 @@ type Subscriber[T any] struct {
 	// done is closed by Unsubscribe, so that no send waits on a subscriber that is gone.
 	done chan struct{}
 
-	// discarding makes Consume and pull report messages instead of processing them.
+	// discarding makes Consume report messages instead of processing them, and ends a Seq loop.
 	discarding atomic.Bool
 
 	// stopContextLifetime cancels the AfterFunc set by Attach. nil with WithDetachedContext.
@@ -159,23 +159,31 @@ func (s *Subscriber[T]) Consume(handle Handler[T]) {
 	}
 }
 
-// Seq returns SubscribeSeq's iterator, which can be ranged over once. When the loop ends, it removes the subscriber and
-// reports what is left on ch.
-func (s *Subscriber[T]) Seq() iter.Seq[T] {
+// Seq returns SubscribeSeq's iterator, which can be ranged over once. Ranging starts Consume, whose handle passes each
+// message to the loop, so the middlewares and error handlers apply as with Subscribe. When the loop ends, it removes
+// the subscriber, and Consume reports what is left on ch.
+func (s *Subscriber[T]) Seq() iter.Seq2[T, func(error)] {
 	var ranged atomic.Bool
 
-	return func(yield func(T) bool) {
+	return func(yield func(T, func(error)) bool) {
 		if ranged.Swap(true) {
 			return
 		}
+		r := newRelay[T]()
+		go func() {
+			s.Consume(r.handle)
+			// Only handle sends on it, from Consume.
+			close(r.messages)
+		}()
 		defer func() {
+			// Before stopped, through which handle learns that the loop ended: Consume then reports every later message
+			// itself, and only the one in handle goes through the middlewares.
+			s.discarding.Store(true)
+			close(r.stopped)
 			s.remove()
-			// In a goroutine: a Broadcast still sending here reports before it releases, and its error handler may be
-			// waiting on this goroutine.
-			go s.discard()
 		}()
 
-		s.pull(yield)
+		s.pull(r, yield)
 	}
 }
 
@@ -315,35 +323,30 @@ func (s *Subscriber[T]) report(m message.Message[T], err error) {
 	}
 }
 
-// pull is Consume for Seq: it yields messages until yield returns false, ctx is done, ch is closed or the subscriber
-// is discarding.
-func (s *Subscriber[T]) pull(yield func(T) bool) {
+// pull yields each message r's handle passes on, and sends back the error the loop body passed to fail, until yield
+// returns false, ctx is done, Consume has returned or the subscriber is discarding.
+func (s *Subscriber[T]) pull(r *relay[T], yield func(T, func(error)) bool) {
+	var err error
+	fail := func(e error) { err = e }
 	for s.ctx.Err() == nil && !s.discarding.Load() {
 		select {
-		case m, ok := <-s.ch:
-			if !ok {
+		case msg, ok := <-r.messages:
+			// If discarding, handle gets a *ClosedError once the loop ends.
+			if !ok || s.discarding.Load() {
 				return
 			}
-			if s.discarding.Load() {
-				s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: m.Value})
-
-				return
+			err = nil
+			more := yield(msg, fail)
+			if !more {
+				// Before handle returns, so that Consume reports what is left instead of passing it on.
+				s.discarding.Store(true)
 			}
-			start := time.Now()
-			more := yield(m.Value)
-			s.counters.handle(time.Since(start), nil)
+			r.errs <- err
 			if !more {
 				return
 			}
 		case <-s.ctx.Done():
 			return
 		}
-	}
-}
-
-// discard reports every message left on ch until it is closed, so no Broadcast waits on a loop that has ended.
-func (s *Subscriber[T]) discard() {
-	for m := range s.ch {
-		s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: m.Value})
 	}
 }

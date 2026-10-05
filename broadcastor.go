@@ -46,14 +46,20 @@ func (b *Broadcastor[T]) Subscribe(ctx context.Context, handle func(ctx context.
 }
 
 // SubscribeSeq is Subscribe with an iterator instead of handle: the loop body takes handle's place, in the caller's
-// goroutine. Until the loop starts, Broadcast waits for it as for a busy handle.
+// goroutine. It gets each message with fail, which takes the error handle would return, nil until called. fail must be
+// called before the iteration ends. The middlewares wrap the loop body, so middleware.Retry yields a message again,
+// but a panic in the body reaches the loop's caller, never middleware.Recover.
+//
+// Ranging starts the subscriber's goroutine, which hands each message to the loop. Until then, Broadcast waits for it
+// as for a busy handle.
 //
 // The loop ends when it breaks, when ctx is done, or once the subscriber is unsubscribed and has yielded what it took.
-// Ending unsubscribes it, and reports what it took but did not yield as *subscriber.ClosedError. seq can be ranged over
-// once. subscriber.WithMiddleware has no effect.
+// Ending unsubscribes it, and reports what it took but did not yield as *subscriber.ClosedError. The message being
+// handed to the loop then, or whose body panicked, is that ClosedError's handle error, through the middlewares. seq can
+// be ranged over once.
 //
 // It returns ErrClosed after Close.
-func (b *Broadcastor[T]) SubscribeSeq(ctx context.Context, options ...subscriber.Option[T]) (uuid.UUID, iter.Seq[T], error) {
+func (b *Broadcastor[T]) SubscribeSeq(ctx context.Context, options ...subscriber.Option[T]) (uuid.UUID, iter.Seq2[T, func(error)], error) {
 	s, err := b.add(ctx, options)
 	if err != nil {
 		return uuid.Nil, nil, err

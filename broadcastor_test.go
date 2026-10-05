@@ -1803,6 +1803,45 @@ func TestSubscribeSeq_Unsubscribe(t *testing.T) {
 	})
 }
 
+// The error a loop body passes to fail is handle's: the error handler gets it as is, and Stats count the message as
+// Failed. Not calling fail, or calling it with nil last, counts the message as Handled.
+func TestSubscribeSeq_Fail(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := broadcastor.NewBroadcastor[int]()
+		failures := &recorder[int]{}
+		id, seq := subscribeSeq(t, b, subscriber.WithErrorHandler[int](recordFailures(t, failures)))
+
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for msg, fail := range seq {
+				switch msg {
+				case 1:
+					fail(handleError(msg))
+				case 2:
+					fail(handleError(msg))
+					fail(nil)
+				}
+			}
+		}()
+		for msg := 1; msg <= 3; msg++ {
+			b.Broadcast(t.Context(), msg)
+		}
+		synctest.Wait()
+
+		if got, want := failures.messages(), []int{1}; !slices.Equal(got, want) {
+			t.Errorf("error handler got failures for messages %v, want %v", got, want)
+		}
+		checkStats(t, b, id, subscriber.Stats{Delivered: 3, Handled: 2, Failed: 1})
+
+		unsubscribe(t, b, id)
+		waitClosed(t, done, "the loop to end once unsubscribed")
+		synctest.Wait()
+	})
+}
+
 // The iterator can be ranged over once: a range after it, or alongside it, yields nothing.
 func TestSubscribeSeq_RangeOnce(t *testing.T) {
 	t.Parallel()
@@ -1835,13 +1874,15 @@ func TestSubscribeSeq_RangeOnce(t *testing.T) {
 	})
 }
 
-// A panic in the loop body reaches the caller, and still unsubscribes.
+// A panic in the loop body reaches the caller, and still unsubscribes. The message is reported as a
+// *subscriber.ClosedError.
 func TestSubscribeSeq_Panic(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
 		b := broadcastor.NewBroadcastor[int]()
-		_, seq := subscribeSeq(t, b)
+		closed := &recorder[int]{}
+		_, seq := subscribeSeq(t, b, subscriber.WithErrorHandler[int](recordClosed(t, closed)))
 
 		go b.Broadcast(t.Context(), 1)
 		p := recovered(func() {
@@ -1856,6 +1897,9 @@ func TestSubscribeSeq_Panic(t *testing.T) {
 			t.Errorf("Broadcast after the loop panicked handed the message to %d subscribers, want 0", n)
 		}
 		synctest.Wait()
+		if got, want := closed.messages(), []int{1}; !slices.Equal(got, want) {
+			t.Errorf("error handler got *subscriber.ClosedError for messages %v, want %v", got, want)
+		}
 	})
 }
 
@@ -2035,7 +2079,7 @@ func subscribeUntilClosed(t *testing.T, b *broadcastor.Broadcastor[int], kind in
 	case 1:
 		_, err = b.Subscribe(subscribeCtx(t), (&recorder[int]{}).handle)
 	default:
-		var seq iter.Seq[int]
+		var seq iter.Seq2[int, func(error)]
 		if _, seq, err = b.SubscribeSeq(subscribeCtx(t)); err == nil {
 			for range seq { // until Close ends the loop
 			}
@@ -2164,7 +2208,7 @@ func hold[T any](t *testing.T, b *broadcastor.Broadcastor[T]) (*recorder[T], uui
 }
 
 // subscribeSeq subscribes with SubscribeSeq, with subscribeCtx.
-func subscribeSeq[T any](t *testing.T, b *broadcastor.Broadcastor[T], options ...subscriber.Option[T]) (uuid.UUID, iter.Seq[T]) {
+func subscribeSeq[T any](t *testing.T, b *broadcastor.Broadcastor[T], options ...subscriber.Option[T]) (uuid.UUID, iter.Seq2[T, func(error)]) {
 	t.Helper()
 	id, seq, err := b.SubscribeSeq(subscribeCtx(t), options...)
 	if err != nil {

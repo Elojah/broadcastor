@@ -218,8 +218,11 @@ func TestStats_AddUp(t *testing.T) {
 		loopDone := make(chan struct{})
 		go func() {
 			defer close(loopDone)
-			for range seq {
+			for msg, fail := range seq {
 				time.Sleep(time.Millisecond)
+				if msg%3 == 0 {
+					fail(handleError(msg))
+				}
 			}
 		}()
 

@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/elojah/broadcastor/middleware"
+	"github.com/elojah/broadcastor/subscriber"
 )
 
 // The tests that check how long Retry waits run in a synctest bubble, whose fake clock makes the time between two calls
@@ -124,6 +125,22 @@ func TestRetry_NotRetryable(t *testing.T) {
 	}
 	if len(f.calls) != 2 {
 		t.Errorf("handler was called %d times, want 2", len(f.calls))
+	}
+}
+
+// Retry never retries an error matching subscriber.ErrClosed, which a SubscribeSeq loop that has ended returns.
+func TestRetry_Closed(t *testing.T) {
+	t.Parallel()
+
+	closed := &subscriber.ClosedError[int]{SubscriberID: uuid.New(), Message: 1}
+	f := &flaky{errs: []error{closed}}
+	handle := middleware.Retry[int](middleware.RetryPolicy{Attempts: 3})(f.handle)
+
+	if err := handle(t.Context(), uuid.New(), 1); !asIs(err, closed) {
+		t.Errorf("Retry returned %v, want %v", err, closed)
+	}
+	if len(f.calls) != 1 {
+		t.Errorf("handler was called %d times, want once", len(f.calls))
 	}
 }
 

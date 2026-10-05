@@ -44,7 +44,7 @@ func WithDeadLetters[T any](store Store[T]) Option[T] {
 	}
 }
 
-// WithMiddleware appends middlewares around handle, the first one outermost. It has no effect on SubscribeSeq.
+// WithMiddleware appends middlewares around handle, or a SubscribeSeq loop body, the first one outermost.
 func WithMiddleware[T any](middlewares ...Middleware[T]) Option[T] {
 	return func(config *config[T]) {
 		config.middlewares = append(config.middlewares, middlewares...)

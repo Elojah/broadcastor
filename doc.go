@@ -12,12 +12,13 @@
 //	...
 //	err = b.Unsubscribe(ctx, id)
 //
-// SubscribeSeq returns an iterator instead, whose loop body takes the place of handle:
+// SubscribeSeq returns an iterator instead, whose loop body takes the place of handle. Each message comes with fail,
+// which takes the error handle would return:
 //
 //	_, seq, err := b.SubscribeSeq(ctx)
 //	...
-//	for msg := range seq {
-//		fmt.Println(msg)
+//	for msg, fail := range seq {
+//		fail(save(msg))
 //	}
 //
 // The options passed to Subscribe, SubscribeSeq and Unsubscribe are in package subscriber, and those passed to

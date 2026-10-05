@@ -52,8 +52,8 @@ Each item changes one function or adds one option.
 
 ## Mid-term: slow subscribers and shutdown
 
-- [ ] `Shutdown(ctx)`: `Close`, then wait until every subscriber's goroutine has returned (`Consume`, or a
-  `SubscribeSeq` loop and its discard), or until ctx is done. `Close` never waits, so today a program that exits right
+- [ ] `Shutdown(ctx)`: `Close`, then wait until every subscriber's goroutine has returned (`Consume`, which a
+  `SubscribeSeq` loop runs too), or until ctx is done. `Close` never waits, so today a program that exits right
   after it cuts off whatever handle was doing, and cannot flush the buffers first. With `WithUnsubscribeDeliver`,
   `Shutdown` flushes the buffers. With discard, it reports what is left. The count goes up in `add` under the gate, so
   none goes up after `Close`. `Shutdown` waits for a `Broadcast` only through a subscriber, which `Unsubscribe`

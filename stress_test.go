@@ -254,7 +254,7 @@ func (s *stress) subscribe(ctx context.Context, t *testing.T) *stressSub {
 	}
 
 	var (
-		seq iter.Seq[int]
+		seq iter.Seq2[int, func(error)]
 		err error
 	)
 	sub.subscribing = s.clock.Add(1)
@@ -362,11 +362,15 @@ func (s *stress) handle(sub *stressSub) func(context.Context, uuid.UUID, int) er
 	}
 }
 
-// loop ranges over seq, recording each message as handled and pausing now and then, until sub.leave is set.
-func (s *stress) loop(sub *stressSub, seq iter.Seq[int]) {
-	for n := range seq {
+// loop ranges over seq, recording each message as handled, pausing now and then and failing like handle, until
+// sub.leave is set.
+func (s *stress) loop(sub *stressSub, seq iter.Seq2[int, func(error)]) {
+	for n, fail := range seq {
 		sub.record(n, stressHandled)
 		stressPause()
+		if n%stressFailEvery == 0 {
+			fail(handleError(n))
+		}
 		if sub.leave.Load() {
 			earliest(&sub.leaving, s.clock.Add(1))
 
@@ -591,10 +595,10 @@ func (sub *stressSub) problems(broadcasts []stressBroadcast, byNumber map[int]st
 			len(extra), first(extra), byNumber[extra[0]]))
 	}
 
-	// handle failed for every multiple of stressFailEvery it got, and a loop body never fails.
+	// handle or the loop body failed for every multiple of stressFailEvery it got.
 	var wrongFailures []int
 	for n, outcome := range sub.got {
-		if fails := !sub.seq && outcome == stressHandled && n%stressFailEvery == 0; fails != sub.failed[n] {
+		if fails := outcome == stressHandled && n%stressFailEvery == 0; fails != sub.failed[n] {
 			wrongFailures = append(wrongFailures, n)
 		}
 	}

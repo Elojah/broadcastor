@@ -46,15 +46,17 @@ if err := b.Unsubscribe(ctx, id); err != nil {
 `handle` gets the subscriber's ID, so it can unsubscribe itself. The ctx given to `Subscribe` is the subscription's
 lifetime (see [Lifecycle and contexts](#lifecycle-and-contexts)).
 
-`SubscribeSeq` returns an iterator instead. The loop body takes the place of `handle`, and breaking out unsubscribes:
+`SubscribeSeq` returns an iterator instead. The loop body takes the place of `handle`, and breaking out unsubscribes.
+Each message comes with `fail`, which takes the error `handle` would return, so the middlewares, error handlers and
+`Stats` treat the loop body as `handle`:
 
 ```go
 _, seq, err := b.SubscribeSeq(ctx)
 if err != nil {
 	return err
 }
-for msg := range seq {
-	fmt.Println("got", msg)
+for msg, fail := range seq {
+	fail(save(msg)) // nil, or never calling fail, means handled
 }
 ```
 
@@ -98,7 +100,7 @@ Errors go to error handlers, and are discarded when there are none:
 
 | Error | When |
 | --- | --- |
-| `handle`'s error, as is | `handle`, or its outermost middleware, failed. |
+| `handle`'s error, as is | `handle`, or its outermost middleware, failed. For `SubscribeSeq`, the error passed to `fail`. |
 | `*subscriber.HandleError` | The same, wrapped by `middleware.WrapError`. |
 | `*subscriber.PanicError` | `handle` panicked, and `middleware.Recover` recovered it. Without it, the program crashes. |
 | `*subscriber.TimeoutError` | `Broadcast` gave up waiting. |
@@ -137,7 +139,10 @@ id, err := b.Subscribe(ctx, handle, subscriber.WithMiddleware(
 Keep that order: `Recover` first also catches panics in every later middleware, `History` before `WrapError` and
 `Retry` neither wraps nor retries a failed `Put`, and `Retry` after `WrapError` retries `handle`'s raw errors, so only
 the last one is wrapped and panics are not retried. Middlewares run in the subscriber's goroutine, so a slow one, or
-`Retry` waiting, holds the subscriber up like a slow `handle`. They don't apply to `SubscribeSeq`.
+`Retry` waiting, holds the subscriber up like a slow `handle`.
+
+With `SubscribeSeq`, they wrap the loop body, which runs in the caller's goroutine, so `Retry` yields a message again.
+`Recover` cannot catch a panic in the loop body, which reaches the loop's caller.
 
 ## Dead letters
 
@@ -264,7 +269,7 @@ The same goes for a subscriber whose default is `message.WithAsync`.
 | [`08-async`](examples/08-async/main.go) | `message.WithAsync`. |
 | [`09-non-blocking`](examples/09-non-blocking/main.go) | `message.WithNonBlocking` and `*subscriber.DroppedError`. |
 | [`10-defaults`](examples/10-defaults/main.go) | `subscriber.WithDefaultMessageOptions`, overridden by `message.WithSync`. |
-| [`11-iterator`](examples/11-iterator/main.go) | `SubscribeSeq` and a `for range` loop. |
+| [`11-iterator`](examples/11-iterator/main.go) | `SubscribeSeq`, a `for range` loop, and `fail`. |
 | [`12-middleware`](examples/12-middleware/main.go) | `middleware.Retry` with backoff, and a middleware of your own. |
 | [`13-parallel`](examples/13-parallel/main.go) | `message.WithParallel`, where a slow subscriber holds up nobody else. |
 | [`14-context`](examples/14-context/main.go) | `message.WithContext`, and an async `Broadcast` that outlives a request. |

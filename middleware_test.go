@@ -337,36 +337,88 @@ func TestSubscriberWithMiddleware_History(t *testing.T) {
 	})
 }
 
-// Middlewares have no effect on SubscribeSeq, whose loop body takes the place of handle.
+// Middlewares wrap a SubscribeSeq loop body as they wrap handle: they get the error it passes to fail, and Retry yields
+// the message again. Once the loop has ended, the message is a *subscriber.ClosedError, which Retry does not retry.
 func TestSubscriberWithMiddleware_SubscribeSeq(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
 		b := broadcastor.NewBroadcastor[int]()
-		called := &recorder[int]{}
+		results := &recorder[string]{}
 		spy := func(next subscriber.Handler[int]) subscriber.Handler[int] {
 			return func(ctx context.Context, id uuid.UUID, msg int) error {
-				called.record(msg)
+				err := next(ctx, id, msg)
+				result := "ok"
+				switch {
+				case errors.Is(err, subscriber.ErrClosed):
+					result = "closed"
+				case err != nil:
+					result = err.Error()
+				}
+				results.record(fmt.Sprintf("%d: %s", msg, result))
 
-				return next(ctx, id, msg)
+				return err
 			}
 		}
-		_, seq := subscribeSeq(t, b, subscriber.WithMiddleware(spy))
+		errs := &recorder[error]{}
+		_, seq := subscribeSeq(t, b,
+			subscriber.WithMiddleware(middleware.Retry[int](middleware.RetryPolicy{Attempts: 3}), spy),
+			subscriber.WithErrorHandler[int](func(_ context.Context, err error) { errs.record(err) }))
 
-		go b.Broadcast(t.Context(), 1)
+		go func() {
+			b.Broadcast(t.Context(), 1)
+			b.Broadcast(t.Context(), 2)
+		}()
 		var got []int
-		for msg := range seq {
+		for msg, fail := range seq {
 			got = append(got, msg)
-
-			break
+			// 1 fails once, then succeeds. 2 fails, and the loop breaks before Retry can yield it again.
+			if len(got) == 1 || msg == 2 {
+				fail(handleError(msg))
+			}
+			if msg == 2 {
+				break
+			}
 		}
 		synctest.Wait()
 
-		if want := []int{1}; !slices.Equal(got, want) {
+		if want := []int{1, 1, 2}; !slices.Equal(got, want) {
 			t.Errorf("loop got %v, want %v", got, want)
 		}
-		if got := called.messages(); len(got) != 0 {
-			t.Errorf("middleware got %v, want nothing", got)
+		want := []string{"1: handling 1 failed", "1: ok", "2: handling 2 failed", "2: closed"}
+		if got := results.messages(); !slices.Equal(got, want) {
+			t.Errorf("middleware got %q, want %q", got, want)
+		}
+		if got := errs.messages(); len(got) != 1 || !errors.Is(got[0], subscriber.ErrClosed) {
+			t.Errorf("error handler got %v, want a single *subscriber.ClosedError", got)
+		}
+	})
+}
+
+// Recover cannot catch a panic in a SubscribeSeq loop body, which reaches the loop's caller. The message is reported as
+// a *subscriber.ClosedError, not a *subscriber.PanicError.
+func TestSubscriberWithMiddleware_SubscribeSeqPanic(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := broadcastor.NewBroadcastor[int]()
+		closed := &recorder[int]{}
+		_, seq := subscribeSeq(t, b, subscriber.WithMiddleware(middleware.Recover[int]()),
+			subscriber.WithErrorHandler[int](recordClosed(t, closed)))
+
+		go b.Broadcast(t.Context(), 1)
+		p := recovered(func() {
+			for msg := range seq {
+				panic(handleError(msg))
+			}
+		})
+		synctest.Wait()
+
+		if p != handleError(1) {
+			t.Errorf("loop panicked with %v, want %v", p, handleError(1))
+		}
+		if got, want := closed.messages(), []int{1}; !slices.Equal(got, want) {
+			t.Errorf("error handler got *subscriber.ClosedError for messages %v, want %v", got, want)
 		}
 	})
 }

@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"errors"
 	"math"
 	"math/rand/v2"
 	"time"
@@ -34,7 +35,8 @@ type RetryPolicy struct {
 }
 
 // Retry calls the handler again after an error, as policy sets, and returns the last error as is. It stops once ctx is
-// done, even while waiting, but always makes the first call.
+// done, even while waiting, but always makes the first call. It never retries an error matching subscriber.ErrClosed,
+// which a SubscribeSeq loop that has ended returns for every message.
 //
 // It waits in the subscriber's goroutine, holding up the subscriber and any Broadcast waiting on it, so keep waits
 // short. Unsubscribe does not end a wait. A panic goes through, but a *subscriber.PanicError from an inner Recover is
@@ -45,7 +47,8 @@ func Retry[T any](policy RetryPolicy) subscriber.Middleware[T] {
 			delay := policy.bound(policy.Delay)
 			for attempt := 1; ; attempt++ {
 				err := next(ctx, id, msg)
-				if err == nil || attempt >= policy.Attempts || (policy.IsRetryable != nil && !policy.IsRetryable(err)) {
+				if err == nil || attempt >= policy.Attempts || errors.Is(err, subscriber.ErrClosed) ||
+					(policy.IsRetryable != nil && !policy.IsRetryable(err)) {
 					return err
 				}
 				if !wait(ctx, policy.jitter(delay)) {
