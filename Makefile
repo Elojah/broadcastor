@@ -17,10 +17,13 @@ STRESS_COUNT      ?= 50
 # library's go.mod lists only uuid.
 MODULES            = . examples/19-redis examples/24-mqtt
 
-# The examples tinygo runs, which leaves out those that are modules of their own, and the target it builds them for.
+# The examples tinygo-run runs and tinygo-build builds, which leave out those that are modules of their own, and the
+# board tinygo-build builds them for.
 TINYGO             = tinygo
 TINYGO_TARGET     ?= pico
 EXAMPLES           = $(filter-out $(MODULES),$(patsubst %/,%,$(wildcard examples/*/)))
+# Prints the lines under // Output: or // Unordered output: in an example's main_test.go, without their //.
+EXAMPLE_OUTPUT     = awk '/\/\/ (Unordered output|Output):/ { f = 1; next } f && /^}/ { f = 0 } f { sub(/^\t\/\/ ?/, ""); print }'
 
 # For CI
 ifneq ($(wildcard ./bin/golangci-lint),)
@@ -67,24 +70,40 @@ stress: ## Run TestStress STRESS_COUNT (50) times with race detector
 	$Q $(GO) test -race -run '^TestStress$$' -count $(STRESS_COUNT) .
 
 # TinyGo
+# tinygo test runs no Example, and testing/synctest, which every test but pkg/gate's uses, does not link. So
+# tinygo-test runs only pkg/gate's tests, and tinygo-run checks each example by running it instead, both on this
+# machine. tinygo-build only compiles each example for TINYGO_TARGET: nothing runs on the board.
 .PHONY: tinygo
-# tinygo test runs no Example, and testing/synctest, which every test but pkg/gate's uses, does not link. So each
-# example runs with tinygo run instead, and must print what its Example expects, sorted when unordered. It is then
-# built for TINYGO_TARGET, where nothing runs.
-tinygo: ## Run pkg/gate's tests and each example with TinyGo, and build each example for TINYGO_TARGET (pico)
-	$(info $(M) running $(TINYGO)) @
+tinygo: tinygo-test tinygo-run tinygo-build ## Run tinygo-test, tinygo-run and tinygo-build
+
+.PHONY: tinygo-test
+tinygo-test: ## Run pkg/gate's tests with TinyGo (the others need testing/synctest)
+	$(info $(M) running tinygo test on pkg/gate) @
 	$Q $(TINYGO) test ./pkg/gate
+
+.PHONY: tinygo-run
+# An example passes if it prints its Example's output block, in any order under // Unordered output:.
+tinygo-run: ## Run each example with TinyGo and diff what it prints with its Example's output
+	$(info $(M) running each example with tinygo run) @
 	$Q set -e; \
 	out=$$(mktemp -d); trap 'rm -rf "$$out"' EXIT; \
 	for e in $(EXAMPLES); do \
 		echo "$(M) $$e"; \
-		awk '/\/\/ (Unordered output|Output):/ { f = 1; next } f && /^}/ { f = 0 } f { sub(/^\t\/\/ ?/, ""); print }' \
-			$$e/main_test.go > "$$out/want"; \
+		$(EXAMPLE_OUTPUT) $$e/main_test.go > "$$out/want"; \
 		$(TINYGO) run ./$$e > "$$out/got"; \
 		if grep -q 'Unordered output:' $$e/main_test.go; then \
 			sort -o "$$out/want" "$$out/want"; sort -o "$$out/got" "$$out/got"; \
 		fi; \
 		diff -u "$$out/want" "$$out/got"; \
+	done
+
+.PHONY: tinygo-build
+tinygo-build: ## Build each example with TinyGo for TINYGO_TARGET (pico), without running it
+	$(info $(M) building each example for $(TINYGO_TARGET) with tinygo build) @
+	$Q set -e; \
+	out=$$(mktemp -d); trap 'rm -rf "$$out"' EXIT; \
+	for e in $(EXAMPLES); do \
+		echo "$(M) $$e"; \
 		$(TINYGO) build -target=$(TINYGO_TARGET) -o "$$out/main.elf" ./$$e; \
 	done
 

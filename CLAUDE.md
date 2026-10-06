@@ -24,7 +24,7 @@ make check                          # golangci-lint + tests (-shuffle=on -cpu 1,
 make stress                         # TestStress 50 times (STRESS_COUNT)
 make bench                          # BENCH=regexp
 make benchcmp                       # main (BENCH_BASE) vs the working tree, with benchstat
-make tinygo                         # pkg/gate's tests and the examples with TinyGo, and a build for a Pico
+make tinygo                         # tinygo-test (pkg/gate), tinygo-run (each example, output checked), tinygo-build (for a Pico, not run)
 ```
 
 Lint (`.golangci.yml`) is `default: all` minus a disable list, tests included: `nlreturn`, `paralleltest` (`t.Parallel()` first), `forcetypeassert`, `err113`, `godot`, `funcorder` (exported methods first). CI installs a pinned golangci-lint into `./bin` and runs `make check`.
@@ -83,6 +83,6 @@ Any change to channels, removal or error reporting must keep these, and pass `ma
 - `TestStress` runs in real time, so that timeouts race sends, and checks what must hold under any schedule. Every goroutine of a round carries a pprof label (`pprof.Do`), which the library's goroutines inherit, so it can check that none is left once closed although other tests run beside it. It polls until `Stats` add up rather than sleeping. Each round ends with `Shutdown`, after which nothing may be handled or reported: a quarter of the rounds shut down as soon as the broadcasters and churners are done, while messages are in flight, which is what tests it.
 - Add `Recover` or `WrapError` only to check a `PanicError` or `HandleError`. Other tests check `handle`'s raw error.
 - Examples (`examples/NN-name/`, listed in the README) each have an `Example()` in `main_test.go`. `19-redis`'s runs against miniredis, in memory, and `24-mqtt`'s against mochi-mqtt, in process, so CI needs no Redis nor broker. mochi logs to stdout by default, which would break the output. They run in real time, so their output must not depend on scheduling: synchronise with channels or a `WaitGroup`, or use `// Unordered output:`. A slow `handle` waits on a `release` channel, never sleeps.
-- TinyGo runs no `Example`, so `make tinygo` diffs each example's `tinygo run` with its output block, which must not depend on Go's runtime either: `04-recover` panics itself, since TinyGo words a divide by zero differently.
+- TinyGo runs no `Example`, so `make tinygo-run` diffs each example's `tinygo run` with its output block, which must not depend on Go's runtime either: `04-recover` panics itself, since TinyGo words a divide by zero differently.
 - `BenchmarkBroadcast` waits for every subscriber on each op, and subscribes with `context.WithoutCancel(b.Context())`, since `b.Context()` is done before `Cleanup`.
 - `BenchmarkBroadcast_Throughput`, `_Concurrent` and `_Churn` wait once, after the last `Broadcast`, so they loop over `b.N` rather than `b.Loop`, which would stop the timer before that wait: don't modernize them. Each subscriber counts its own messages (`subscribeCounting`), since a shared `WaitGroup` would contend. They subscribe with `b.Context()`, which ends after each run of the benchmark function.

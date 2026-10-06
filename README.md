@@ -351,7 +351,7 @@ make check     # golangci-lint + go test -race -shuffle=on -cpu 1,4, running eac
 make bench     # benchmarks (BENCH=regexp)
 make benchcmp  # benchstat of main against the working tree
 make stress    # the stress test, 50 times
-make tinygo    # the examples with TinyGo, and built for a Raspberry Pi Pico
+make tinygo    # with TinyGo: pkg/gate's tests, each example run and checked, and built for a Raspberry Pi Pico
 ```
 
 ## TinyGo
