@@ -118,7 +118,7 @@ func (s *Subscriber[T]) Deliver(ctx context.Context, value T, config message.Con
 	}
 
 	if m.Config.Delivery == message.DeliveryAsync {
-		if !s.startSending() {
+		if !s.reserve() {
 			defer s.release()
 			s.counters.dropped.Add(1)
 			s.lose(m, &DroppedError[T]{SubscriberID: s.id, Message: value})
@@ -307,8 +307,8 @@ func (s *Subscriber[T]) lose(m message.Message[T], err error) {
 	s.report(m, err)
 }
 
-// startSending counts an async send under way, unless WithAsyncLimit's are already.
-func (s *Subscriber[T]) startSending() bool {
+// reserve counts an async send under way, unless WithAsyncLimit's are already.
+func (s *Subscriber[T]) reserve() bool {
 	limit := int64(s.config.asyncLimit)
 	if limit <= 0 {
 		s.counters.sending.Add(1)
