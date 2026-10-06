@@ -135,6 +135,8 @@ type stressSub struct {
 	failed map[int]bool
 	// evicted is the message whose loss evicted the subscriber, and evictions how many said so.
 	evicted, evictions int
+	// onEvicted holds the messages onEvict got.
+	onEvicted []int
 	// twice holds the numbers the subscriber got again, or that handle failed for again.
 	twice      []int
 	unexpected []error
@@ -264,7 +266,9 @@ func (s *stress) subscribe(ctx context.Context, t *testing.T) *stressSub {
 	}
 	if randN(2) == 0 {
 		sub.evictAfter = 1 + randN(3)
-		options = append(options, subscriber.WithEvictAfter[int](sub.evictAfter))
+		options = append(options, subscriber.WithEvictAfter(sub.evictAfter, func(_ context.Context, evicted *subscriber.EvictedError[int]) {
+			sub.onEvict(evicted.Message)
+		}))
 	}
 
 	var (
@@ -575,6 +579,14 @@ func (sub *stressSub) evict(n int) {
 	}
 }
 
+// onEvict records that onEvict got the loss of n.
+func (sub *stressSub) onEvict(n int) {
+	sub.checkShut(n)
+	sub.mu.Lock()
+	defer sub.mu.Unlock()
+	sub.onEvicted = append(sub.onEvicted, n)
+}
+
 // checkShut records n as unexpected if Shutdown has returned already. Every Broadcast has returned by then, so nothing
 // else may report n.
 func (sub *stressSub) checkShut(n int) {
@@ -604,6 +616,10 @@ func (sub *stressSub) problems(broadcasts []stressBroadcast, byNumber map[int]st
 	}
 	if sub.evictAfter == 0 && sub.evictions != 0 || sub.evictions > 1 {
 		problems = append(problems, fmt.Sprintf("evicted %d times, with WithEvictAfter(%d)", sub.evictions, sub.evictAfter))
+	}
+	if len(sub.onEvicted) != sub.evictions || sub.evictions != 0 && sub.onEvicted[0] != sub.evicted {
+		problems = append(problems, fmt.Sprintf("onEvict got %v, but the error handler got %d evictions, the first by %d",
+			first(sub.onEvicted), sub.evictions, sub.evicted))
 	}
 	if sub.notFound.Load() && sub.evictions == 0 {
 		problems = append(problems, "Unsubscribe found no subscriber before Close, but it was never evicted")

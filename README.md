@@ -271,8 +271,9 @@ for _, s := range b.Stats() {
   racing `Unsubscribe`. With `subscriber.WithUnsubscribeDiscard`, it reports them as `*subscriber.ClosedError`
   instead. `subscriber.WithUnsubscribeOptions` makes that the subscriber's default, which is the only way `Close`
   applies it.
-- `subscriber.WithEvictAfter(n)` unsubscribes a subscriber once it has lost n messages in a row, so that a stuck one
-  stops costing every `Broadcast` its timeout.
+- `subscriber.WithEvictAfter(n, onEvict)` unsubscribes a subscriber once it has lost n messages in a row, so that a
+  stuck one stops costing every `Broadcast` its timeout. Unless nil, `onEvict` then gets the
+  `*subscriber.EvictedError`, once, after the error handlers: to log it, alert, or subscribe a replacement.
 - `Shutdown(ctx)` is `Close`, then waits until every subscriber has handled what it took, or reported it with
   `subscriber.WithUnsubscribeDiscard`, or until ctx is done. A program that exits right after `Close` cuts off
   whatever `handle` was doing, so call `Shutdown` on SIGTERM or a power-fail signal. Called from `handle`, it waits on
@@ -331,7 +332,7 @@ The same goes for a subscriber whose default is `message.WithAsync`.
 | [`14-context`](examples/14-context/main.go) | `message.WithContext`, and an async `Broadcast` that outlives a request. |
 | [`15-dead-letters`](examples/15-dead-letters/main.go) | `subscriber.WithDeadLetters`, with the messages `Close` discards. |
 | [`16-stats`](examples/16-stats/main.go) | `Broadcastor.Stats`, for a stuck subscriber and a failing one. |
-| [`17-evict`](examples/17-evict/main.go) | `subscriber.WithEvictAfter` and `*subscriber.EvictedError`. |
+| [`17-evict`](examples/17-evict/main.go) | `subscriber.WithEvictAfter`, its callback, and `*subscriber.EvictedError`. |
 | [`18-history`](examples/18-history/main.go) | `middleware.History` and `subscriber.WithDeadLetters` sharing a store. |
 | [`19-redis`](examples/19-redis/main.go) | A dead-letter queue and a history in Redis, across a restart. |
 | [`20-filter`](examples/20-filter/main.go) | `subscriber.WithFilter` with `filter.Changed` and `filter.Every`, for readings that repeat themselves. |
@@ -339,7 +340,7 @@ The same goes for a subscriber whose default is `message.WithAsync`.
 | [`22-watchdog`](examples/22-watchdog/main.go) | `Stats.Handling` to unsubscribe a hung subscriber, and `subscriber.WithAsyncLimit`. |
 | [`23-shutdown`](examples/23-shutdown/main.go) | `Shutdown`, which waits for a slow `handle` and for the dead letters before the program exits. |
 | [`24-mqtt`](examples/24-mqtt/main.go) | MQTT in, fanned out to a rule, a local store, and an uplink that stores and forwards with `store.Enqueue` and `store.Drain`. |
-| [`25-modbus`](examples/25-modbus/main.go) | A PLC polled over Modbus TCP, fanned out with `filter.Changed` to a rule that writes a coil back, retrying while the PLC is busy, and a trend that keeps a reading once it moved. |
+| [`25-modbus`](examples/25-modbus/main.go) | A PLC polled over Modbus TCP, fanned out with `filter.Changed` to a rule that writes a coil back, retrying while the PLC is busy, and a trend that keeps a reading once it moved. The rule's connection dies, and `subscriber.WithEvictAfter`'s callback reconnects it. |
 
 `19-redis`, `24-mqtt` and `25-modbus` are modules of their own, so that the library depends on neither go-redis, an
 MQTT client nor a Modbus library. Run `go run -C examples/19-redis .` against the Redis at `REDIS_ADDR`

@@ -65,6 +65,19 @@ Each item changes one function or adds one option.
   `Shutdown` waits for a `Broadcast` only through a subscriber, which `Unsubscribe` frees right away, so it is the one
   documented, ctx-bounded exception to "nothing waits for a `Broadcast`". Called from handle, it waits on itself until
   ctx is done. So is a `SubscribeSeq` loop that was never started.
+- [ ] `subscriber.WithOnDone(onDone)`: called once the subscriber's goroutine has returned, however it was removed
+  (`Unsubscribe`, `Close`, its ctx, eviction), so that a subscriber owning a resource releases it then.
+  `examples/25-modbus` keeps the rule's connection in an `atomic.Pointer` only so that `main` can close the last one
+  after `Shutdown`: with `onDone`, each rule closes its own, and its `onEvict` still closes it early, to end the write
+  stuck on the dead connection. `Shutdown` has such a hook already, internal: the `exit` that `Attach` takes and
+  `Consume` defers. Build both on one mechanism, so that `Attach` no longer takes `exit`, and `Shutdown`'s count drops
+  after `onDone`, so that `Shutdown` waits for it. `running` still goes up only in `add`, under the gate.
+  - [ ] Settle what a subscriber added during a `Broadcast` gets: `sync.Map.Range` may visit it or not, so a
+    replacement that `onEvict` subscribes from a sync `Broadcast` gets the message that evicted the old one, or not
+    (13 runs of 30 in `examples/25-modbus` without `message.WithParallel`, which it uses for that reason). Either
+    document it on `Subscribe` and `WithEvictAfter`, or have `Broadcast` skip subscribers added after it started: a
+    sequence number set in `add`, against one `Broadcast` reads first, for an atomic load per `Broadcast`. The latter
+    lets `25-modbus` drop `WithParallel`.
 - [ ] Latest value wins: `subscriber.WithDropOldest()` for non-blocking sends. When the buffer is full, it drops the
   oldest message to make room instead of the new one. That suits state (readings, positions, config), where a slow
   subscriber wants the latest message rather than the first, and with `WithBuffer(1)` each subscriber holds one value.
@@ -76,6 +89,21 @@ Each item changes one function or adds one option.
   MQTT retained message, with replay kept out of the core: the wrapper sets the value and broadcasts under a mutex,
   and subscribes then `Send`s the current value under the same one, so no subscriber gets an older value after a newer
   one. Its subscribers want a buffer, so that the `Send` under the mutex never waits.
+- [ ] `subscriber.WithReplay(source)`: messages the subscriber handles before any `Broadcast`, through its
+  middlewares, error handlers and dead letters like any other. Resubscribing with the store of a subscriber's dead
+  letters then replays what it lost, from `onEvict` or after a restart, where `examples/19-redis` today runs a
+  `store.Drain` with a handle of its own (`pageAgain`). The source is an interface in `subscriber`, which cannot import
+  `store`, and `19-redis`'s `stream` implements it, as could `store.Ring`. Settle before writing code:
+  - Whether a replayed entry is acked once handled, as `Drain` does, so that replaying twice does not page twice, or
+    only read, as `stream.All` does.
+  - The order with `Broadcast`s: the subscriber's goroutine replays before it reads `ch`, so that neither `Subscribe`
+    nor an `onEvict` calling it waits, and a `Broadcast` meanwhile waits for it as for a busy handle, or fills its
+    buffer.
+  - A replayed message that fails again goes to the dead letters, so back into the source if it is the same store:
+    read it all before handling any, or replay only what it held at `Subscribe`.
+  - How `Stats` counts a replayed message, which no `Broadcast` picked up.
+  - The `Broadcastor.Send` item above keeps a late subscriber's replay out of the core, in a wrapper. This option
+    brings one in, so settle both together.
 - [ ] `store.File`: a durable `store.Queue` on local disk, with the standard library only, for store and forward across
   reboots where no Redis runs.
   - Append-only segment files, a checksum per record so that a write torn by a power cut is dropped on reopen, and a

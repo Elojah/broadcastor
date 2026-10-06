@@ -60,6 +60,7 @@ type config[T any] struct {
 	store               Store[T]
 	middlewares         []Middleware[T]
 	evictAfter          int
+	onEvict             func(ctx context.Context, evicted *EvictedError[T])
 	asyncLimit          int
 	filter              func(msg T) bool
 }
@@ -298,13 +299,19 @@ func (s *Subscriber[T]) taken() {
 }
 
 // lose reports m, lost to err, and evicts the subscriber once it has lost evictAfter messages in a row (WithEvictAfter).
-// Only the loss whose remove deletes the subscriber is reported as an *EvictedError, once removed: so an eviction is
-// reported once, and never for a subscriber something else removed first.
+// Only the loss whose remove deletes the subscriber is reported as an *EvictedError, once removed, then passed to
+// onEvict: so an eviction is reported once, and never for a subscriber something else removed first.
 func (s *Subscriber[T]) lose(m message.Message[T], err error) {
-	if s.config.evictAfter > 0 && s.misses.Add(1) >= int64(s.config.evictAfter) && s.remove(WithUnsubscribeDiscard()) {
-		err = &EvictedError[T]{SubscriberID: s.id, Message: m.Value, Err: err}
+	if s.config.evictAfter <= 0 || s.misses.Add(1) < int64(s.config.evictAfter) || !s.remove(WithUnsubscribeDiscard()) {
+		s.report(m, err)
+
+		return
 	}
-	s.report(m, err)
+	evicted := &EvictedError[T]{SubscriberID: s.id, Message: m.Value, Err: err}
+	s.report(m, evicted)
+	if s.config.onEvict != nil {
+		s.config.onEvict(s.context(m), evicted)
+	}
 }
 
 // reserve counts an async send under way, unless WithAsyncLimit's are already.

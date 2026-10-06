@@ -1,6 +1,7 @@
 // subscriber.WithEvictAfter unsubscribes a subscriber that loses too many messages in a row, so that it stops costing
 // every Broadcast its timeout. Here a stuck subscriber loses 2 and 3 by timeout, and 3 evicts it: the error handlers
-// get a *subscriber.EvictedError wrapping the *subscriber.TimeoutError, and Broadcast no longer waits for it.
+// get a *subscriber.EvictedError wrapping the *subscriber.TimeoutError, then so does the callback passed to
+// subscriber.WithEvictAfter, and Broadcast no longer waits for it.
 //
 // handle waits for release, standing in for slow work.
 package main
@@ -28,7 +29,9 @@ func main() {
 		<-release
 
 		return nil
-	}, subscriber.WithEvictAfter[int](2), subscriber.WithErrorHandler[int](func(_ context.Context, err error) {
+	}, subscriber.WithEvictAfter(2, func(_ context.Context, evicted *subscriber.EvictedError[int]) {
+		fmt.Println("stuck evicted on losing", evicted.Message)
+	}), subscriber.WithErrorHandler[int](func(_ context.Context, err error) {
 		var timeout *subscriber.TimeoutError[int]
 		if errors.As(err, &timeout) {
 			fmt.Printf("stuck lost %d, evicted: %t\n", timeout.Message, errors.Is(err, subscriber.ErrEvicted))

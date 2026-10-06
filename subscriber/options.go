@@ -90,10 +90,13 @@ func WithTimeout[T any](timeout time.Duration) Option[T] {
 // WithEvictAfter unsubscribes the subscriber once it has lost n messages in a row as a *TimeoutError or a
 // *DroppedError, so that a stuck subscriber stops costing every Broadcast its timeout. A message it takes starts the
 // count again. It is unsubscribed with WithUnsubscribeDiscard, whatever its defaults, and the loss that evicts it is
-// reported as an *EvictedError instead. 0 or less means never, the default.
-func WithEvictAfter[T any](n int) Option[T] {
+// reported as an *EvictedError instead. Once it is reported, onEvict gets that *EvictedError with the ctx the error
+// handlers got: once per subscriber, where the error handlers run, so a slow one holds up Broadcast too. onEvict may be
+// nil. n at 0 or less means never, the default.
+func WithEvictAfter[T any](n int, onEvict func(ctx context.Context, evicted *EvictedError[T])) Option[T] {
 	return func(config *config[T]) {
 		config.evictAfter = n
+		config.onEvict = onEvict
 	}
 }
 
