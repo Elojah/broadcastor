@@ -15,7 +15,7 @@ STRESS_COUNT      ?= 50
 
 # The modules tidy, lint and test cover. An example with dependencies of its own is a module of its own, so that the
 # library's go.mod lists only uuid.
-MODULES            = . examples/19-redis examples/24-mqtt
+MODULES            = . examples/19-redis examples/24-mqtt examples/25-modbus
 
 # The examples tinygo-run runs and tinygo-build builds, which leave out those that are modules of their own, and the
 # board tinygo-build builds them for.

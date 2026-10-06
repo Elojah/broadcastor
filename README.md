@@ -339,10 +339,12 @@ The same goes for a subscriber whose default is `message.WithAsync`.
 | [`22-watchdog`](examples/22-watchdog/main.go) | `Stats.Handling` to unsubscribe a hung subscriber, and `subscriber.WithAsyncLimit`. |
 | [`23-shutdown`](examples/23-shutdown/main.go) | `Shutdown`, which waits for a slow `handle` and for the dead letters before the program exits. |
 | [`24-mqtt`](examples/24-mqtt/main.go) | MQTT in, fanned out to a rule, a local store, and an uplink that stores and forwards with `store.Enqueue` and `store.Drain`. |
+| [`25-modbus`](examples/25-modbus/main.go) | A PLC polled over Modbus TCP, fanned out with `filter.Changed` to a rule that writes a coil back, retrying while the PLC is busy, and a trend that keeps a reading once it moved. |
 
-`19-redis` and `24-mqtt` are modules of their own, so that the library depends on neither go-redis nor an MQTT client.
-Run `go run -C examples/19-redis .` against the Redis at `REDIS_ADDR` (`localhost:6379` by default), and
-`go run -C examples/24-mqtt .` against the MQTT broker at `MQTT_ADDR` (`localhost:1883` by default).
+`19-redis`, `24-mqtt` and `25-modbus` are modules of their own, so that the library depends on neither go-redis, an
+MQTT client nor a Modbus library. Run `go run -C examples/19-redis .` against the Redis at `REDIS_ADDR`
+(`localhost:6379` by default), and `go run -C examples/24-mqtt .` against the MQTT broker at `MQTT_ADDR`
+(`localhost:1883` by default). `go run -C examples/25-modbus .` needs no device: it serves a simulated PLC in process.
 
 ## Development
 
