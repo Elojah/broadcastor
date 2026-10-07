@@ -8,9 +8,10 @@ import (
 )
 
 // Stats is a snapshot of a subscriber's counters since it subscribed. Each message a Broadcast picks the subscriber up
-// for is counted once in Handled, Failed, TimedOut or Dropped, or is still on its way, so Delivered is Handled + Failed
-// + Queued, plus the message in handle if there is one. The counters are read one at a time, so while messages are in
-// flight they may not add up. For SubscribeSeq, handle is the loop body, and its error the one it passes to fail.
+// for is counted once in Handled, Failed, TimedOut or Dropped, or is still on its way, and so is each value it replays
+// (WithReplay), in Delivered then Handled or Failed. So Delivered is Handled + Failed + Queued, plus the message in
+// handle if there is one. The counters are read one at a time, so while messages are in flight they may not add up.
+// For SubscribeSeq, handle is the loop body, and its error the one it passes to fail.
 type Stats struct {
 	SubscriberID uuid.UUID
 
@@ -21,7 +22,7 @@ type Stats struct {
 	// bounds.
 	Sending int
 
-	// Delivered counts the messages the subscriber took.
+	// Delivered counts the messages the subscriber took, and the values it replayed.
 	Delivered uint64
 	// Handled counts the messages handle, or its outermost middleware, returned nil for.
 	Handled uint64

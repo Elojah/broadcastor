@@ -23,19 +23,20 @@ type Broadcastor[T any] struct {
 	// gate makes Close wait for every add under way, so each subscriber is either refused or seen by Close.
 	gate gate.Gate
 
-	// running counts each subscriber whose Consume has not returned, plus one until the first Close. Only add counts one
-	// in, under gate, so it reaches 0 once, after Close: whoever drops it to 0 closes stopped.
+	// running counts each subscriber not done yet (subscriber.WithOnDone), plus one until the first Close. Only add
+	// counts one in, under gate, so it reaches 0 once, after Close: whoever drops it to 0 closes stopped.
 	running atomic.Int64
 	stopped chan struct{}
-	// exit is stop, which add passes to each subscriber, made once: a method value made in add would allocate.
-	exit func()
+	// done is subscriber.WithOnDone(stop), which add passes to each subscriber, made once: made in add, it would
+	// allocate.
+	done subscriber.Option[T]
 }
 
 // NewBroadcastor returns an empty Broadcastor.
 func NewBroadcastor[T any]() *Broadcastor[T] {
 	b := &Broadcastor[T]{stopped: make(chan struct{})}
 	b.running.Store(1)
-	b.exit = b.stop
+	b.done = subscriber.WithOnDone[T](b.stop)
 
 	return b
 }
@@ -208,7 +209,8 @@ func (b *Broadcastor[T]) add(ctx context.Context, options []subscriber.Option[T]
 	if err != nil {
 		return nil, err
 	}
-	s := subscriber.New(id, options...)
+	// Last, so that running drops after the caller's onDone. Clipped, since options may be the caller's array.
+	s := subscriber.New(id, append(slices.Clip(options), b.done)...)
 
 	if !b.gate.Enter() {
 		return nil, ErrClosed
@@ -217,7 +219,7 @@ func (b *Broadcastor[T]) add(ctx context.Context, options []subscriber.Option[T]
 	b.running.Add(1)
 
 	// Before Store, so whoever removes the subscriber stops the watch.
-	ctx = s.Attach(ctx, func(options ...subscriber.UnsubscribeOption) bool { return b.remove(id, options...) }, b.exit)
+	ctx = s.Attach(ctx, func(options ...subscriber.UnsubscribeOption) bool { return b.remove(id, options...) })
 	b.subscribers.Store(id, s)
 	// If ctx was already done, the watch may have run before Store and found nothing.
 	if ctx.Err() != nil {
@@ -240,8 +242,8 @@ func (b *Broadcastor[T]) remove(id uuid.UUID, options ...subscriber.UnsubscribeO
 	return true
 }
 
-// stop drops a count of running, for a Consume that returned or for the first Close, and closes stopped if it was the
-// last.
+// stop drops a count of running, for a subscriber done (its last onDone) or for the first Close, and closes stopped if
+// it was the last.
 func (b *Broadcastor[T]) stop() {
 	if b.running.Add(-1) == 0 {
 		close(b.stopped)

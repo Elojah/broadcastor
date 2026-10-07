@@ -36,8 +36,9 @@
 //
 // # Ordering
 //
-// A subscriber takes messages in the order Broadcast hands them over. Those broadcast from one goroutine keep their
-// order, except with message.WithAsync, and those from several goroutines have none.
+// A subscriber takes messages in the order Broadcast hands them over, after what it replays (subscriber.WithReplay).
+// Those broadcast from one goroutine keep their order, except with message.WithAsync, and those from several goroutines
+// have none.
 //
 // # Unsubscribing
 //
@@ -45,8 +46,9 @@
 // unsubscribed. A subscriber may still process messages it already took, unless unsubscribed with
 // subscriber.WithUnsubscribeDiscard. Once the ctx passed to Subscribe is done, the subscriber is unsubscribed, unless it
 // has subscriber.WithDetachedContext. subscriber.WithEvictAfter unsubscribes a subscriber that loses too many messages
-// in a row. Shutdown is Close, then waits until every subscriber has handled what it took, or until its ctx is done, so
-// that a program can exit right after it, such as on SIGTERM.
+// in a row. subscriber.WithOnDone runs once a subscriber is done, however it was unsubscribed, so that it can release
+// what handle used. Shutdown is Close, then waits until every subscriber has handled what it took and run its onDone,
+// or until its ctx is done, so that a program can exit right after it, such as on SIGTERM.
 //
 // # Contexts
 //
@@ -66,7 +68,9 @@
 // subscriber.WithDeadLetters gives a subscriber.Store every message the subscriber loses, so every message is either
 // handled or stored, once. Package store holds store.Ring, an in-memory queue to read them back from, and store.Drain,
 // which hands them to a handle again. With store.Enqueue as the handle, it forwards messages to a slow sink without
-// holding Broadcast up.
+// holding Broadcast up. subscriber.WithReplay hands a subscriber values before any message, through its middlewares,
+// error handlers and dead letters: what it lost before a restart, read back from its dead letters, or the current
+// value for a late subscriber.
 //
 // # Stats
 //

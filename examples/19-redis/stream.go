@@ -3,9 +3,9 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"time"
+	"iter"
+	"log"
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
@@ -14,14 +14,10 @@ import (
 	"github.com/elojah/broadcastor/subscriber"
 )
 
-// nextWait is how long Next blocks in Redis before it checks ctx again: go-redis does not end a blocking read when ctx
-// is done.
-const nextWait = time.Second
+var _ subscriber.Store[int] = (*stream[int])(nil)
 
-var _ store.Queue[int] = (*stream[int])(nil)
-
-// stream is a store.Queue kept in a Redis stream, where it outlives the process: Put adds each record, along with the
-// subscriber's ID and the error's text, and store.Drain hands them back, oldest first. The stream keeps about the last
+// stream is a subscriber.Store kept in a Redis stream, where it outlives the process: Put adds each record, along with
+// the subscriber's ID and the error's text, and Replay hands them back, oldest first. The stream keeps about the last
 // maxLen of them.
 type stream[T any] struct {
 	client *redis.Client
@@ -48,20 +44,27 @@ func (s *stream[T]) Put(ctx context.Context, r subscriber.Record[T]) error {
 	return s.client.XAdd(ctx, &redis.XAddArgs{Stream: s.key, MaxLen: s.maxLen, Approx: true, Values: values}).Err()
 }
 
-// Next returns the oldest entry not yet acked, waiting for one, or ctx.Err() once ctx is done, within nextWait.
-func (s *stream[T]) Next(ctx context.Context) (store.Entry[T], error) {
-	for {
-		if err := ctx.Err(); err != nil {
-			return store.Entry[T]{}, err
+// Replay yields the message of each entry the stream holds once ranged over, oldest first, and acks each once yield
+// returned: subscriber.WithReplay returns then, once the subscriber has handled or reported it. One the subscriber
+// loses again goes back to the stream as a new entry, through its dead letters, so Replay does not yield it again now.
+// It logs why it stops early, if it fails to read or ack.
+func (s *stream[T]) Replay(ctx context.Context) iter.Seq[T] {
+	return func(yield func(T) bool) {
+		entries, err := s.All(ctx)
+		if err != nil {
+			log.Println(err)
+
+			return
 		}
-		// After ID 0 comes the oldest entry, since Ack deletes those handled.
-		streams, err := s.client.XRead(ctx, &redis.XReadArgs{Streams: []string{s.key, "0"}, Count: 1, Block: nextWait}).Result()
-		switch {
-		case errors.Is(err, redis.Nil): // none within nextWait
-		case err != nil:
-			return store.Entry[T]{}, err
-		default:
-			return s.decode(streams[0].Messages[0])
+		for _, entry := range entries {
+			if !yield(entry.Message) {
+				return
+			}
+			if err := s.Ack(ctx, entry.ID); err != nil {
+				log.Println(err)
+
+				return
+			}
 		}
 	}
 }

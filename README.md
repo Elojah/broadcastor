@@ -224,8 +224,32 @@ retry := middleware.Retry[string](middleware.RetryPolicy{Attempts: math.MaxInt, 
 go store.Drain(ctx, queue, retry(uplink), nil)
 ```
 
-[`19-redis`](examples/19-redis/stream.go) keeps such a queue in a Redis stream, which outlives a restart.
 [`24-mqtt`](examples/24-mqtt/main.go) forwards readings from MQTT to an uplink that is down for a while.
+
+`subscriber.WithReplay` hands a subscriber the values of an iterator before anything a `Broadcast` sends it: the
+messages it lost before a restart, read back from its dead letters, or the current value for a late subscriber. Each
+goes through its middlewares, error handlers and dead letters like a message. `yield` returns once the value is handled
+or reported, so the iterator acks it then. It returns false once the subscriber discards, and what is left stays in
+the source. A value lost again goes back to the dead letters, so an iterator reading them yields only what they held
+when it started:
+
+```go
+func (s *stream[T]) Replay(ctx context.Context) iter.Seq[T] {
+ return func(yield func(T) bool) {
+  entries, _ := s.All(ctx) // what it holds now
+  for _, entry := range entries {
+   if !yield(entry.Message) {
+    return
+   }
+   s.Ack(ctx, entry.ID)
+  }
+ }
+}
+...
+id, err := b.Subscribe(ctx, page, subscriber.WithReplay(lost.Replay(ctx)), subscriber.WithDeadLetters[Alert](lost))
+```
+
+[`19-redis`](examples/19-redis/stream.go) keeps the dead letters in a Redis stream, and replays them after a restart.
 
 ## Stats
 
@@ -242,7 +266,7 @@ for _, s := range b.Stats() {
 | --- | --- |
 | `Queued`, `Buffer` | Messages in the subscriber's buffer, and its size. |
 | `Sending` | Async sends under way to the subscriber. |
-| `Delivered` | Messages the subscriber took. |
+| `Delivered` | Messages the subscriber took, and values it replayed. |
 | `Handled`, `Failed` | Messages `handle` returned nil or an error for. |
 | `TimedOut`, `Dropped` | Messages lost as a `TimeoutError` or a `DroppedError`. |
 | `HandleTime` | Time spent in `handle` and its middlewares. |
@@ -274,10 +298,12 @@ for _, s := range b.Stats() {
 - `subscriber.WithEvictAfter(n, onEvict)` unsubscribes a subscriber once it has lost n messages in a row, so that a
   stuck one stops costing every `Broadcast` its timeout. Unless nil, `onEvict` then gets the
   `*subscriber.EvictedError`, once, after the error handlers: to log it, alert, or subscribe a replacement.
+- `subscriber.WithOnDone(onDone)` runs once the subscriber is done, however it was unsubscribed: after `handle`'s last
+  call, in the subscriber's goroutine, so that it can release what `handle` used without a lock.
 - `Shutdown(ctx)` is `Close`, then waits until every subscriber has handled what it took, or reported it with
-  `subscriber.WithUnsubscribeDiscard`, or until ctx is done. A program that exits right after `Close` cuts off
-  whatever `handle` was doing, so call `Shutdown` on SIGTERM or a power-fail signal. Called from `handle`, it waits on
-  itself until ctx is done.
+  `subscriber.WithUnsubscribeDiscard`, and run its `onDone`, or until ctx is done. A program that exits right after
+  `Close` cuts off whatever `handle` was doing, so call `Shutdown` on SIGTERM or a power-fail signal. Called from
+  `handle`, it waits on itself until ctx is done.
 
 ```go
 ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
@@ -334,7 +360,7 @@ The same goes for a subscriber whose default is `message.WithAsync`.
 | [`16-stats`](examples/16-stats/main.go) | `Broadcastor.Stats`, for a stuck subscriber and a failing one. |
 | [`17-evict`](examples/17-evict/main.go) | `subscriber.WithEvictAfter`, its callback, and `*subscriber.EvictedError`. |
 | [`18-history`](examples/18-history/main.go) | `middleware.History` and `subscriber.WithDeadLetters` sharing a store. |
-| [`19-redis`](examples/19-redis/main.go) | A dead-letter queue and a history in Redis, across a restart. |
+| [`19-redis`](examples/19-redis/main.go) | Dead letters and a history in Redis, and `subscriber.WithReplay` to page what was lost before a restart. |
 | [`20-filter`](examples/20-filter/main.go) | `subscriber.WithFilter` with `filter.Changed` and `filter.Every`, for readings that repeat themselves. |
 | [`21-max-age`](examples/21-max-age/main.go) | `middleware.MaxAge` and `*subscriber.ExpiredError`, for a reading that waited too long. |
 | [`22-watchdog`](examples/22-watchdog/main.go) | `Stats.Handling` to unsubscribe a hung subscriber, and `subscriber.WithAsyncLimit`. |

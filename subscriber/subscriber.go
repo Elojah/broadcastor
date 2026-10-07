@@ -28,9 +28,6 @@ type Subscriber[T any] struct {
 	// remove removes the subscriber from its Broadcastor, as Broadcastor.Unsubscribe does. Set by Attach.
 	remove func(options ...UnsubscribeOption) bool
 
-	// exit tells the Broadcastor that Consume has returned, for Broadcastor.Shutdown. Set by Attach.
-	exit func()
-
 	// done is closed by Unsubscribe, so that no send waits on a subscriber that is gone.
 	done chan struct{}
 
@@ -56,13 +53,17 @@ type config[T any] struct {
 	defaults            message.Config
 	unsubscribeDefaults unsubscription
 	detached            bool
-	errorHandler        func(ctx context.Context, err error)
 	store               Store[T]
 	middlewares         []Middleware[T]
 	evictAfter          int
-	onEvict             func(ctx context.Context, evicted *EvictedError[T])
 	asyncLimit          int
-	filter              func(msg T) bool
+	replay              iter.Seq[T]
+
+	errorHandler func(ctx context.Context, err error)
+	filter       func(msg T) bool
+
+	onEvict func(ctx context.Context, evicted *EvictedError[T])
+	onDone  func()
 }
 
 // New returns a subscriber holding the subscription's reference, which Unsubscribe drops.
@@ -86,11 +87,10 @@ func (s *Subscriber[T]) ID() uuid.UUID {
 
 // Attach ties the subscriber to its Broadcastor, which remove removes it from. The subscriber runs with ctx, and calls
 // remove once ctx is done, when a Seq loop ends, and to evict itself (WithEvictAfter). With WithDetachedContext, it
-// runs with context.WithoutCancel(ctx) instead, and ctx never removes it. It calls exit once Consume has returned. It
-// returns the ctx the subscriber runs with, and must be called once, before anything else.
-func (s *Subscriber[T]) Attach(ctx context.Context, remove func(options ...UnsubscribeOption) bool, exit func()) context.Context {
+// runs with context.WithoutCancel(ctx) instead, and ctx never removes it. It returns the ctx the subscriber runs with,
+// and must be called once, before anything else.
+func (s *Subscriber[T]) Attach(ctx context.Context, remove func(options ...UnsubscribeOption) bool) context.Context {
 	s.remove = remove
-	s.exit = exit
 	if s.config.detached {
 		s.ctx = context.WithoutCancel(ctx)
 
@@ -166,26 +166,23 @@ func (s *Subscriber[T]) Unsubscribe(options ...UnsubscribeOption) {
 	s.release()
 }
 
-// Consume calls handle, wrapped in the middlewares, for every message until ch is closed, and reports its errors. It
-// runs once per subscriber, then calls exit.
+// Consume calls handle, wrapped in the middlewares, for every value of the replay (WithReplay), then for every message
+// until ch is closed, and reports its errors. It runs once per subscriber, then calls onDone (WithOnDone).
 func (s *Subscriber[T]) Consume(handle Handler[T]) {
-	defer s.exit()
+	if onDone := s.config.onDone; onDone != nil {
+		defer onDone()
+	}
 	handle = chain(handle, s.config.middlewares...)
+	if s.config.replay != nil {
+		s.replay(handle)
+	}
 	for m := range s.ch {
 		if s.discarding.Load() {
 			s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: m.Value})
 
 			continue
 		}
-		start := time.Now()
-		s.counters.handleStart.Store(int64(start.Sub(s.created)) + 1)
-		err := handle(s.context(m), s.id, m.Value)
-		s.counters.handleStart.Store(0)
-		s.counters.handle(time.Since(start), err)
-		// Reported outside the chain, so Recover never catches a panic in an error handler.
-		if err != nil {
-			s.report(m, err)
-		}
+		s.process(handle, m)
 	}
 }
 
@@ -231,6 +228,31 @@ func (s *Subscriber[T]) Stats() Stats {
 		Dropped:      s.counters.dropped.Load(),
 		HandleTime:   time.Duration(s.counters.handleTime.Load()),
 		Handling:     s.counters.handling(s.created),
+	}
+}
+
+// replay passes each value of the replay to handle, as a message from a Broadcast, until the subscriber discards: the
+// value it then got is neither handled nor reported, and stays in the source with the rest.
+func (s *Subscriber[T]) replay(handle Handler[T]) {
+	for value := range s.config.replay {
+		if s.discarding.Load() {
+			return
+		}
+		s.counters.delivered.Add(1)
+		s.process(handle, message.New(value, s.config.defaults, message.Config{}))
+	}
+}
+
+// process passes m to handle, counts it, and reports its error.
+func (s *Subscriber[T]) process(handle Handler[T], m message.Message[T]) {
+	start := time.Now()
+	s.counters.handleStart.Store(int64(start.Sub(s.created)) + 1)
+	err := handle(s.context(m), s.id, m.Value)
+	s.counters.handleStart.Store(0)
+	s.counters.handle(time.Since(start), err)
+	// Reported outside the chain, so Recover never catches a panic in an error handler.
+	if err != nil {
+		s.report(m, err)
 	}
 }
 

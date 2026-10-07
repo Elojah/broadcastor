@@ -2,6 +2,7 @@ package subscriber
 
 import (
 	"context"
+	"iter"
 	"time"
 
 	"github.com/elojah/broadcastor/message"
@@ -129,6 +130,46 @@ func WithFilter[T any](keep func(msg T) bool) Option[T] {
 func WithAsyncLimit[T any](n int) Option[T] {
 	return func(config *config[T]) {
 		config.asyncLimit = n
+	}
+}
+
+// WithReplay makes the subscriber handle each value of replay before any message from a Broadcast: what it lost before
+// a restart, read back from its dead letters, or the current value for a late subscriber (slices.Values). Its
+// goroutine ranges over replay, so Subscribe does not wait, but a Broadcast meanwhile waits for it as for a busy
+// handle, or fills its buffer. Each value goes through the middlewares, the error handlers and the dead letters, and
+// counts in Stats, like a message, but towards neither WithEvictAfter nor Broadcast's return value.
+//
+// yield returns once the value is handled or reported, so that replay can ack it then. Once the subscriber discards
+// (WithUnsubscribeDiscard, eviction, or a SubscribeSeq loop that ended), yield returns false without handling the
+// value, and the rest stays in the source. Without discard, an unsubscribed subscriber goes on replaying, and Shutdown
+// waits for it. A value that fails again goes to the dead letters: a replay that reads them should yield only what
+// they held when it started.
+func WithReplay[T any](replay iter.Seq[T]) Option[T] {
+	return func(config *config[T]) {
+		config.replay = replay
+	}
+}
+
+// WithOnDone adds onDone, which runs once the subscriber is done: unsubscribed, however it was, and done with what it
+// took, so that it can release what handle used, such as a connection. It runs in the subscriber's goroutine after
+// handle's last call, or for SubscribeSeq after the loop body's last call, so handle and onDone can share state
+// without a lock. It never runs for a SubscribeSeq loop never ranged. Shutdown waits for it. Each WithOnDone adds one,
+// and they run in order. A nil onDone adds none.
+func WithOnDone[T any](onDone func()) Option[T] {
+	return func(config *config[T]) {
+		if onDone == nil {
+			return
+		}
+		previous := config.onDone
+		if previous == nil {
+			config.onDone = onDone
+
+			return
+		}
+		config.onDone = func() {
+			previous()
+			onDone()
+		}
 	}
 }
 

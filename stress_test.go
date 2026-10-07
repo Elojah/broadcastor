@@ -37,18 +37,25 @@ const (
 	stressTimeout = 500 * time.Microsecond
 	// handle fails for every multiple of stressFailEvery.
 	stressFailEvery = 7
+	// stressReplay bounds what a subscriber replays: negative numbers, from -1 down.
+	stressReplay = 8
 	// stressLabel is the pprof label every goroutine of a round carries, the library's included.
 	stressLabel = "broadcastor_stress"
 )
 
-var errAfterShutdown = errors.New("handled or reported once Shutdown had returned")
+var (
+	errAfterShutdown = errors.New("handled or reported once Shutdown had returned")
+	errAfterDone     = errors.New("handled once onDone had run")
+	errReplayLate    = errors.New("replayed after a broadcast message")
+)
 
 // TestStress runs random interleavings of every method from several goroutines, in real time so that timeouts race
 // sends and evict subscribers, over rounds that each have their own Broadcastor. It checks that nothing panics, that every goroutine returns
 // once the Broadcastor is closed, that no subscriber gets a message twice, whether handled or reported, that a
-// subscriber gets every message broadcast while it was subscribed and none broadcast outside that, that Stats add up
-// once nothing is in flight, and that nothing is handled or reported once Shutdown has returned. make stress runs it
-// many times.
+// subscriber gets every message broadcast while it was subscribed and none broadcast outside that, that it gets what
+// it replays (subscriber.WithReplay) before any of those, that Stats add up once nothing is in flight, that onDone runs
+// once, after handle's last call, and that nothing is handled or reported once Shutdown has returned. make stress runs
+// it many times.
 func TestStress(t *testing.T) {
 	t.Parallel()
 
@@ -129,6 +136,8 @@ type stressSub struct {
 	leave atomic.Bool
 	// notFound is set once an Unsubscribe found no subscriber before Close, which only an eviction explains.
 	notFound atomic.Bool
+	// done counts the calls to onDone.
+	done atomic.Int64
 
 	mu     sync.Mutex
 	got    map[int]stressOutcome
@@ -137,6 +146,11 @@ type stressSub struct {
 	evicted, evictions int
 	// onEvicted holds the messages onEvict got.
 	onEvicted []int
+	// replay is how many numbers the subscriber replays, and yielded those yield returned true for.
+	replay  int
+	yielded []int
+	// live is set once handle got a broadcast message, after which it may not get a replayed one.
+	live bool
 	// twice holds the numbers the subscriber got again, or that handle failed for again.
 	twice      []int
 	unexpected []error
@@ -263,6 +277,14 @@ func (s *stress) subscribe(ctx context.Context, t *testing.T) *stressSub {
 	}
 	if randN(2) == 0 {
 		options = append(options, subscriber.WithAsyncLimit[int](1+randN(2)))
+	}
+	options = append(options, subscriber.WithOnDone[int](func() {
+		sub.checkShut(0)
+		sub.done.Add(1)
+	}))
+	if randN(3) == 0 {
+		sub.replay = 1 + randN(stressReplay)
+		options = append(options, subscriber.WithReplay(sub.replayed))
 	}
 	if randN(2) == 0 {
 		sub.evictAfter = 1 + randN(3)
@@ -517,11 +539,32 @@ func (s *stress) goroutines(t *testing.T) []string {
 	return records
 }
 
+// replayed is the subscriber's replay: -1 down to -sub.replay, recording those yield returned true for.
+func (sub *stressSub) replayed(yield func(int) bool) {
+	for n := -1; n >= -sub.replay; n-- {
+		if !yield(n) {
+			return
+		}
+		sub.mu.Lock()
+		sub.yielded = append(sub.yielded, n)
+		sub.mu.Unlock()
+	}
+}
+
 // record records that the subscriber got n, handled or reported as outcome.
 func (sub *stressSub) record(n int, outcome stressOutcome) {
 	sub.checkShut(n)
+	if outcome == stressHandled && sub.done.Load() != 0 {
+		sub.unexpect(fmt.Errorf("%w: %d", errAfterDone, n))
+	}
 	sub.mu.Lock()
 	defer sub.mu.Unlock()
+	if outcome == stressHandled {
+		if n < 0 && sub.live {
+			sub.unexpected = append(sub.unexpected, fmt.Errorf("%w: %d", errReplayLate, n))
+		}
+		sub.live = sub.live || n > 0
+	}
 	if _, ok := sub.got[n]; ok {
 		sub.twice = append(sub.twice, n)
 
@@ -560,6 +603,9 @@ func (sub *stressSub) report(_ context.Context, err error) {
 // fail records that handle failed for n.
 func (sub *stressSub) fail(n int) {
 	sub.checkShut(n)
+	if sub.done.Load() != 0 {
+		sub.unexpect(fmt.Errorf("%w: failed for %d", errAfterDone, n))
+	}
 	sub.mu.Lock()
 	defer sub.mu.Unlock()
 	if sub.failed[n] {
@@ -624,6 +670,7 @@ func (sub *stressSub) problems(broadcasts []stressBroadcast, byNumber map[int]st
 	if sub.notFound.Load() && sub.evictions == 0 {
 		problems = append(problems, "Unsubscribe found no subscriber before Close, but it was never evicted")
 	}
+	problems = append(problems, sub.optionProblems()...)
 
 	// Every message broadcast entirely while it was subscribed, and none broadcast entirely outside that.
 	leaving, gone := min(tickOrNever(&sub.leaving), closing), min(tickOrNever(&sub.gone), closed)
@@ -638,7 +685,7 @@ func (sub *stressSub) problems(broadcasts []stressBroadcast, byNumber map[int]st
 		}
 	}
 	for n := range sub.got {
-		if b, ok := byNumber[n]; !ok || b.end < sub.subscribing || b.start > gone {
+		if b, ok := byNumber[n]; n > 0 && (!ok || b.end < sub.subscribing || b.start > gone) {
 			extra = append(extra, n)
 		}
 	}
@@ -668,6 +715,28 @@ func (sub *stressSub) problems(broadcasts []stressBroadcast, byNumber map[int]st
 	if len(wrongFailures) != 0 {
 		slices.Sort(wrongFailures)
 		problems = append(problems, fmt.Sprintf("the error handler got a wrong set of handle's failures, with %v wrong", first(wrongFailures)))
+	}
+
+	return problems
+}
+
+// optionProblems checks what onDone and the replay got. sub.mu must be held.
+func (sub *stressSub) optionProblems() []string {
+	var problems []string
+	// Every subscriber here runs, so onDone runs once.
+	if done := sub.done.Load(); done != 1 {
+		problems = append(problems, fmt.Sprintf("onDone ran %d times, want once", done))
+	}
+	// It got each number it replayed that yield returned true for, and no other.
+	for _, n := range sub.yielded {
+		if _, ok := sub.got[n]; !ok {
+			problems = append(problems, fmt.Sprintf("replayed %d, but neither handled nor reported it", n))
+		}
+	}
+	for n := range sub.got {
+		if n < 0 && !slices.Contains(sub.yielded, n) {
+			problems = append(problems, fmt.Sprintf("got %d, which it did not replay, or yield returned false for", n))
+		}
 	}
 
 	return problems
