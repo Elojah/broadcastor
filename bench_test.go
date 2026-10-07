@@ -19,9 +19,8 @@ var benchSubscribers = []int{1, 10, 100, 1000}
 // benchBuffer is the buffer of every buffered subscriber in the benchmarks.
 const benchBuffer = 64
 
-// BenchmarkBroadcast measures the latency of one Broadcast until every subscriber has handled it, for each delivery
-// mode. That is mostly the wake-up of each subscriber's parked goroutine: BenchmarkBroadcast_Throughput measures
-// Broadcast itself. Waiting keeps async Broadcasts from piling up goroutines.
+// BenchmarkBroadcast measures one Broadcast until every subscriber has handled it, per delivery mode: mostly waking
+// each parked goroutine. Waiting keeps async Broadcasts from piling up goroutines.
 func BenchmarkBroadcast(b *testing.B) {
 	modes := []struct {
 		name      string
@@ -71,8 +70,7 @@ func BenchmarkBroadcast(b *testing.B) {
 }
 
 // BenchmarkBroadcast_Throughput measures Broadcast itself, per message a subscriber gets: subscribers are buffered, and
-// the benchmark waits for them once, after the last Broadcast. It loops over b.N rather than b.Loop, which would stop
-// the timer before that wait.
+// waited for once, after the last Broadcast. It loops over b.N, since b.Loop would stop the timer before that wait.
 func BenchmarkBroadcast_Throughput(b *testing.B) {
 	modes := []struct {
 		name      string
@@ -101,8 +99,8 @@ func BenchmarkBroadcast_Throughput(b *testing.B) {
 	}
 }
 
-// BenchmarkBroadcast_Concurrent is BenchmarkBroadcast_Throughput in sync mode from GOMAXPROCS goroutines at once, so
-// that they contend on each subscriber's reference count, counters and channel.
+// BenchmarkBroadcast_Concurrent is BenchmarkBroadcast_Throughput in sync mode from GOMAXPROCS goroutines, contending on
+// each subscriber's references, counters and channel.
 func BenchmarkBroadcast_Concurrent(b *testing.B) {
 	for _, subscribers := range benchSubscribers {
 		b.Run(fmt.Sprintf("subscribers=%d", subscribers), func(b *testing.B) {
@@ -124,8 +122,8 @@ func BenchmarkBroadcast_Concurrent(b *testing.B) {
 }
 
 // BenchmarkBroadcast_Churn is BenchmarkBroadcast_Throughput in sync mode while another goroutine subscribes and
-// unsubscribes, so that Broadcast ranges over a sync.Map that has writes. Only the steady subscribers count as
-// deliveries, and the allocations include the churn's.
+// unsubscribes, so Broadcast ranges over a sync.Map being written. Only the steady subscribers count as deliveries, and
+// the allocations include the churn's.
 func BenchmarkBroadcast_Churn(b *testing.B) {
 	for _, subscribers := range benchSubscribers {
 		b.Run(fmt.Sprintf("subscribers=%d", subscribers), func(b *testing.B) {
@@ -204,9 +202,8 @@ func subscribeUnsubscribe(ctx context.Context, bc *broadcastor.Broadcastor[int],
 	return nil
 }
 
-// subscribeCounting subscribes subscribers that each expect messages, and returns a func that waits until every one
-// has handled them. Each counts on its own, so waiting adds no contention between them. They are unsubscribed once
-// b.Context() is done, after each run of the benchmark function.
+// subscribeCounting subscribes subscribers that each expect messages, and returns a func waiting until each has handled
+// them. Each counts on its own, so waiting adds no contention. b.Context() unsubscribes them after each run.
 func subscribeCounting(b *testing.B, bc *broadcastor.Broadcastor[int], subscribers, messages int, options ...subscriber.Option[int]) func() {
 	b.Helper()
 	done := make([]chan struct{}, subscribers)

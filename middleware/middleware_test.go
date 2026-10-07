@@ -25,8 +25,8 @@ func failOn(_ context.Context, _ uuid.UUID, msg int) error {
 	}
 }
 
-// With Recover outside WrapError, the order the package doc recommends, a panic is a *PanicError that is not wrapped in
-// a *HandleError, and an error is a *HandleError.
+// With Recover outside WrapError, as the package doc recommends, a panic is a *PanicError, not wrapped in a
+// *HandleError, and an error is a *HandleError.
 func TestRecover_WrapError(t *testing.T) {
 	t.Parallel()
 

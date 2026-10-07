@@ -11,9 +11,8 @@ import (
 	"github.com/elojah/broadcastor/subscriber"
 )
 
-// A Broadcast with no options allocates nothing in sync, buffered and non-blocking modes, and one with options
-// allocates once, however many subscribers there are. AllocsPerRun counts every goroutine's allocations, so the test
-// does not run in parallel.
+// A Broadcast allocates nothing without options in sync, buffered and non-blocking modes, and once with options,
+// whatever the number of subscribers. Not parallel: AllocsPerRun counts every goroutine's allocations.
 func TestBroadcast_Allocs(t *testing.T) { //nolint:paralleltest // AllocsPerRun counts every goroutine's allocations
 	const (
 		subscribers = 10

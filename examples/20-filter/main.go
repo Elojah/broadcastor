@@ -1,9 +1,9 @@
-// subscriber.WithFilter skips messages before Broadcast sends them, so the subscriber never wakes up for them. Here a
-// thermometer broadcasts a reading every second, mostly the same temperature. The display shows a reading only once it
-// moved by half a degree from the last one shown (filter.Changed, a deadband), and the uplink sends at most one an hour
-// (filter.Every), so only the first here.
+// subscriber.WithFilter skips messages before Broadcast sends them, so the subscriber never wakes up for them. A
+// thermometer broadcasts a reading every second, mostly the same. The display shows one only once it has moved by half
+// a degree from the last shown (filter.Changed, a deadband), and the uplink sends at most one an hour (filter.Every),
+// so only the first here.
 //
-// Broadcast returns how many subscribers took each reading, which skipped ones do not count.
+// Broadcast returns how many subscribers took each reading, skipped ones excluded.
 package main
 
 import (

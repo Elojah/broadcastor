@@ -16,9 +16,8 @@ import (
 	"github.com/elojah/broadcastor/subscriber"
 )
 
-// The subscriber handles what it replays before any Broadcast's message, in order, through its middlewares, its error
-// handlers and its dead letters, with its default message options, and counts each value like a message. The replay
-// acks each value once it is handled or reported.
+// The replay comes before any Broadcast, in order, through the middlewares, error handlers and dead letters, with the
+// default message options, each value counted like a message and acked once handled or reported.
 func TestSubscriberWithReplay(t *testing.T) {
 	t.Parallel()
 
@@ -73,8 +72,8 @@ func TestSubscriberWithReplay(t *testing.T) {
 	})
 }
 
-// Once the subscriber discards, yield returns false without handling the value, so the replay stops and keeps the
-// rest. Without discard, it goes on replaying once unsubscribed, and Shutdown waits for it.
+// Once the subscriber discards, yield returns false without handling the value, and the replay keeps the rest. Without
+// discard, it keeps replaying once unsubscribed, and Shutdown waits for it.
 func TestSubscriberWithReplay_Unsubscribe(t *testing.T) {
 	t.Parallel()
 
@@ -133,8 +132,8 @@ func TestSubscriberWithReplay_Unsubscribe(t *testing.T) {
 	}
 }
 
-// A Broadcast during the replay waits for the subscriber as for a busy handle, and gives up on it once its timeout
-// runs out, which counts towards WithEvictAfter: eviction ends the replay.
+// A Broadcast during the replay waits as for a busy handle, and its timeout counts towards WithEvictAfter: eviction
+// ends the replay.
 func TestSubscriberWithReplay_BroadcastWaits(t *testing.T) {
 	t.Parallel()
 
@@ -222,7 +221,7 @@ func TestSubscriberWithReplay_SubscribeSeqBreak(t *testing.T) {
 }
 
 // replayOf returns a replay of values that records "acked <value>" into events once yield returned true for it, and
-// "stopped at <value>" if yield returned false.
+// "stopped at <value>" once it returned false.
 func replayOf(events *recorder[string], values ...int) iter.Seq[int] {
 	return func(yield func(int) bool) {
 		for _, v := range values {

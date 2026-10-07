@@ -59,8 +59,8 @@ func TestDrain(t *testing.T) {
 	})
 }
 
-// An entry handle fails on goes to the dead letter store, with handle's error and a ctx that is never done, or is
-// dropped without one. Either way it is acked, and Drain goes on.
+// A failed entry goes to the dead letters, with handle's error and a ctx never done, or is dropped without them. Either
+// way it is acked, and Drain goes on.
 func TestDrain_DeadLetter(t *testing.T) {
 	t.Parallel()
 
@@ -238,8 +238,8 @@ func TestDrain_Retry(t *testing.T) {
 	})
 }
 
-// Enqueue's handle puts the message with the subscriber's ID and no error, with the ctx's values but a ctx never done,
-// and returns Put's error.
+// Enqueue's handle puts the message with the subscriber's ID, no error, and a ctx with the same values, never done, and
+// returns Put's error.
 func TestEnqueue(t *testing.T) {
 	t.Parallel()
 

@@ -107,8 +107,8 @@ func TestSubscriberWithMiddleware_SkipsHandle(t *testing.T) {
 	})
 }
 
-// A middleware sees the error handle returns as is, and the error it returns itself reaches the error handler as is
-// too: nothing wraps it unless a middleware does.
+// A middleware sees handle's error as is, and its own reaches the error handler as is: nothing wraps it unless a
+// middleware does.
 func TestSubscriberWithMiddleware_Error(t *testing.T) {
 	t.Parallel()
 
@@ -150,8 +150,8 @@ func TestSubscriberWithMiddleware_Error(t *testing.T) {
 	})
 }
 
-// With middleware.Recover first, a panic in a later middleware is reported as a *PanicError for the subscriber, like a
-// panic in handle, and the subscriber goes on with the next message.
+// With middleware.Recover first, a panic in a later middleware is a *PanicError, like one in handle, and the subscriber
+// goes on.
 func TestSubscriberWithMiddleware_Recover(t *testing.T) {
 	t.Parallel()
 
@@ -211,8 +211,8 @@ func TestSubscriberWithMiddleware_Recover(t *testing.T) {
 	})
 }
 
-// middleware.Retry calls handle again in the subscriber's goroutine, so the subscriber takes no message while it waits,
-// and the next Broadcast waits for it.
+// middleware.Retry calls handle again in the subscriber's goroutine, so meanwhile the subscriber takes nothing, and the
+// next Broadcast waits.
 func TestSubscriberWithMiddleware_Retry(t *testing.T) {
 	t.Parallel()
 
@@ -250,8 +250,8 @@ func TestSubscriberWithMiddleware_Retry(t *testing.T) {
 	})
 }
 
-// Cancelling the Subscribe ctx while middleware.Retry waits unsubscribes the subscriber and ends the wait: the error of
-// the last call is reported right away, and the subscriber's goroutine ends.
+// Cancelling the Subscribe ctx during a middleware.Retry wait unsubscribes and ends the wait: the last error is
+// reported at once, and the goroutine ends.
 func TestSubscriberWithMiddleware_RetryContextDone(t *testing.T) {
 	t.Parallel()
 
@@ -294,8 +294,8 @@ func TestSubscriberWithMiddleware_RetryContextDone(t *testing.T) {
 	})
 }
 
-// Given the same store, middleware.History and subscriber.WithDeadLetters put each message in it once: those handled
-// with a nil Err, the others with the error about them.
+// Sharing a store, middleware.History and subscriber.WithDeadLetters put each message in it once: those handled with a
+// nil Err, the others with their error.
 func TestSubscriberWithMiddleware_History(t *testing.T) {
 	t.Parallel()
 
@@ -337,8 +337,8 @@ func TestSubscriberWithMiddleware_History(t *testing.T) {
 	})
 }
 
-// middleware.MaxAge does not hand handle a message that waited too long behind a slow one: the error handlers get a
-// *subscriber.ExpiredError, the dead letters get the message, and it counts as Failed.
+// middleware.MaxAge does not hand handle a message that waited too long: the error handlers get a
+// *subscriber.ExpiredError, the dead letters the message, and it counts as Failed.
 func TestSubscriberWithMiddleware_MaxAge(t *testing.T) {
 	t.Parallel()
 
@@ -385,8 +385,8 @@ func TestSubscriberWithMiddleware_MaxAge(t *testing.T) {
 	})
 }
 
-// Middlewares wrap a SubscribeSeq loop body as they wrap handle: they get the error it passes to fail, and Retry yields
-// the message again. Once the loop has ended, the message is a *subscriber.ClosedError, which Retry does not retry.
+// Middlewares wrap a SubscribeSeq loop body like handle: they get the error passed to fail, and Retry yields the
+// message again. Once the loop has ended, the message is a *subscriber.ClosedError, which Retry does not retry.
 func TestSubscriberWithMiddleware_SubscribeSeq(t *testing.T) {
 	t.Parallel()
 
@@ -443,8 +443,8 @@ func TestSubscriberWithMiddleware_SubscribeSeq(t *testing.T) {
 	})
 }
 
-// Recover cannot catch a panic in a SubscribeSeq loop body, which reaches the loop's caller. The message is reported as
-// a *subscriber.ClosedError, not a *subscriber.PanicError.
+// Recover cannot catch a panic in a SubscribeSeq loop body, which reaches the caller: the message is reported as a
+// *subscriber.ClosedError, not a *subscriber.PanicError.
 func TestSubscriberWithMiddleware_SubscribeSeqPanic(t *testing.T) {
 	t.Parallel()
 

@@ -16,7 +16,7 @@ import (
 )
 
 // Shutdown returns once every subscriber has handled what it took: the message in handle, its buffer, and what a
-// SubscribeSeq loop took. Every later call returns ErrClosed.
+// SubscribeSeq loop took. Later calls return ErrClosed.
 func TestShutdown(t *testing.T) {
 	t.Parallel()
 
@@ -63,8 +63,8 @@ func TestShutdown(t *testing.T) {
 	})
 }
 
-// With WithUnsubscribeDiscard, Shutdown returns once the subscriber has reported what was left in its buffer, so its
-// dead letters hold it.
+// With WithUnsubscribeDiscard, Shutdown returns once the subscriber has reported its buffer, so its dead letters hold
+// it.
 func TestShutdown_Discard(t *testing.T) {
 	t.Parallel()
 
@@ -104,8 +104,8 @@ func TestShutdown_Discard(t *testing.T) {
 	})
 }
 
-// Shutdown frees the Broadcasts waiting on a subscriber, sync and async, and returns once they have reported their
-// messages and handle has returned.
+// Shutdown frees the Broadcasts waiting on a subscriber, sync and async, and returns once they have reported and handle
+// has returned.
 func TestShutdown_FreesBroadcast(t *testing.T) {
 	t.Parallel()
 
@@ -166,8 +166,8 @@ func TestShutdown_ContextDone(t *testing.T) {
 	})
 }
 
-// handle shuts the Broadcastor down while a Broadcast waits on it: Shutdown waits on that handle until its ctx is done,
-// whereas the Broadcast gives up.
+// handle shuts down while a Broadcast waits on it: Shutdown waits on that handle until its ctx is done, while the
+// Broadcast gives up.
 func TestShutdown_FromHandle(t *testing.T) {
 	t.Parallel()
 
@@ -211,8 +211,8 @@ func TestShutdown_FromHandle(t *testing.T) {
 	})
 }
 
-// A SubscribeSeq loop that never started holds Shutdown until its ctx is done, since the subscriber still has a message
-// to yield. Once ranged, the loop yields it and ends, and Shutdown returns.
+// A SubscribeSeq loop never started holds Shutdown until its ctx is done, since it still has a message to yield. Once
+// ranged, the loop yields it and ends, and Shutdown returns.
 func TestShutdown_SubscribeSeqNotRanged(t *testing.T) {
 	t.Parallel()
 

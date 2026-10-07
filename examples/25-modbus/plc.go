@@ -14,11 +14,10 @@ import (
 
 var _ modbus.RequestHandler = (*plc)(nil)
 
-// plc stands in for a PLC on the Modbus network: input register temperatureRegister holds its temperature, and coil
-// fanCoil drives its fan. Each read of the register returns the next of its readings, then the last one again. It
-// answers its first write with exception 6, server device busy, as a PLC does while it is starting up, and never
-// answers its third, nor any later request on that connection, as if the connection were gone. The server calls it
-// from a goroutine per client connection.
+// plc simulates a PLC: input register temperatureRegister holds its temperature, and coil fanCoil drives its fan. Each
+// read of the register returns its next reading, then the last one again. It answers its first write with exception 6,
+// server device busy, as a PLC starting up does, and never answers its third, nor any later request on that connection,
+// as if it were gone. The server calls it from a goroutine per connection.
 type plc struct {
 	mu       sync.Mutex
 	readings []uint16
@@ -83,8 +82,7 @@ func (p *plc) HandleInputRegisters(req *modbus.InputRegistersRequest) ([]uint16,
 }
 
 // servePLC serves p over Modbus TCP on a free local port, and returns its address and stop, which ends the write p
-// never answers and stops the server. The server listens on the address it is given, without saying which port it
-// took, so servePLC first takes a free one from the kernel.
+// never answers and stops the server. The server does not say which port it took, so servePLC picks a free one first.
 func servePLC(ctx context.Context, p *plc) (string, func() error) {
 	l, err := new(net.ListenConfig).Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {

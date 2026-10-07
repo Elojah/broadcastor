@@ -211,8 +211,8 @@ func TestSubscribe_ContextDoneRacesUnsubscribe(t *testing.T) {
 	})
 }
 
-// A subscriber with subscriber.WithDetachedContext stays subscribed once its ctx is done, and handle gets a ctx with
-// the same values that is never done.
+// subscriber.WithDetachedContext keeps the subscriber once its ctx is done, and handle gets a ctx with the same values,
+// never done.
 func TestSubscriberWithDetachedContext(t *testing.T) {
 	t.Parallel()
 
@@ -249,8 +249,7 @@ func TestSubscriberWithDetachedContext(t *testing.T) {
 	})
 }
 
-// A SubscribeSeq loop with subscriber.WithDetachedContext goes on once its ctx is done, and ends once its subscriber is
-// unsubscribed.
+// A SubscribeSeq loop with subscriber.WithDetachedContext outlives its ctx, and ends once unsubscribed.
 func TestSubscriberWithDetachedContext_SubscribeSeq(t *testing.T) {
 	t.Parallel()
 
@@ -454,7 +453,7 @@ func TestMessageWithContext_ErrorHandlers(t *testing.T) {
 	}
 }
 
-// neverDone is a ctx type the context package does not know, so AfterFunc on it starts a goroutine, which leaks unless
+// neverDone is a ctx type unknown to package context, so AfterFunc on it starts a goroutine, which leaks unless
 // stopped.
 type neverDone struct {
 	context.Context //nolint:containedctx // it is the ctx itself, not a struct carrying one

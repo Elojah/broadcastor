@@ -1,6 +1,5 @@
-// Package broadcastor is an in-process fan-out: one Broadcast call hands a message to every subscriber.
-//
-// Each subscriber has its own goroutine, which calls handle for each message, one at a time:
+// Package broadcastor is an in-process fan-out: one Broadcast hands a message to every subscriber. Each subscriber's
+// own goroutine calls handle, one message at a time:
 //
 //	b := broadcastor.NewBroadcastor[string]()
 //	id, err := b.Subscribe(ctx, func(ctx context.Context, _ uuid.UUID, msg string) error {
@@ -12,8 +11,7 @@
 //	...
 //	err = b.Unsubscribe(ctx, id)
 //
-// SubscribeSeq returns an iterator instead, whose loop body takes the place of handle. Each message comes with fail,
-// which takes the error handle would return:
+// SubscribeSeq returns an iterator instead, whose loop body replaces handle, and whose fail takes handle's error:
 //
 //	_, seq, err := b.SubscribeSeq(ctx)
 //	...
@@ -21,60 +19,52 @@
 //		fail(save(msg))
 //	}
 //
-// The options passed to Subscribe, SubscribeSeq and Unsubscribe are in package subscriber, and those passed to
-// Broadcast in package message. Each option's documentation details what follows, and examples/ shows each one in a
-// runnable program.
+// The options for Subscribe, SubscribeSeq and Unsubscribe are in package subscriber, those for Broadcast in package
+// message. examples/ runs each one.
 //
 // # Delivery
 //
-// Delivery is at most once. By default Broadcast waits for each subscriber in turn to take the message, so a slow one
-// holds up those after it. subscriber.WithBuffer, message.WithParallel, message.WithAsync and message.WithNonBlocking
-// change that, and subscriber.WithAsyncLimit bounds the async sends to a subscriber. Broadcast gives up on a subscriber
+// Delivery is at most once. By default Broadcast waits for each subscriber in turn: subscriber.WithBuffer,
+// message.WithParallel, message.WithAsync and message.WithNonBlocking change that. Broadcast gives up on a subscriber
 // once its ctx is done or the message's timeout runs out (message.WithTimeout, subscriber.WithTimeout).
-// subscriber.WithFilter skips messages before any send, so the subscriber never wakes up for them, and package filter
-// holds filters for readings that repeat themselves.
+// subscriber.WithFilter skips messages before any send (see package filter).
 //
 // # Ordering
 //
-// A subscriber takes messages in the order Broadcast hands them over, after what it replays (subscriber.WithReplay).
-// Those broadcast from one goroutine keep their order, except with message.WithAsync, and those from several goroutines
-// have none.
+// A subscriber gets what it replays first (subscriber.WithReplay), then messages in the order Broadcast hands them over:
+// in order from one goroutine, except with message.WithAsync, and in no order from several.
 //
-// # Unsubscribing
+// # Lifecycle
 //
-// Unsubscribe and Close never wait, so handle can call them, and a Broadcast waiting on a subscriber gives up once it is
-// unsubscribed. A subscriber may still process messages it already took, unless unsubscribed with
-// subscriber.WithUnsubscribeDiscard. Once the ctx passed to Subscribe is done, the subscriber is unsubscribed, unless it
-// has subscriber.WithDetachedContext. subscriber.WithEvictAfter unsubscribes a subscriber that loses too many messages
-// in a row. subscriber.WithOnDone runs once a subscriber is done, however it was unsubscribed, so that it can release
-// what handle used. Shutdown is Close, then waits until every subscriber has handled what it took and run its onDone,
-// or until its ctx is done, so that a program can exit right after it, such as on SIGTERM.
+// Unsubscribe and Close never wait, so handle can call them, and a Broadcast waiting on the subscriber gives up. The
+// subscriber still handles what it took, unless subscriber.WithUnsubscribeDiscard. It is also unsubscribed once its
+// Subscribe ctx is done (unless subscriber.WithDetachedContext), and after too many losses in a row with
+// subscriber.WithEvictAfter. subscriber.WithOnDone runs once it is done. Shutdown is Close, then waits for every
+// subscriber to be done, or for its ctx.
+//
+// To reconnect, a subscriber need not leave: handle dials again, middleware.Retry retries the message, and
+// subscriber.WithBuffer keeps what comes meanwhile, in order.
 //
 // # Contexts
 //
-// The Subscribe ctx is the subscription's lifetime, and what handle and the error handlers get. The Broadcast ctx only
-// bounds the wait, but async sends keep using it after Broadcast returns (see message.WithAsync). message.WithContext
-// replaces the Subscribe ctx for one message.
+// The Subscribe ctx is the subscription's lifetime, and what handle and the error handlers get, unless
+// message.WithContext replaces it for one message. The Broadcast ctx only bounds the wait, but async sends keep using
+// it after Broadcast returns (see message.WithAsync).
 //
 // # Errors
 //
-// Errors go to subscriber.WithErrorHandler and message.WithErrorHandler, and are discarded without one. handle's
-// errors arrive as is, and a message a subscriber misses as one of package subscriber's error types, each matching a
-// sentinel with errors.Is. Package middleware can recover panics (Recover), keep a history (History), drop stale
-// messages (MaxAge), wrap errors (WrapError) and retry (Retry).
+// Errors go to subscriber.WithErrorHandler and message.WithErrorHandler, or are discarded. handle's arrive as is, and a
+// missed message as one of package subscriber's error types, each matching a sentinel with errors.Is. Package
+// middleware recovers panics, keeps a history, drops stale messages, wraps errors and retries.
 //
 // # Dead letters
 //
-// subscriber.WithDeadLetters gives a subscriber.Store every message the subscriber loses, so every message is either
-// handled or stored, once. Package store holds store.Ring, an in-memory queue to read them back from, and store.Drain,
-// which hands them to a handle again. With store.Enqueue as the handle, it forwards messages to a slow sink without
-// holding Broadcast up. subscriber.WithReplay hands a subscriber values before any message, through its middlewares,
-// error handlers and dead letters: what it lost before a restart, read back from its dead letters, or the current
-// value for a late subscriber.
+// subscriber.WithDeadLetters stores every message the subscriber loses, so each is handled or stored, once. Package
+// store holds Ring, an in-memory queue, and Drain, which hands a queue's entries to a handle: with Enqueue as the
+// subscriber's handle, that forwards to a slow sink without holding Broadcast up. subscriber.WithReplay hands a
+// subscriber values before any message, such as what it lost before a restart.
 //
 // # Stats
 //
-// Broadcastor.Stats returns a snapshot of each subscriber's counters (subscriber.Stats): how many messages are queued
-// or being sent async, and how many it took, handled, failed on, and missed by timeout or drop, with the time spent in
-// handle, and how long handle has been running on the current message.
+// Broadcastor.Stats returns a snapshot of each subscriber's counters (subscriber.Stats).
 package broadcastor

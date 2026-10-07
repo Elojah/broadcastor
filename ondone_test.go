@@ -16,8 +16,8 @@ import (
 	"github.com/elojah/broadcastor/subscriber"
 )
 
-// onDone runs once, in order, after handle's last call, however the subscriber was removed: with the default, once it
-// has handled its buffer, and with discard, once it has reported it.
+// onDone runs once, in order, after handle's last call, however the subscriber was removed: once it has handled its
+// buffer by default, or reported it with discard.
 func TestSubscriberWithOnDone(t *testing.T) {
 	t.Parallel()
 
@@ -132,7 +132,7 @@ func TestSubscriberWithOnDone_Shutdown(t *testing.T) {
 	})
 }
 
-// For SubscribeSeq, onDone runs after the loop body's last call, however the loop ended, and never if it was never
+// For SubscribeSeq, onDone runs after the loop body's last call, however the loop ended, and never for a loop never
 // ranged.
 func TestSubscriberWithOnDone_SubscribeSeq(t *testing.T) {
 	t.Parallel()

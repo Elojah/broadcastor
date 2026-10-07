@@ -1,5 +1,5 @@
-// The error handler gets every error handle returns. middleware.WrapError wraps each one in a *subscriber.HandleError,
-// along with the subscriber and the message it failed on. Without an error handler, errors are discarded.
+// The error handler gets every error handle returns, which middleware.WrapError wraps in a *subscriber.HandleError
+// naming the subscriber and the message. Without an error handler, errors are discarded.
 //
 // The error handler runs in the subscriber's goroutine, right after handle, so the output is in message order.
 package main

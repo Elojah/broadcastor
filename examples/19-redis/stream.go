@@ -16,9 +16,8 @@ import (
 
 var _ subscriber.Store[int] = (*stream[int])(nil)
 
-// stream is a subscriber.Store kept in a Redis stream, where it outlives the process: Put adds each record, along with
-// the subscriber's ID and the error's text, and Replay hands them back, oldest first. The stream keeps about the last
-// maxLen of them.
+// stream is a subscriber.Store in a Redis stream, which outlives the process: Put adds each record with the
+// subscriber's ID and the error's text, and Replay hands them back, oldest first. It keeps about the last maxLen.
 type stream[T any] struct {
 	client *redis.Client
 	key    string
@@ -29,8 +28,8 @@ func newStream[T any](client *redis.Client, key string, maxLen int64) *stream[T]
 	return &stream[T]{client: client, key: key, maxLen: maxLen}
 }
 
-// Put adds r to the stream, with the text of its error if it has one: middleware.History and store.Enqueue put none.
-// Its ctx is never done, so the client's read and write timeouts bound it.
+// Put adds r, with its error's text if any: middleware.History and store.Enqueue put none. Its ctx is never done, so
+// the client's timeouts bound it.
 func (s *stream[T]) Put(ctx context.Context, r subscriber.Record[T]) error {
 	msg, err := json.Marshal(r.Message)
 	if err != nil {
@@ -44,10 +43,9 @@ func (s *stream[T]) Put(ctx context.Context, r subscriber.Record[T]) error {
 	return s.client.XAdd(ctx, &redis.XAddArgs{Stream: s.key, MaxLen: s.maxLen, Approx: true, Values: values}).Err()
 }
 
-// Replay yields the message of each entry the stream holds once ranged over, oldest first, and acks each once yield
-// returned: subscriber.WithReplay returns then, once the subscriber has handled or reported it. One the subscriber
-// loses again goes back to the stream as a new entry, through its dead letters, so Replay does not yield it again now.
-// It logs why it stops early, if it fails to read or ack.
+// Replay yields each entry the stream holds when ranged, oldest first, and acks it once yield returns, the value
+// handled or reported. One lost again goes back as a new entry, through the dead letters, so Replay does not yield it
+// again now. It logs why it stops early, if a read or ack fails.
 func (s *stream[T]) Replay(ctx context.Context) iter.Seq[T] {
 	return func(yield func(T) bool) {
 		entries, err := s.All(ctx)

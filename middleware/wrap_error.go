@@ -8,8 +8,8 @@ import (
 	"github.com/elojah/broadcastor/subscriber"
 )
 
-// WrapError wraps every error in a *subscriber.HandleError with the subscriber and the message, which a message's error
-// handler, shared by every subscriber, needs to tell them apart.
+// WrapError wraps every error in a *subscriber.HandleError naming the subscriber and the message, which a message's
+// error handler, shared by every subscriber, needs to tell them apart.
 func WrapError[T any]() subscriber.Middleware[T] {
 	return func(next subscriber.Handler[T]) subscriber.Handler[T] {
 		return func(ctx context.Context, id uuid.UUID, msg T) error {

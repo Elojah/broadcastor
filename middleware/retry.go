@@ -27,20 +27,19 @@ type RetryPolicy struct {
 	MaxDelay time.Duration
 
 	// Jitter shortens each wait by a random fraction up to Jitter, clamped to [0, 1], so that subscribers failing
-	// together do not retry together.
+	// together retry apart.
 	Jitter float64
 
 	// IsRetryable reports whether an error is worth retrying. nil retries every error.
 	IsRetryable func(err error) bool
 }
 
-// Retry calls the handler again after an error, as policy sets, and returns the last error as is. It stops once ctx is
-// done, even while waiting, but always makes the first call. It never retries an error matching subscriber.ErrClosed,
-// which a SubscribeSeq loop that has ended returns for every message.
+// Retry calls the handler again after an error, as policy sets, and returns the last error. It always makes the first
+// call, and stops once ctx is done, even mid-wait. It never retries subscriber.ErrClosed, which an ended SubscribeSeq
+// loop returns.
 //
-// It waits in the subscriber's goroutine, holding up the subscriber and any Broadcast waiting on it, so keep waits
-// short. Unsubscribe does not end a wait. A panic goes through, but a *subscriber.PanicError from an inner Recover is
-// retried like any error.
+// It waits in the subscriber's goroutine, holding up the subscriber and any Broadcast waiting on it. Unsubscribe does
+// not end a wait: ctx does. A panic passes through, but an inner Recover's *subscriber.PanicError is retried.
 func Retry[T any](policy RetryPolicy) subscriber.Middleware[T] {
 	return func(next subscriber.Handler[T]) subscriber.Handler[T] {
 		return func(ctx context.Context, id uuid.UUID, msg T) error {
@@ -91,7 +90,7 @@ func (p RetryPolicy) jitter(d time.Duration) time.Duration {
 	return d - time.Duration(rand.Float64()*min(p.Jitter, 1)*float64(d)) //nolint:gosec // A wait needs no cryptographic randomness.
 }
 
-// wait waits for d, and reports whether ctx was still not done.
+// wait waits for d, and reports whether ctx is still not done.
 func wait(ctx context.Context, d time.Duration) bool {
 	if ctx.Err() != nil {
 		return false

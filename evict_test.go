@@ -18,8 +18,8 @@ import (
 	"github.com/elojah/broadcastor/subscriber"
 )
 
-// A subscriber that loses n messages in a row is unsubscribed: the nth loss is reported as a *subscriber.EvictedError
-// wrapping the *subscriber.TimeoutError, and Broadcast no longer waits for it.
+// After n losses in a row, the subscriber is unsubscribed: the nth is reported as a *subscriber.EvictedError wrapping
+// the *subscriber.TimeoutError, and Broadcast stops waiting for it.
 func TestSubscriberWithEvictAfter(t *testing.T) {
 	t.Parallel()
 
@@ -60,8 +60,7 @@ func TestSubscriberWithEvictAfter(t *testing.T) {
 	})
 }
 
-// onEvict gets the *subscriber.EvictedError once the error handler got it, with the same ctx: here the evicting
-// message's own.
+// onEvict gets the *subscriber.EvictedError after the error handler, with the same ctx: here the evicting message's.
 func TestSubscriberWithEvictAfter_OnEvict(t *testing.T) {
 	t.Parallel()
 
@@ -168,8 +167,7 @@ func TestSubscriberWithEvictAfter_Reset(t *testing.T) {
 	})
 }
 
-// An evicted subscriber is unsubscribed with subscriber.WithUnsubscribeDiscard, even when it delivers by default: what
-// is left in its buffer is reported rather than handled.
+// Eviction discards, even when the subscriber delivers by default: its buffer is reported, not handled.
 func TestSubscriberWithEvictAfter_Discard(t *testing.T) {
 	t.Parallel()
 
@@ -234,8 +232,7 @@ func TestSubscriberWithEvictAfter_FreesBroadcast(t *testing.T) {
 	})
 }
 
-// Losses at once evict the subscriber once: exactly one of them is reported as a *subscriber.EvictedError, and passed
-// to onEvict.
+// Simultaneous losses evict once: exactly one is reported as a *subscriber.EvictedError and passed to onEvict.
 func TestSubscriberWithEvictAfter_Once(t *testing.T) {
 	t.Parallel()
 
@@ -280,8 +277,8 @@ func TestSubscriberWithEvictAfter_Once(t *testing.T) {
 	})
 }
 
-// A SubscribeSeq subscriber is evicted too, even before its loop starts: the loop then yields nothing, and what the
-// subscriber took is reported.
+// A SubscribeSeq subscriber is evicted too, even before its loop starts, which then yields nothing, and what it took is
+// reported.
 func TestSubscriberWithEvictAfter_SubscribeSeq(t *testing.T) {
 	t.Parallel()
 

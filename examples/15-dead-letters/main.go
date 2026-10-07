@@ -1,5 +1,5 @@
-// A store is given every message a subscriber loses. Here handle fails on negative numbers, and Close makes the
-// subscriber discard the two messages left in its buffer (subscriber.WithUnsubscribeDiscard), so none is lost.
+// A store gets every message the subscriber loses. handle fails on negative numbers, and Close makes the subscriber
+// discard the two messages left in its buffer (subscriber.WithUnsubscribeDiscard), so none is lost.
 //
 // The store is called from the subscriber's goroutine, so the output is in message order.
 package main

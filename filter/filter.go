@@ -1,12 +1,11 @@
-// Package filter holds filters for subscriber.WithFilter, for readings that repeat themselves, such as a sensor that
-// sends the same temperature every second:
+// Package filter holds filters for subscriber.WithFilter, for readings that repeat themselves:
 //
 //	id, err := b.Subscribe(ctx, handle, subscriber.WithFilter(filter.Changed(func(prev, next float64) bool {
 //		return math.Abs(next-prev) >= 0.5
 //	})))
 //
-// A filter keeps state of its own, so give each subscriber its own. Concurrent Broadcasts may call a filter at once,
-// and in any order, so the last value it passed is the last to reach it, which may not be the last broadcast.
+// Each filter keeps state, so give each subscriber its own. Concurrent Broadcasts may call it in any order, so the last
+// value it passed is the last to reach it, not necessarily the last broadcast.
 package filter
 
 import (
@@ -16,9 +15,9 @@ import (
 	"time"
 )
 
-// Changed returns a filter that passes the first value, then each value that changed reports as far enough from the
-// last value passed. Comparing with the last value passed, rather than the last one seen, makes it a deadband: a value
-// that drifts slowly passes once it has moved far enough. changed runs under a mutex, one call at a time.
+// Changed returns a filter that passes the first value, then each one changed reports far enough from the last value
+// passed, not the last seen: a deadband, so a slow drift passes once it has moved far enough. changed runs under a
+// mutex.
 func Changed[T any](changed func(prev, next T) bool) func(T) bool {
 	var (
 		mu     sync.Mutex
@@ -38,8 +37,8 @@ func Changed[T any](changed func(prev, next T) bool) func(T) bool {
 	}
 }
 
-// Every returns a filter that passes the first value, then the first one at least d after the last one it passed, so
-// at most one per d. 0 or less passes every value.
+// Every returns a filter that passes at most one value per d: the first, then the first one d after the last passed.
+// d <= 0 passes every value.
 func Every[T any](d time.Duration) func(T) bool {
 	if d <= 0 {
 		return func(T) bool { return true }

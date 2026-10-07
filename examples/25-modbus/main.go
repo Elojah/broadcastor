@@ -1,21 +1,20 @@
-// A gateway polls a PLC over Modbus TCP for its temperature, and the bus fans each reading out to a fan rule and a
-// trend. A poll returns the same value until it changes, so each subscriber filters what it wants with filter.Changed,
-// before Broadcast wakes it up: the rule takes a reading only when the fan must switch, on above 30°C and off below
-// 29°C, and the trend only once it has moved by 1°C since the last it kept.
+// A gateway polls a PLC's temperature over Modbus TCP, and the bus fans each reading out to a fan rule and a trend. A
+// poll repeats the value until it changes, so each subscriber filters with filter.Changed: the rule takes a reading
+// only when the fan must switch, on above 30°C and off below 29°C, and the trend once it has moved by 1°C since the
+// last kept.
 //
-// The rule writes the fan's coil over a connection of its own. The PLC answers its first write with exception 6,
-// server device busy, as it is starting up, and middleware.Retry retries it: it retries a busy PLC or a request that
-// timed out, not an exception a retry cannot cure, such as an illegal address. Broadcast waits for the rule a poll at
-// most, so that the poll keeps its pace.
+// The rule writes the fan's coil over its own connection. The PLC, starting up, answers the first write with exception
+// 6, server device busy, which middleware.Retry retries, as it does a timed-out request, but not an exception a retry
+// cannot cure, such as an illegal address. Broadcast waits for the rule a poll at most, so that the poll keeps its
+// pace.
 //
-// Retry cures a request lost once, not a connection lost for good: the PLC never answers the rule's third write, as
-// if a firewall in between had dropped the connection, idle between two switches of the fan. The write times out at
-// each retry, so the next reading that switches the fan times out in Broadcast, which evicts the rule
-// (subscriber.WithEvictAfter). Its onEvict closes the connection, and subscribes a new rule over a new one. The new
-// rule has a new filter, which passes the next reading whatever it is, so the fan is set again at once.
+// The PLC never answers the rule's third write, as if a firewall had dropped the idle connection. The rule reconnects
+// in place: once a request has timed out, handle closes the connection, and Retry's next attempt opens a new one.
+// Meanwhile, the next reading that switches the fan waits in the rule's buffer, neither lost nor out of order.
+// subscriber.WithOnDone closes the last connection.
 //
-// It is a module of its own, so that the library does not depend on a Modbus library: run it with
-// `go run -C examples/25-modbus .`. It needs no device, since plc.go stands in for one, served in process.
+// It is a module of its own, so that the library does not depend on a Modbus library: `go run -C examples/25-modbus .`.
+// It needs no device: plc.go simulates one, in process.
 package main
 
 import (
@@ -23,7 +22,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -68,12 +66,13 @@ func main() {
 	ctx := context.Background()
 	readings := []uint16{215, 216, 221, 232, 305, 309, 318, 296, 291, 284, 281}
 	addr, stopPLC := servePLC(ctx, newPLC(readings))
-	poller := connect(addr)
+	poller, err := connect(addr)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	b := broadcastor.NewBroadcastor[reading]()
-	// The rule's connection, which onEvict replaces.
-	var ruleConn atomic.Pointer[modbus.ModbusClient]
-	subscribeRule(ctx, b, addr, &ruleConn)
+	subscribeRule(ctx, b, addr)
 	trend := store.NewRing[reading](1024)
 	subscribeTrend(ctx, b, trend)
 	poll(ctx, b, poller, len(readings))
@@ -83,10 +82,8 @@ func main() {
 	if err := b.Shutdown(shutdownCtx); err != nil {
 		log.Fatal(err)
 	}
-	for _, client := range []*modbus.ModbusClient{poller, ruleConn.Load()} {
-		if err := client.Close(); err != nil {
-			log.Fatal(err)
-		}
+	if err := poller.Close(); err != nil {
+		log.Fatal(err)
 	}
 	if err := stopPLC(); err != nil {
 		log.Fatal(err)
@@ -96,7 +93,7 @@ func main() {
 }
 
 // connect opens a connection to the PLC at addr.
-func connect(addr string) *modbus.ModbusClient {
+func connect(addr string) (*modbus.ModbusClient, error) {
 	client, err := modbus.NewClient(&modbus.ClientConfiguration{
 		URL:     "tcp://" + addr,
 		Timeout: requestTimeout,
@@ -104,20 +101,47 @@ func connect(addr string) *modbus.ModbusClient {
 		Logger: log.Default(),
 	})
 	if err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 	if err := client.Open(); err != nil {
-		log.Fatal(err)
+		return nil, err
 	}
 
-	return client
+	return client, nil
 }
 
-// subscribeRule connects to the PLC, stores the connection in conn, and subscribes the fan rule, which writes the
-// fan's coil over it. Once the rule is evicted, its onEvict closes the connection and calls subscribeRule again.
-func subscribeRule(ctx context.Context, b *broadcastor.Broadcastor[reading], addr string, conn *atomic.Pointer[modbus.ModbusClient]) {
-	client := connect(addr)
-	conn.Store(client)
+// subscribeRule subscribes the fan rule, which writes the fan's coil over its own connection, and opens a new one after
+// a timeout.
+func subscribeRule(ctx context.Context, b *broadcastor.Broadcastor[reading], addr string) {
+	// Only the rule's goroutine uses it, in handle then onDone, so it needs no lock. nil once closed, until the next
+	// attempt.
+	client, err := connect(addr)
+	if err != nil {
+		log.Fatal(err)
+	}
+	handle := func(_ context.Context, _ uuid.UUID, r reading) error {
+		if client == nil {
+			fmt.Println("rule: reconnecting")
+			c, err := connect(addr)
+			if err != nil {
+				return err
+			}
+			client = c
+		}
+		on := r.Tenths > fanOn
+		if err := client.WriteCoil(fanCoil, on); err != nil {
+			if errors.Is(err, modbus.ErrRequestTimedOut) {
+				// The connection may be gone for good: Retry's next attempt opens a new one.
+				closeClient(client)
+				client = nil
+			}
+
+			return err
+		}
+		fmt.Printf("rule: %s, fan %s\n", r, onOff(on))
+
+		return nil
+	}
 
 	retry := middleware.Retry[reading](middleware.RetryPolicy{
 		Attempts: 5, Delay: 10 * time.Millisecond, Multiplier: 2,
@@ -125,29 +149,12 @@ func subscribeRule(ctx context.Context, b *broadcastor.Broadcastor[reading], add
 			return errors.Is(err, modbus.ErrServerDeviceBusy) || errors.Is(err, modbus.ErrRequestTimedOut)
 		},
 	})
-	_, err := b.Subscribe(ctx, func(_ context.Context, _ uuid.UUID, r reading) error {
-		on := r.Tenths > fanOn
-		if err := client.WriteCoil(fanCoil, on); err != nil {
-			return err
-		}
-		fmt.Printf("rule: %s, fan %s\n", r, onOff(on))
-
-		return nil
-	},
-		// In parallel, so that the trend never waits for the rule, and so that the Broadcast that evicts the rule is
-		// done with every other subscriber once onEvict runs: one subscribed meanwhile might get its reading, or not.
+	_, err = b.Subscribe(ctx, handle,
+		// In parallel, so that the trend never waits for the rule.
 		subscriber.WithDefaultMessageOptions(message.WithParallel[reading](), message.WithTimeout[reading](pollEvery)),
-		// The rule takes a reading only to switch the fan, so the first it loses evicts it.
-		subscriber.WithEvictAfter(1, func(_ context.Context, evicted *subscriber.EvictedError[reading]) {
-			fmt.Printf("rule: evicted on losing %s, reconnecting\n", evicted.Message)
-			// Close waits for the write under way to time out, and fails the rule's next retry.
-			if err := client.Close(); err != nil {
-				log.Println(err)
-			}
-			subscribeRule(ctx, b, addr, conn)
-		}),
-		// The first reading passes, then each one that switches the fan from where the last one passed set it, or
-		// would have, had the rule not lost it.
+		// A reading that switches the fan waits there while the rule reconnects.
+		subscriber.WithBuffer[reading](1),
+		// The first reading passes, then each one that switches the fan from where the last one passed set it.
 		subscriber.WithFilter(filter.Changed(func(prev, next reading) bool {
 			if prev.Tenths > fanOn {
 				return next.Tenths < fanOff
@@ -157,6 +164,11 @@ func subscribeRule(ctx context.Context, b *broadcastor.Broadcastor[reading], add
 		})),
 		subscriber.WithMiddleware(retry),
 		subscriber.WithErrorHandler[reading](logError),
+		subscriber.WithOnDone[reading](func() {
+			if client != nil {
+				closeClient(client)
+			}
+		}),
 	)
 	if err != nil {
 		log.Fatal(err)
@@ -176,8 +188,8 @@ func subscribeTrend(ctx context.Context, b *broadcastor.Broadcastor[reading], tr
 	}
 }
 
-// poll reads the temperature every pollEvery, and broadcasts each reading. A gateway would poll until SIGTERM. Here,
-// n times, as many as the PLC has readings.
+// poll broadcasts a reading of the temperature every pollEvery. A gateway would poll until SIGTERM, here n times, as
+// many as the PLC has readings.
 func poll(ctx context.Context, b *broadcastor.Broadcastor[reading], client *modbus.ModbusClient, n int) {
 	ticker := time.NewTicker(pollEvery)
 	defer ticker.Stop()
@@ -205,6 +217,13 @@ func printTrend(ctx context.Context, trend *store.Ring[reading]) {
 		if err := trend.Ack(ctx, entry.ID); err != nil {
 			log.Fatal(err)
 		}
+	}
+}
+
+// closeClient closes client, and logs why it failed to.
+func closeClient(client *modbus.ModbusClient) {
+	if err := client.Close(); err != nil {
+		log.Println(err)
 	}
 }
 

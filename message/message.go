@@ -55,7 +55,7 @@ const (
 
 // NewConfig applies options once, for New to lay over each subscriber's defaults.
 func NewConfig[T any](options ...Option[T]) Config {
-	// Before declaring config, which passing it to the options moves to the heap.
+	// Before declaring config, which the options move to the heap.
 	if len(options) == 0 {
 		return Config{}
 	}
@@ -67,8 +67,8 @@ func NewConfig[T any](options ...Option[T]) Config {
 	return config
 }
 
-// New returns value with config, from NewConfig, laid over defaults, a subscriber's: each field config's options set
-// replaces the default. Both are copies, so nothing escapes.
+// New returns value with the fields config's options set laid over a subscriber's defaults. Both are copies, so
+// nothing escapes.
 func New[T any](value T, defaults, config Config) Message[T] {
 	if config.set&fieldDelivery != 0 {
 		defaults.Delivery = config.Delivery

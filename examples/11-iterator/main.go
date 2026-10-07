@@ -1,6 +1,5 @@
-// SubscribeSeq returns the subscriber's messages as an iterator, so that a for range loop takes the place of handle.
-// Each message comes with fail, which takes the error handle would return: here the error handler gets it. Breaking
-// out of the loop unsubscribes, and so does cancelling the ctx passed to SubscribeSeq.
+// SubscribeSeq returns the messages as an iterator, whose for range loop replaces handle. fail takes the error handle
+// would return, here for the error handler. Breaking out unsubscribes, and so does cancelling the SubscribeSeq ctx.
 package main
 
 import (

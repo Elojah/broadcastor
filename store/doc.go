@@ -1,5 +1,5 @@
-// Package store holds ready-made subscriber.Store implementations, for subscriber.WithDeadLetters and
-// middleware.History, to read messages back from:
+// Package store holds subscriber.Store implementations, for subscriber.WithDeadLetters and middleware.History, that
+// messages are read back from:
 //
 //	lost := store.NewRing[string](1024)
 //	id, err := b.Subscribe(ctx, handle, subscriber.WithDeadLetters[string](lost))
@@ -8,6 +8,6 @@
 //	...
 //	err = lost.Ack(ctx, entry.ID)
 //
-// Ring is an in-memory Queue. Drain runs that loop, and with Enqueue as the subscriber's handle, forwards every message
-// to a slow sink in order. Filter keeps some records out of a store.
+// Ring is an in-memory Queue. Drain runs that loop: with Enqueue as the subscriber's handle, it forwards every message
+// to a slow sink, in order. Filter keeps some records out of a store.
 package store

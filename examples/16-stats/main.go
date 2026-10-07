@@ -1,4 +1,4 @@
-// Stats is a snapshot of every subscriber's counters. Here one subscriber is stuck in handle with a full buffer, so it
+// Stats is a snapshot of every subscriber's counters. One subscriber is stuck in handle with a full buffer, so it
 // misses a non-blocking message and one with a timeout, while another fails on every message.
 //
 // handle waits for release, standing in for slow work. HandleTime depends on the machine, so it is not printed.

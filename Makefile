@@ -13,12 +13,11 @@ BENCH_FLAGS        = -run '^$$' -bench '$(BENCH)' -benchmem
 # How many times stress runs TestStress.
 STRESS_COUNT      ?= 50
 
-# The modules tidy, lint and test cover. An example with dependencies of its own is a module of its own, so that the
-# library's go.mod lists only uuid.
+# The modules tidy, lint and test cover. Examples with dependencies of their own are modules, so go.mod lists only
+# uuid.
 MODULES            = . examples/19-redis examples/24-mqtt examples/25-modbus
 
-# The examples tinygo-run runs and tinygo-build builds, which leave out those that are modules of their own, and the
-# board tinygo-build builds them for.
+# The examples tinygo-run and tinygo-build cover, modules excluded, and the board tinygo-build targets.
 TINYGO             = tinygo
 TINYGO_TARGET     ?= pico
 EXAMPLES           = $(filter-out $(MODULES),$(patsubst %/,%,$(wildcard examples/*/)))
@@ -71,8 +70,8 @@ stress: ## Run TestStress STRESS_COUNT (50) times with race detector
 
 # TinyGo
 # tinygo test runs no Example, and testing/synctest, which every test but pkg/gate's uses, does not link. So
-# tinygo-test runs only pkg/gate's tests, and tinygo-run checks each example by running it instead, both on this
-# machine. tinygo-build only compiles each example for TINYGO_TARGET: nothing runs on the board.
+# tinygo-test runs pkg/gate's tests, and tinygo-run runs each example and checks its output, both locally. tinygo-build
+# only compiles for TINYGO_TARGET.
 .PHONY: tinygo
 tinygo: tinygo-test tinygo-run tinygo-build ## Run tinygo-test, tinygo-run and tinygo-build
 

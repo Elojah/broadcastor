@@ -57,8 +57,7 @@ func (e *PanicError[T]) Is(target error) bool {
 	return target == ErrPanic
 }
 
-// ExpiredError is what middleware.MaxAge returns for a message too old to handle: Age is how old it was. It matches
-// ErrExpired.
+// ExpiredError is what middleware.MaxAge returns for a message Age old. It matches ErrExpired.
 type ExpiredError[T any] struct {
 	SubscriberID uuid.UUID
 	Message      T
@@ -93,8 +92,8 @@ func (e *TimeoutError[T]) Is(target error) bool {
 	return target == ErrTimeout
 }
 
-// DroppedError is reported when a non-blocking Broadcast finds the subscriber busy, or an async one finds as many async
-// sends under way to it as WithAsyncLimit allows. It matches ErrDropped.
+// DroppedError is reported when a non-blocking Broadcast finds the subscriber busy, or an async one hits WithAsyncLimit.
+// It matches ErrDropped.
 type DroppedError[T any] struct {
 	SubscriberID uuid.UUID
 	Message      T
@@ -128,10 +127,9 @@ func (e *EvictedError[T]) Is(target error) bool {
 	return target == ErrEvicted
 }
 
-// ClosedError is reported for a message a subscriber misses because it was unsubscribed: skipped or given up on by a
-// Broadcast under way, left over by a SubscribeSeq loop, or discarded (WithUnsubscribeDiscard). It matches ErrClosed.
-// For the message a SubscribeSeq loop was being handed when it ended, or whose loop body panicked, it is handle's
-// error, so it goes through the middlewares.
+// ClosedError is reported for a message missed because the subscriber was unsubscribed: by a Broadcast under way, or
+// discarded (WithUnsubscribeDiscard, or a SubscribeSeq loop that ended). It matches ErrClosed. For the message in a
+// SubscribeSeq loop when it ended or panicked, it is handle's error, so it goes through the middlewares.
 type ClosedError[T any] struct {
 	SubscriberID uuid.UUID
 	Message      T
@@ -145,8 +143,8 @@ func (e *ClosedError[T]) Is(target error) bool {
 	return target == ErrClosed
 }
 
-// StoreError replaces the error about a lost message when the Store fails to store it: Err is Put's, Cause the
-// original. It matches ErrStore, and unwraps to both.
+// StoreError replaces the error about a lost message the Store failed to store: Err is Put's, Cause the original. It
+// matches ErrStore, and unwraps to both.
 type StoreError[T any] struct {
 	SubscriberID uuid.UUID
 	Message      T

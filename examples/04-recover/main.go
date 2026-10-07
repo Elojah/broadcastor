@@ -1,5 +1,5 @@
-// With middleware.Recover, a panic in handle is reported to the error handler as a *subscriber.PanicError, and the
-// subscriber goes on with the next message. Without it, the panic crashes the program.
+// With middleware.Recover, a panic in handle reaches the error handler as a *subscriber.PanicError, and the subscriber
+// goes on. Without it, the program crashes.
 package main
 
 import (

@@ -8,8 +8,8 @@ import (
 	"github.com/elojah/broadcastor/subscriber"
 )
 
-// Ring is an in-memory Queue of fixed size. Put never waits nor fails: when full, it drops the oldest entry, even one
-// Next returned, and counts it (Dropped). Create one with NewRing.
+// Ring is a fixed-size in-memory Queue. Put never waits nor fails: when full, it drops the oldest entry, even one Next
+// returned, and counts it (Dropped). Create one with NewRing.
 type Ring[T any] struct {
 	mu sync.Mutex
 
@@ -21,7 +21,7 @@ type Ring[T any] struct {
 	seq     uint64 // ID of the newest entry
 	dropped uint64
 
-	// ready is closed while the ring holds an entry. A channel rather than a sync.Cond, so that Next can select on ctx.
+	// ready is closed while the ring holds an entry: a channel, not a sync.Cond, so that Next can select on ctx.
 	ready chan struct{}
 }
 
@@ -107,7 +107,7 @@ func (r *Ring[T]) oldest() (Entry[T], <-chan struct{}, bool) {
 	return r.entries[r.head], nil, true
 }
 
-// removeOldest removes the oldest entry, which must exist, zeroing its slot so that its message can be collected.
+// removeOldest removes the oldest entry, which must exist, zeroing its slot for the GC.
 func (r *Ring[T]) removeOldest() {
 	r.entries[r.head] = Entry[T]{}
 	r.head = (r.head + 1) % len(r.entries)

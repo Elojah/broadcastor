@@ -1,6 +1,6 @@
-// subscriber.WithMiddleware wraps handle, the first middleware outermost. Here middleware.Retry makes up to 3 attempts
-// at a retryable error, waiting 10ms then 20ms. logAttempts, a middleware of our own, prints every failed attempt, and
-// middleware.WrapError wraps the last error for the error handler.
+// subscriber.WithMiddleware wraps handle, the first middleware outermost. middleware.Retry makes up to 3 attempts at a
+// retryable error, waiting 10ms then 20ms. logAttempts, our own, prints each failed attempt, and middleware.WrapError
+// wraps the last error.
 //
 // Middlewares run in the subscriber's goroutine, so the output is in message order, and Broadcast waits while Retry
 // does.
@@ -26,8 +26,8 @@ var (
 	errUnknownJob  = errors.New("unknown job")
 )
 
-// logAttempts prints every call to the handler it wraps that fails, numbered per job. Only the subscriber's goroutine
-// calls it.
+// logAttempts prints each failed call to the handler it wraps, numbered per job. Only the subscriber's goroutine calls
+// it.
 func logAttempts() subscriber.Middleware[string] {
 	attempts := map[string]int{}
 

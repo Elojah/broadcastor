@@ -1,6 +1,5 @@
-// An async Broadcast returns right away, without waiting for a subscriber that is still busy: each subscriber is sent
-// the message from a goroutine of its own. A slow subscriber then holds up nobody, but the messages of successive async
-// Broadcasts can reach it out of order.
+// An async Broadcast returns at once, sending to each subscriber from a goroutine of its own: a slow subscriber holds
+// up nobody, but successive messages may reach it out of order.
 //
 // handle waits for release, standing in for slow work.
 package main

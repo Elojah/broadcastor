@@ -1,15 +1,13 @@
-// A Redis stream keeps the messages a subscriber loses (subscriber.WithDeadLetters), so that they outlive the process,
-// for subscriber.WithReplay to hand them back once it restarts. Another keeps the history of every message, handled
+// A Redis stream keeps the messages a subscriber loses (subscriber.WithDeadLetters) beyond the process, for
+// subscriber.WithReplay to hand back after a restart. Another keeps the history of every message, handled
 // (middleware.History) or lost.
 //
-// Here the alerts fail to page while the pager is down, and the process restarts. The alerts then page what they lost
-// before any new reading, the stream of what they lost is left empty, and the history shows every reading, twice for
-// those paged late.
+// The alerts fail to page while the pager is down, and the process restarts. The alerts then page what they lost before
+// any new reading, which empties the stream of losses, and the history shows every reading, twice for those paged late.
 //
-// It is a module of its own, so that the library does not depend on go-redis: run it with
-// `go run -C examples/19-redis .`. It uses the Redis at REDIS_ADDR, localhost:6379 by default (start one with
-// `docker run --rm -p 6379:6379 redis`), and first deletes its keys there, so that it prints the same each time. Its
-// test runs it against miniredis, in memory.
+// It is a module of its own, so that the library does not depend on go-redis: `go run -C examples/19-redis .`. It uses
+// the Redis at REDIS_ADDR, localhost:6379 by default (`docker run --rm -p 6379:6379 redis`), and deletes its keys
+// first, so that it prints the same each time. Its test uses miniredis.
 package main
 
 import (
@@ -82,8 +80,8 @@ func run(addr string) {
 	}
 }
 
-// runAlerts subscribes the alerts, which first page what they lost before, then broadcasts readings, and shuts down
-// once the alerts have handled or lost each. They fail to page while pagerDown.
+// runAlerts subscribes the alerts, which first page what they lost, then broadcasts readings, and shuts down once each
+// is handled or lost. Paging fails while pagerDown.
 func runAlerts(ctx context.Context, client *redis.Client, pagerDown bool, readings ...reading) {
 	b := broadcastor.NewBroadcastor[reading]()
 	lost := newStream[reading](client, deadLettersKey, maxLen)

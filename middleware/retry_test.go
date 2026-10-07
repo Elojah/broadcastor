@@ -14,8 +14,7 @@ import (
 	"github.com/elojah/broadcastor/subscriber"
 )
 
-// The tests that check how long Retry waits run in a synctest bubble, whose fake clock makes the time between two calls
-// exactly the wait.
+// Tests of Retry's waits run in a synctest bubble, whose fake clock makes the time between two calls exactly the wait.
 
 // Retry calls the handler again after each error, with the same ctx, subscriber and message, first after Delay and then
 // after Delay times Multiplier, and returns nil once a call succeeds.
@@ -104,8 +103,7 @@ func TestRetry_Backoff(t *testing.T) {
 	}
 }
 
-// Once IsRetryable rejects an error, which it gets as the handler returned it, Retry returns that error without calling
-// the handler again.
+// Once IsRetryable, given the handler's error as is, rejects it, Retry returns it without calling the handler again.
 func TestRetry_NotRetryable(t *testing.T) {
 	t.Parallel()
 
@@ -197,8 +195,8 @@ func TestRetry_Jitter(t *testing.T) {
 	}
 }
 
-// Once ctx is done, Retry stops waiting and returns the error of the last call without calling the handler again. It
-// still makes the first call.
+// Once ctx is done, Retry stops waiting and returns the last error without calling the handler again. It still makes
+// the first call.
 func TestRetry_ContextDone(t *testing.T) {
 	t.Parallel()
 

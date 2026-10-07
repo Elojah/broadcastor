@@ -217,7 +217,7 @@ func TestStats_Subscribers(t *testing.T) {
 	})
 }
 
-// However messages are sent, each one a Broadcast picks a subscriber up for is counted once, the losses are the errors
+// However sent, each message a Broadcast picks a subscriber up for is counted once, the losses match the errors
 // reported, and HandleTime is the time spent in handle.
 func TestStats_AddUp(t *testing.T) {
 	t.Parallel()

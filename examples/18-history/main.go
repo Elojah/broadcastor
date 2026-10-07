@@ -1,9 +1,8 @@
 // middleware.History puts every message the subscriber handles in a store, and subscriber.WithDeadLetters every one it
-// loses. Given the same store, they put each message in it once, with the error about it if it was lost: here an audit
-// log of every payment, whether it went through or not.
+// loses: sharing one, they make an audit log of every payment, with the error if it failed.
 //
-// Both put from the subscriber's goroutine here, so the log is in message order. A message lost in Broadcast, to a
-// timeout or a full buffer, would be put from Broadcast's goroutine instead.
+// Both put from the subscriber's goroutine here, so the log is in message order. A loss in Broadcast, to a timeout or a
+// full buffer, would be put from Broadcast's goroutine.
 package main
 
 import (

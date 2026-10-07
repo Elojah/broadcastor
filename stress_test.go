@@ -28,8 +28,8 @@ const (
 	stressRounds       = 10
 	stressBroadcasters = 4
 	stressChurners     = 4
-	// stressOps is how many Broadcasts each broadcaster makes, and how many subscriptions each churner starts or ends,
-	// per round.
+	// stressOps is how many Broadcasts each broadcaster makes, and subscriptions each churner starts or ends, per
+	// round.
 	stressOps = 200
 	// stressLive bounds each churner's live subscriptions.
 	stressLive = 8
@@ -49,19 +49,17 @@ var (
 	errReplayLate    = errors.New("replayed after a broadcast message")
 )
 
-// TestStress runs random interleavings of every method from several goroutines, in real time so that timeouts race
-// sends and evict subscribers, over rounds that each have their own Broadcastor. It checks that nothing panics, that every goroutine returns
-// once the Broadcastor is closed, that no subscriber gets a message twice, whether handled or reported, that a
-// subscriber gets every message broadcast while it was subscribed and none broadcast outside that, that it gets what
-// it replays (subscriber.WithReplay) before any of those, that Stats add up once nothing is in flight, that onDone runs
-// once, after handle's last call, and that nothing is handled or reported once Shutdown has returned. make stress runs
-// it many times.
+// TestStress interleaves every method at random from several goroutines, in real time so that timeouts race sends, over
+// rounds with a Broadcastor each. It checks that nothing panics, every goroutine returns once closed, no subscriber
+// gets a message twice, a subscriber gets every message broadcast while subscribed and none outside, its replay comes
+// first, Stats add up once idle, onDone runs once after handle's last call, and nothing is handled or reported after
+// Shutdown.
 func TestStress(t *testing.T) {
 	t.Parallel()
 
 	for round := range stressRounds {
-		// Half the rounds close while everything else runs. The others shut down once the broadcasters and churners are
-		// done: half of those once nothing is in flight, after checking Stats, and the others at once.
+		// Half the rounds close mid-run. The others shut down once the broadcasters and churners are done: half once
+		// idle, after checking Stats, half at once.
 		closeEarly, quiet := round%2 == 1, round%4 == 0
 		runStress(t, closeEarly, quiet)
 		if t.Failed() {
@@ -74,7 +72,7 @@ func TestStress(t *testing.T) {
 func runStress(t *testing.T, closeEarly, quiet bool) {
 	t.Helper()
 	s := &stress{b: broadcastor.NewBroadcastor[int](), closeEarly: closeEarly, quiet: quiet, label: uuid.NewString()}
-	// Every goroutine started in f carries the label, and so do those they start, the library's included.
+	// Every goroutine f starts carries the label, and so do theirs, the library's included.
 	pprof.Do(t.Context(), pprof.Labels(stressLabel, s.label), func(ctx context.Context) { s.run(ctx, t) })
 	s.waitGoroutines(t)
 	// Only now, so that cancelling cannot end a SubscribeSeq loop that Close failed to end.
@@ -88,7 +86,7 @@ func runStress(t *testing.T, closeEarly, quiet bool) {
 type stress struct {
 	b          *broadcastor.Broadcastor[int]
 	closeEarly bool
-	// quiet makes run check Stats once nothing is in flight, before it shuts down. Unless closeEarly is set too.
+	// quiet makes run check Stats once idle, before shutting down, unless closeEarly.
 	quiet bool
 	// label is the value of stressLabel for the round's goroutines.
 	label string
@@ -166,8 +164,8 @@ const (
 	stressDropped
 )
 
-// run starts the broadcasters and churners, checks Stats once they are done if quiet and it did not close early, then
-// shuts down.
+// run starts the broadcasters and churners, checks Stats once they are done if quiet and not closed early, then shuts
+// down.
 func (s *stress) run(ctx context.Context, t *testing.T) {
 	t.Helper()
 	var workers sync.WaitGroup
@@ -221,7 +219,7 @@ func (s *stress) broadcaster(ctx context.Context, t *testing.T) {
 			t.Errorf("Broadcast(%d) panicked: %v", n, p)
 		}
 		broadcasts = append(broadcasts, stressBroadcast{number: n, start: start, end: end})
-		// So that the workers take turns with GOMAXPROCS 1 too, instead of one running all its ops at once.
+		// So that workers take turns with GOMAXPROCS 1 too.
 		runtime.Gosched()
 	}
 
@@ -358,8 +356,8 @@ func (s *stress) close() error {
 	return err
 }
 
-// shutdown shuts the Broadcastor down, records the ticks around it if it is the first Close, and sets shut once it has
-// returned. It fails with the stacks of the round's goroutines if Shutdown still waits after deadlockTimeout.
+// shutdown shuts down, records the ticks around it if it is the first Close, and sets shut once it returns. It fails
+// with the round's stacks if Shutdown still waits after deadlockTimeout.
 func (s *stress) shutdown(ctx context.Context, t *testing.T) error {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(ctx, deadlockTimeout)
@@ -397,8 +395,8 @@ func (s *stress) unsubscribe(ctx context.Context, sub *stressSub, id uuid.UUID, 
 	}
 }
 
-// handle records each message as handled, pauses now and then, unsubscribes itself once sub.leave is set, and fails
-// for every multiple of stressFailEvery. It takes the ID from its arguments, since sub.id is set once Subscribe returns.
+// handle records each message, pauses now and then, unsubscribes itself once sub.leave is set, and fails on multiples
+// of stressFailEvery. It takes the ID as an argument, since sub.id is set only once Subscribe returns.
 func (s *stress) handle(sub *stressSub) func(context.Context, uuid.UUID, int) error {
 	return func(ctx context.Context, id uuid.UUID, n int) error {
 		sub.record(n, stressHandled)
@@ -420,8 +418,7 @@ func (s *stress) handle(sub *stressSub) func(context.Context, uuid.UUID, int) er
 	}
 }
 
-// loop ranges over seq, recording each message as handled, pausing now and then and failing like handle, until
-// sub.leave is set.
+// loop ranges over seq, doing what handle does, until sub.leave is set.
 func (s *stress) loop(sub *stressSub, seq iter.Seq2[int, func(error)]) {
 	for n, fail := range seq {
 		sub.record(n, stressHandled)
@@ -437,8 +434,8 @@ func (s *stress) loop(sub *stressSub, seq iter.Seq2[int, func(error)]) {
 	}
 }
 
-// checkStats waits until the Stats of every subscriber still subscribed match what it got, which they do once nothing
-// is in flight, or fails after deadlockTimeout.
+// checkStats waits until every remaining subscriber's Stats match what it got, as they do once idle, or fails after
+// deadlockTimeout.
 func (s *stress) checkStats(t *testing.T) {
 	t.Helper()
 	subs := make(map[uuid.UUID]*stressSub, len(s.subs))
@@ -521,7 +518,7 @@ func (s *stress) waitGoroutines(t *testing.T) {
 	}
 }
 
-// goroutines returns the goroutine profile records, as pprof prints them with their stacks, of the round's goroutines.
+// goroutines returns the round's goroutines with their stacks, as pprof prints them.
 func (s *stress) goroutines(t *testing.T) []string {
 	t.Helper()
 	var profile bytes.Buffer

@@ -1,16 +1,15 @@
-// A gateway takes readings in over MQTT, and the bus fans each out to a local rule, a local store, and an uplink. paho
-// calls the message handler from its own goroutine, which must not block, so the handler broadcasts without waiting
-// (message.WithNonBlocking) and every subscriber has a buffer. The uplink only puts each reading in an outbox
-// (store.Enqueue), and store.Drain sends them from there, in order, retrying while the link is down.
+// A gateway takes readings over MQTT, and the bus fans each out to a local rule, a local store, and an uplink. paho
+// calls the message handler from its own goroutine, which must not block, so the handler broadcasts with
+// message.WithNonBlocking and every subscriber has a buffer. The uplink only queues each reading in an outbox
+// (store.Enqueue), and store.Drain sends them in order, retrying while the link is down.
 //
-// Here the link is down while the readings come in, and back once the gateway has stopped. Shutdown waits until every
-// subscriber has handled its buffer, so the local store and the outbox hold every reading by then, and Drain sends
-// them all.
+// The link is down while the readings come in, and back once the gateway has stopped. Shutdown waits until every
+// subscriber has handled its buffer, so the local store and the outbox hold every reading by then, and Drain sends them
+// all.
 //
-// It is a module of its own, so that the library does not depend on an MQTT client: run it with
-// `go run -C examples/24-mqtt .`. It uses the broker at MQTT_ADDR, localhost:1883 by default (start one with
-// `docker run --rm -p 1883:1883 eclipse-mosquitto mosquitto -c /mosquitto-no-auth.conf`). Its test runs it against
-// mochi-mqtt, in process.
+// It is a module of its own, so that the library does not depend on an MQTT client: `go run -C examples/24-mqtt .`. It
+// uses the broker at MQTT_ADDR, localhost:1883 by default (`docker run --rm -p 1883:1883 eclipse-mosquitto mosquitto -c
+// /mosquitto-no-auth.conf`). Its test uses mochi-mqtt, in process.
 package main
 
 import (
@@ -123,8 +122,8 @@ func run(addr string) {
 	}
 }
 
-// subscribe adds the rule, the local store and the uplink. Each has a buffer, since the gateway broadcasts without
-// waiting: a reading that finds the buffer full is lost, as a *subscriber.DroppedError.
+// subscribe adds the rule, the local store and the uplink, each with a buffer, since the gateway broadcasts without
+// waiting: a reading that finds a buffer full is lost, as a *subscriber.DroppedError.
 func subscribe(ctx context.Context, b *broadcastor.Broadcastor[reading], local, outbox *store.Ring[reading]) {
 	options := []subscriber.Option[reading]{
 		subscriber.WithBuffer[reading](64),
@@ -150,9 +149,9 @@ func subscribe(ctx context.Context, b *broadcastor.Broadcastor[reading], local, 
 	}
 }
 
-// uplink sends what the outbox holds, oldest first, retrying each reading until it is sent, and returns what Drain
-// returned. send stands in for a request to the cloud, which fails until up is closed. A gateway would drain until it
-// stops. Here, until it has sent n readings.
+// uplink sends what the outbox holds, oldest first, retrying each reading until sent, and returns what Drain returned.
+// send stands in for a request to the cloud, failing until up is closed. A gateway would drain until it stops, here
+// until it has sent n readings.
 func uplink(ctx context.Context, outbox *store.Ring[reading], up <-chan struct{}, n int) <-chan error {
 	sending, stop := context.WithCancel(ctx)
 	send := func(_ context.Context, _ uuid.UUID, r reading) error {

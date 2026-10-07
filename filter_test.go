@@ -11,8 +11,8 @@ import (
 	"github.com/elojah/broadcastor/subscriber"
 )
 
-// A subscriber skips the messages its filter rejects before Broadcast sends them: Broadcast does not wait for it, stuck
-// as it is, nor count it, and the message is neither reported nor counted in Stats.
+// A filtered message never reaches the subscriber: Broadcast neither waits for it, stuck as it is, nor counts it, and
+// it is neither reported nor in Stats.
 func TestSubscriberWithFilter(t *testing.T) {
 	t.Parallel()
 
@@ -52,8 +52,8 @@ func TestSubscriberWithFilter(t *testing.T) {
 	})
 }
 
-// A message must pass every filter, called in order, so each one sees only what those before it kept. A nil filter
-// keeps everything.
+// A message must pass every filter, in order, so each sees only what those before it kept. A nil filter keeps
+// everything.
 func TestSubscriberWithFilter_Several(t *testing.T) {
 	t.Parallel()
 

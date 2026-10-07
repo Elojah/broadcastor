@@ -95,8 +95,8 @@ func TestNewRing_Size(t *testing.T) {
 	}
 }
 
-// Ack ignores an ID the ring does not hold: one it never gave, one already acked, and one whose entry was dropped while
-// it was being handled, in which case Next goes on with the next entry.
+// Ack ignores an ID the ring does not hold: never given, already acked, or dropped while handled, after which Next goes
+// on with the next entry.
 func TestRing_AckIgnored(t *testing.T) {
 	t.Parallel()
 
@@ -174,8 +174,7 @@ func TestRing_NextContextDone(t *testing.T) {
 	})
 }
 
-// Several goroutines put at once while a reader reads back and acks: the reader gets every entry once, and the entries
-// of each goroutine in the order it put them.
+// Concurrent Puts while a reader reads and acks: the reader gets every entry once, each goroutine's in order.
 func TestRing_Concurrent(t *testing.T) {
 	t.Parallel()
 
