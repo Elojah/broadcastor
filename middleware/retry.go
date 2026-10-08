@@ -34,28 +34,37 @@ type RetryPolicy struct {
 	IsRetryable func(err error) bool
 }
 
-// Retry calls the handler again after an error, as policy sets, and returns the last error. It always makes the first
-// call, and stops once ctx is done, even mid-wait. It never retries subscriber.ErrClosed, which an ended SubscribeSeq
-// loop returns.
+// Retry calls the handler with policy.Do, so again after an error, but never retries subscriber.ErrClosed, which an
+// ended SubscribeSeq loop returns.
 //
 // It waits in the subscriber's goroutine, holding up the subscriber and any Broadcast waiting on it. Unsubscribe does
 // not end a wait: ctx does. A panic passes through, but an inner Recover's *subscriber.PanicError is retried.
 func Retry[T any](policy RetryPolicy) subscriber.Middleware[T] {
+	isRetryable := policy.IsRetryable
+	policy.IsRetryable = func(err error) bool {
+		return !errors.Is(err, subscriber.ErrClosed) && (isRetryable == nil || isRetryable(err))
+	}
+
 	return func(next subscriber.Handler[T]) subscriber.Handler[T] {
 		return func(ctx context.Context, id uuid.UUID, msg T) error {
-			delay := policy.bound(policy.Delay)
-			for attempt := 1; ; attempt++ {
-				err := next(ctx, id, msg)
-				if err == nil || attempt >= policy.Attempts || errors.Is(err, subscriber.ErrClosed) ||
-					(policy.IsRetryable != nil && !policy.IsRetryable(err)) {
-					return err
-				}
-				if !wait(ctx, policy.jitter(delay)) {
-					return err
-				}
-				delay = policy.bound(policy.grow(delay))
-			}
+			return policy.Do(ctx, func(ctx context.Context) error { return next(ctx, id, msg) })
 		}
+	}
+}
+
+// Do calls f with ctx until it succeeds, as p sets, and returns its last error: a dial, say, with the same backoff as
+// Retry. It always makes the first call, and stops once ctx is done, even mid-wait.
+func (p RetryPolicy) Do(ctx context.Context, f func(ctx context.Context) error) error {
+	delay := p.bound(p.Delay)
+	for attempt := 1; ; attempt++ {
+		err := f(ctx)
+		if err == nil || attempt >= p.Attempts || (p.IsRetryable != nil && !p.IsRetryable(err)) {
+			return err
+		}
+		if !wait(ctx, p.jitter(delay)) {
+			return err
+		}
+		delay = p.bound(p.grow(delay))
 	}
 }
 

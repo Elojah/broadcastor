@@ -60,7 +60,7 @@ for msg, fail := range seq {
 | [`broadcastor`](https://pkg.go.dev/github.com/elojah/broadcastor) | `Broadcastor`. |
 | [`subscriber`](https://pkg.go.dev/github.com/elojah/broadcastor/subscriber) | Options for `Subscribe`, `SubscribeSeq` and `Unsubscribe`, error types, `Stats`. |
 | [`message`](https://pkg.go.dev/github.com/elojah/broadcastor/message) | Options for `Broadcast`. |
-| [`middleware`](https://pkg.go.dev/github.com/elojah/broadcastor/middleware) | `Recover`, `History`, `MaxAge`, `WrapError`, `Retry`. |
+| [`middleware`](https://pkg.go.dev/github.com/elojah/broadcastor/middleware) | `Recover`, `History`, `MaxAge`, `WrapError`, `Retry`, and `RetryPolicy.Do` for any func. |
 | [`store`](https://pkg.go.dev/github.com/elojah/broadcastor/store) | Queues for dead letters and history: `Ring`, `Drain`, `Enqueue`, `Filter`. |
 | [`filter`](https://pkg.go.dev/github.com/elojah/broadcastor/filter) | Filters for `subscriber.WithFilter`: `Changed`, `Every`. |
 
@@ -319,8 +319,10 @@ if conn != nil {
 ```
 
 For an outage longer than a buffer holds, store and forward with `store.Enqueue` and `store.Drain`. A call that hangs
-never fails, so give it a timeout. `Unsubscribe` does not end a `Retry` wait: the subscription's ctx does. See
-[`26-reconnect`](examples/26-reconnect/main.go) and [`25-modbus`](examples/25-modbus/main.go).
+never fails, so give it a timeout. `Unsubscribe` does not end a `Retry` wait: the subscription's ctx does.
+[`25-modbus`](examples/25-modbus/main.go) reconnects that way. [`26-reconnect`](examples/26-reconnect/main.go) keeps
+`handle` to the send: middlewares of its own find the link down after a few failed sends in a row, then dial again with
+`RetryPolicy.Do`, which retries any func as `Retry` retries `handle`.
 
 ## Examples
 
@@ -353,7 +355,7 @@ never fails, so give it a timeout. `Unsubscribe` does not end a `Retry` wait: th
 | [`23-shutdown`](examples/23-shutdown/main.go) | `Shutdown` waiting for a slow `handle` and the dead letters. |
 | [`24-mqtt`](examples/24-mqtt/main.go) | MQTT fanned out to a rule, a local store, and an uplink that stores and forwards. |
 | [`25-modbus`](examples/25-modbus/main.go) | A PLC polled over Modbus TCP, filtered, and a rule that retries and reconnects in place. |
-| [`26-reconnect`](examples/26-reconnect/main.go) | A subscriber reconnecting in place, its buffer keeping order. |
+| [`26-reconnect`](examples/26-reconnect/main.go) | A subscriber reconnecting in place through middlewares of its own, its buffer keeping order. |
 
 `19-redis`, `24-mqtt` and `25-modbus` are modules of their own, to keep their dependencies out of the library's go.mod.
 `go run -C examples/19-redis .` needs Redis at `REDIS_ADDR` (`localhost:6379` by default), and `24-mqtt` an MQTT broker

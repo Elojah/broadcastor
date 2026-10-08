@@ -61,7 +61,8 @@ A change to channels, removal or error reporting must keep these, and pass `make
 - **`Stats` covers only the subscribers in the map.** Totals across unsubscribes would need shared counters or a fold at removal racing late `ClosedError`s. OpenTelemetry goes in its own module.
 - **`Shutdown` waits on a count and a channel**, not a `sync.WaitGroup`, whose `Wait` cannot select on ctx.
 - **`WithReplay` takes an `iter.Seq[T]`**, not a queue: the iterator snapshots and acks once `yield` returns, so `subscriber` needs no queue interface.
-- **A subscriber reconnects in place** (`handle` dials again, `Retry` retries, the buffer keeps order), not by evicting and resubscribing, which loses what is broadcast in between. A suspended state with a hand-over under one ID was tried, and dropped as too intrusive.
+- **A subscriber reconnects in place** (`handle` or the user's middlewares dial again, `Retry` retries, the buffer keeps order), not by evicting and resubscribing, which loses what is broadcast in between. A suspended state with a hand-over under one ID was tried, and dropped as too intrusive.
+- **Connections are the user's**: the library defines no disconnect error nor reconnect middleware, only generic pieces such as `RetryPolicy.Do`. `26-reconnect` builds its own.
 - **`WithEvict` takes a predicate on the error, and keeps no count**: losses and handle's errors come from different goroutines, so one built-in count would mix both. Counting goes in a middleware or in `evict`.
 - **`WithEvict` sends on no channel**: the error handlers get the `*EvictedError` already.
 - **`WithDone` waits for a receiver until its ctx is done**, with the ID, so subscribers can share one. `Shutdown` waits for the send.

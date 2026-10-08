@@ -7,6 +7,8 @@ func Example() {
 	// link 1: 1
 	// link 1: 2
 	// link 1: down
+	// link 1: down
+	// link 1: down
 	// link 1: closed
 	// 4 handed to 1 subscribers
 	// 5 handed to 1 subscribers

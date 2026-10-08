@@ -235,6 +235,32 @@ func TestRetry_ContextDone(t *testing.T) {
 	}
 }
 
+// Do calls f again with ctx after each error, as Retry calls a handler, and returns nil once a call succeeds.
+func TestRetryPolicy_Do(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		type key struct{}
+		ctx := context.WithValue(t.Context(), key{}, "dial")
+		f := &flaky{errs: []error{attemptError(1), attemptError(2)}}
+		policy := middleware.RetryPolicy{Attempts: 5, Delay: time.Second, Multiplier: 3}
+
+		err := policy.Do(ctx, func(ctx context.Context) error {
+			if v := ctx.Value(key{}); v != "dial" {
+				t.Errorf("f got ctx value %v, want %q", v, "dial")
+			}
+
+			return f.handle(ctx, uuid.Nil, 0)
+		})
+		if err != nil {
+			t.Errorf("Do returned %v, want nil once a call succeeds", err)
+		}
+		if got, want := f.gaps(), []time.Duration{time.Second, 3 * time.Second}; !slices.Equal(got, want) {
+			t.Errorf("Do waited %v between calls, want %v", got, want)
+		}
+	})
+}
+
 // asIs reports whether err is want itself, not wrapped: the handler's errors must reach Retry's caller and IsRetryable
 // as the handler returned them.
 func asIs(err, want error) bool {
