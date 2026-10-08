@@ -1,8 +1,6 @@
 // subscriber.WithEvict unsubscribes a subscriber on the first error its evict picks. A sensor, unplugged after reading
-// 2, fails on every later one: failedInARow, our own middleware, turns its third failure in a row into errInARow, which
-// evict picks. A stuck subscriber is evicted on its first timeout, so Broadcast no longer waits for it. The error
-// handlers get a *subscriber.EvictedError wrapping the evicting error, which is then sent on evicted, a channel both
-// subscribers share.
+// 2, fails on every later one, and failedInARow, our own middleware, turns its third failure in a row into errInARow,
+// which evict picks. A stuck subscriber is evicted on its first timeout. Both send their eviction on one channel.
 //
 // handle waits for release, standing in for slow work.
 package main

@@ -1,14 +1,9 @@
-// A gateway takes readings over MQTT, and the bus fans each out to a local rule, a local store, and an uplink. paho
-// calls the message handler from its own goroutine, which must not block, so the handler broadcasts with
-// message.WithNonBlocking and every subscriber has a buffer. The uplink only queues each reading in an outbox
-// (store.Enqueue), and store.Drain sends them in order, retrying while the link is down.
+// A gateway takes readings over MQTT and fans each out to a rule, a local store, and an uplink. paho's message handler
+// must not block, so it broadcasts with message.WithNonBlocking, to buffered subscribers. The uplink only queues each
+// reading in an outbox (store.Enqueue), and store.Drain sends them in order once the link is back.
 //
-// The link is down while the readings come in, and back once the gateway has stopped. Shutdown waits until every
-// subscriber has handled its buffer, so the local store and the outbox hold every reading by then, and Drain sends them
-// all.
-//
-// It is a module of its own, so that the library does not depend on an MQTT client: `go run -C examples/24-mqtt .`. It
-// uses the broker at MQTT_ADDR, localhost:1883 by default (`docker run --rm -p 1883:1883 eclipse-mosquitto mosquitto -c
+// It is a module of its own, to keep paho out of the library's go.mod: `go run -C examples/24-mqtt .` uses the broker
+// at MQTT_ADDR, localhost:1883 by default (`docker run --rm -p 1883:1883 eclipse-mosquitto mosquitto -c
 // /mosquitto-no-auth.conf`). Its test uses mochi-mqtt, in process.
 package main
 

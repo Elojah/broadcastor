@@ -1,13 +1,10 @@
-// A Redis stream keeps the messages a subscriber loses (subscriber.WithDeadLetters) beyond the process, for
-// subscriber.WithReplay to hand back after a restart. Another keeps the history of every message, handled
-// (middleware.History) or lost.
+// A Redis stream keeps the messages a subscriber loses (subscriber.WithDeadLetters), for subscriber.WithReplay to hand
+// back after a restart. Another keeps the history of every message, handled (middleware.History) or lost. The alerts
+// fail to page while the pager is down, then restart and page what they lost before any new reading.
 //
-// The alerts fail to page while the pager is down, and the process restarts. The alerts then page what they lost before
-// any new reading, which empties the stream of losses, and the history shows every reading, twice for those paged late.
-//
-// It is a module of its own, so that the library does not depend on go-redis: `go run -C examples/19-redis .`. It uses
-// the Redis at REDIS_ADDR, localhost:6379 by default (`docker run --rm -p 6379:6379 redis`), and deletes its keys
-// first, so that it prints the same each time. Its test uses miniredis.
+// It is a module of its own, to keep go-redis out of the library's go.mod: `go run -C examples/19-redis .` uses the
+// Redis at REDIS_ADDR, localhost:6379 by default (`docker run --rm -p 6379:6379 redis`), and deletes its keys first.
+// Its test uses miniredis.
 package main
 
 import (

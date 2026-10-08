@@ -7,14 +7,13 @@
 [![CI](https://github.com/Elojah/broadcastor/actions/workflows/ci.yml/badge.svg)](https://github.com/Elojah/broadcastor/actions/workflows/ci.yml)
 [![Go Reference](https://pkg.go.dev/badge/github.com/elojah/broadcastor.svg)](https://pkg.go.dev/github.com/elojah/broadcastor)
 
-A generic in-process fan-out for Go: one `Broadcast` hands a message to every subscriber. Each subscriber runs in its
-own goroutine and handles one message at a time.
+A generic in-process fan-out for Go: one `Broadcast` hands a message to every subscriber, and each subscriber handles
+its messages one at a time, in its own goroutine.
 
-- **Delivery modes**: sync, buffered, parallel, async or non-blocking, with timeouts.
-- **Filters**: a subscriber skips what it does not want without waking up.
+- **Delivery modes**: sync, buffered, parallel, async or non-blocking, with timeouts and filters.
 - **Typed errors**: every missed message reaches the error handlers, and can go to a dead-letter store.
 - **Middleware**: recover, history, max age, error wrapping, retry with backoff, or your own.
-- **Operations**: eviction, bounded async sends, per-subscriber stats, graceful shutdown.
+- **Operations**: eviction, per-subscriber stats, graceful shutdown.
 - One dependency: `github.com/google/uuid`.
 
 ```sh
@@ -43,11 +42,8 @@ if err := b.Unsubscribe(ctx, id); err != nil {
 }
 ```
 
-`handle` gets the subscriber's ID, so it can unsubscribe itself. The `Subscribe` ctx is the subscription's lifetime
-(see [Lifecycle and contexts](#lifecycle-and-contexts)).
-
-`SubscribeSeq` returns an iterator instead. The loop body replaces `handle`, `fail` takes its error, and breaking out
-unsubscribes:
+`handle` gets the subscriber's ID, so it can unsubscribe itself. `SubscribeSeq` returns an iterator instead, whose loop
+body replaces `handle`. Breaking out unsubscribes:
 
 ```go
 _, seq, err := b.SubscribeSeq(ctx)
@@ -83,12 +79,12 @@ The mode is a message option, passed to `Broadcast` or set as a subscriber's def
 
 ¹ For `Broadcast`s from one goroutine.
 
-Each async send holds a goroutine until taken. `subscriber.WithAsyncLimit(n)` drops async messages past n sends under
-way, and `Stats.Sending` shows how many are.
+Delivery is at most once. `Broadcast` gives up on a subscriber once its ctx is done or the message's timeout runs out
+(`message.WithTimeout`, or `subscriber.WithTimeout` by default), and the error handlers learn why. Each async send
+holds a goroutine until taken, which `subscriber.WithAsyncLimit(n)` bounds.
 
-`subscriber.WithFilter(keep)` skips what `keep` rejects, in `Broadcast`'s goroutine, so the subscriber never wakes up
-for it. A skipped message is neither reported nor counted. Package `filter` holds stateful filters for readings that
-repeat themselves, so give each subscriber its own:
+`subscriber.WithFilter(keep)` skips what `keep` rejects before any send, so the subscriber never wakes up for it.
+Package `filter` holds stateful filters, so give each subscriber its own:
 
 ```go
 id, err := b.Subscribe(ctx, handle,
@@ -98,18 +94,10 @@ id, err := b.Subscribe(ctx, handle,
 id, err = b.Subscribe(ctx, uplink, subscriber.WithFilter(filter.Every[float64](time.Minute))) // at most one a minute
 ```
 
-Delivery is at most once: a missed message is never redelivered, but the error handlers learn why (see
-[Errors](#errors)), and a [dead-letter store](#dead-letters) can keep it. `Broadcast` gives up on a subscriber once its
-ctx is done or the message's timeout runs out. `message.WithTimeout(d)` gives each subscriber its own `d`, whereas a ctx
-deadline is shared. `subscriber.WithTimeout(d)` sets a default.
-
 ## Errors
 
-Errors go to error handlers, or are discarded:
-
-- `subscriber.WithErrorHandler` gets every error about the subscriber's messages.
-- `message.WithErrorHandler` gets every error about its message, after the subscriber's. All subscribers share it, so
-  it may run concurrently, even after `Broadcast` returns.
+Errors go to `subscriber.WithErrorHandler`, then to `message.WithErrorHandler`, which every subscriber shares, with the
+ctx the message is handled with. Without either, they are discarded.
 
 | Error | When |
 | --- | --- |
@@ -124,8 +112,7 @@ Errors go to error handlers, or are discarded:
 | `*subscriber.StoreError` | Wraps a loss the dead-letter store failed to keep. |
 
 Each type matches a sentinel with `errors.Is` (`subscriber.ErrTimeout`, `subscriber.ErrClosed`, …) without needing the
-message type, and wrappers match what they wrap. Handlers get the ctx the message is handled with, never the
-`Broadcast` one.
+message type, and wrappers match what they wrap.
 
 ## Middleware
 
@@ -141,25 +128,21 @@ logged := func(next subscriber.Handler[string]) subscriber.Handler[string] {
 }
 
 id, err := b.Subscribe(ctx, handle, subscriber.WithMiddleware(
- middleware.Recover[string](),        // a panic becomes a *subscriber.PanicError
- middleware.History[string](history), // each message handled is put in history
- middleware.WrapError[string](),      // an error becomes a *subscriber.HandleError
+ middleware.Recover[string](),                   // a panic becomes a *subscriber.PanicError
+ middleware.History[string](history),            // each message handled is put in history
+ middleware.MaxAge[string](time.Minute, sentAt), // an older message becomes a *subscriber.ExpiredError
+ middleware.WrapError[string](),                 // an error becomes a *subscriber.HandleError
  middleware.Retry[string](middleware.RetryPolicy{Attempts: 3, Delay: 10 * time.Millisecond, Multiplier: 2}),
  logged,
 ))
 ```
 
-Keep that order. `Recover` first catches panics in every later middleware. `History` before `WrapError` and `Retry`
-keeps a failed `Put` from being wrapped or retried. `Retry` after `WrapError` retries raw errors, so only the last one
-is wrapped, and panics are not retried.
+Keep that order: `Recover` first catches panics in every later middleware, `History` records only handled messages,
+and an expired message is neither wrapped nor retried. `Retry` after `WrapError` retries raw errors and wraps only the
+last.
 
-`middleware.MaxAge(d, at)` returns a `*subscriber.ExpiredError` instead of handing `handle` a message older than `d`,
-such as a reading that waited behind a slow `handle`. `at` returns when the message was made, since the library stamps
-none. It goes between `History` and `WrapError`, so an expired message is neither recorded, wrapped nor retried.
-
-Middlewares run in the subscriber's goroutine, so a slow one, or `Retry` waiting, holds it up like a slow `handle`.
-With `SubscribeSeq` they wrap the loop body: `Retry` yields a message again, but `Recover` cannot catch a panic in the
-body.
+Middlewares run in the subscriber's goroutine, so `Retry` waiting holds it up like a slow `handle`. With
+`SubscribeSeq` they wrap the loop body, but `Recover` cannot catch a panic in it.
 
 ## Dead letters
 
@@ -184,26 +167,13 @@ for {
 }
 ```
 
-A store is anything with `Put(ctx, subscriber.Record[T]) error`. `Put` runs where the error handlers do, `Broadcast`
-included, maybe concurrently, with a ctx never done, so it must bound itself. When it fails, the error handlers get a
-`*subscriber.StoreError`. `store.Filter` keeps some records out.
+A store is anything with `Put(ctx, subscriber.Record[T]) error`. `Put` runs where the error handlers do, maybe
+concurrently, with a ctx never done, so it must bound itself. `store.Filter` keeps some records out. Given the same
+store, `middleware.History` and `WithDeadLetters` record every message once, handled or lost
+([`18-history`](examples/18-history/main.go)).
 
-`middleware.History` puts every message handled in a store, with a nil `Err`. Given the same store,
-`WithDeadLetters` puts the others, so the store gets each message once, handled or lost:
-
-```go
-history := store.NewRing[string](1024)
-id, err := b.Subscribe(ctx, handle,
- subscriber.WithMiddleware(middleware.History[string](history)),
- subscriber.WithDeadLetters[string](history),
-)
-```
-
-`History` puts from the subscriber's goroutine once `handle` returns, and returns `Put`'s error. Losses are put from
-wherever they happen, so the store may get them out of order.
-
-With `store.Enqueue` as `handle`, the subscriber only queues, and `store.Drain` hands each message to the real sink, in
-order, from one goroutine. That is store and forward: `Broadcast` never waits for the sink.
+With `store.Enqueue` as `handle`, the subscriber only queues, and `store.Drain` hands each message to a slow sink, in
+order, so `Broadcast` never waits for the sink ([`24-mqtt`](examples/24-mqtt/main.go)):
 
 ```go
 queue := store.NewRing[string](1024)
@@ -213,13 +183,10 @@ retry := middleware.Retry[string](middleware.RetryPolicy{Attempts: math.MaxInt, 
 go store.Drain(ctx, queue, retry(uplink), nil)
 ```
 
-[`24-mqtt`](examples/24-mqtt/main.go) forwards readings from MQTT to an uplink that goes down for a while.
-
-`subscriber.WithReplay` hands a subscriber an iterator's values before any `Broadcast`: what it lost before a restart,
-read back from its dead letters, or the current value for a late subscriber. Each goes through the middlewares, error
-handlers and dead letters like a message. `yield` returns once the value is handled or reported, so the iterator acks
-it then, and returns false once the subscriber discards, leaving the rest in the source. A value lost again goes back
-to the dead letters, so an iterator over them should yield only what they held when it started:
+`subscriber.WithReplay` hands a subscriber an iterator's values before any message, such as its dead letters from
+before a restart. `yield` returns once the value is handled or reported, so the iterator acks it then. A value lost
+again goes back to the dead letters, so yield only what they held when the iterator started
+([`19-redis`](examples/19-redis/stream.go)):
 
 ```go
 func (s *stream[T]) Replay(ctx context.Context) iter.Seq[T] {
@@ -236,8 +203,6 @@ func (s *stream[T]) Replay(ctx context.Context) iter.Seq[T] {
 ...
 id, err := b.Subscribe(ctx, page, subscriber.WithReplay(lost.Replay(ctx)), subscriber.WithDeadLetters[Alert](lost))
 ```
-
-[`19-redis`](examples/19-redis/stream.go) keeps dead letters in a Redis stream, and replays them after a restart.
 
 ## Stats
 
@@ -261,38 +226,24 @@ for _, s := range b.Stats() {
 | `Handling` | How long `handle` has been running on the current message, 0 when idle. |
 
 Each message is counted once, in `Handled`, `Failed`, `TimedOut` or `Dropped`, before the error handlers run. An
-unsubscribed subscriber leaves the snapshot. The counters cost a few atomic operations and two clock reads per message.
-
-A stuck `handle`, such as a hung serial read, shows in `Handling`, so a watchdog can unsubscribe it. That does not end
-`handle`, but no `Broadcast` waits for it any more:
-
-```go
-for _, s := range b.Stats() {
- if s.Handling > time.Minute {
-  b.Unsubscribe(ctx, s.SubscriberID, subscriber.WithUnsubscribeDiscard())
- }
-}
-```
+unsubscribed subscriber leaves the snapshot. A watchdog can unsubscribe a subscriber whose `handle` hangs, from
+`Handling` ([`22-watchdog`](examples/22-watchdog/main.go)).
 
 ## Lifecycle and contexts
 
-- `Unsubscribe` and `Close` never wait, so `handle` can call them. A `Broadcast` waiting on the subscriber gives up
-  with a `*subscriber.ClosedError`. After `Close`, `Subscribe` and `SubscribeSeq` return `broadcastor.ErrClosed`.
-- An unsubscribed subscriber still handles what it took: its buffer, and a message racing `Unsubscribe`.
-  `subscriber.WithUnsubscribeDiscard` reports them as `*subscriber.ClosedError` instead, and
-  `subscriber.WithUnsubscribeOptions` makes that a default, the only way `Close` applies it.
-- `subscriber.WithEvict(evict, evicted)` unsubscribes a subscriber, discarding what it took, on the first error `evict`
-  returns true for: a timeout, so that a stuck one stops costing every `Broadcast` its timeout, or an error from
-  `handle` meaning it cannot go on. To evict after several, count them in a middleware returning an error `evict`
-  matches, or in `evict`, which may run concurrently. The `evicted` channel, unless nil, then gets the
-  `*subscriber.EvictedError`, once, after the error handlers.
-- `subscriber.WithDone(done)` sends the subscriber's ID on `done` once it is done, however it was unsubscribed: after
-  `handle`'s last call, so the receiver can release what `handle` used without a lock.
-- Like `signal.Notify`, neither send ever waits: give the channel room for one per subscriber sending on it, or the
-  value is dropped. Each carries the subscriber's ID, so subscribers can share one.
-- `Shutdown(ctx)` is `Close`, then waits until every subscriber has handled or discarded what it took and sent its ID
-  on `done`, or until ctx is done. It does not wait for the receiver: release after it returns. A program that exits right after `Close` cuts `handle` off, so call `Shutdown` on
-  SIGTERM. From `handle`, it waits on itself until ctx is done.
+- `Unsubscribe` and `Close` never wait, so `handle` can call them, and a `Broadcast` waiting on the subscriber gives
+  up. After `Close`, `Subscribe` and `SubscribeSeq` return `broadcastor.ErrClosed`.
+- An unsubscribed subscriber still handles what it took, unless `subscriber.WithUnsubscribeDiscard`, which reports it
+  as `*subscriber.ClosedError` instead. `subscriber.WithUnsubscribeOptions` makes that the default, for `Close` too.
+- `subscriber.WithEvict(evict, evicted)` unsubscribes a subscriber, discarding, on the first error `evict` picks: a
+  timeout, so that a stuck one stops costing every `Broadcast` its timeout, or an error from `handle` meaning it cannot
+  go on. To evict after several errors, count them in a middleware ([`17-evict`](examples/17-evict/main.go)).
+- `subscriber.WithDone(done)` sends the subscriber's ID once it is done with what it took, so the receiver can release
+  what `handle` used without a lock.
+- Like `signal.Notify`, `evicted` and `done` are sent without waiting: give the channel room for one per subscriber
+  sharing it.
+- `Shutdown(ctx)` is `Close`, then waits until every subscriber is done, or ctx is. Call it on SIGTERM: exiting right
+  after `Close` cuts `handle` off.
 
 ```go
 ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
@@ -313,8 +264,7 @@ if err := b.Shutdown(ctx); err != nil {
 | `message.WithContext` | Replaces the `Subscribe` ctx for one message, values and cancellation included. |
 
 Async sends keep using the `Broadcast` ctx after `Broadcast` returns, so a request's `defer cancel()` drops the message
-for every subscriber yet to take it. To outlive the request, detach the sends and bound them with a timeout, also for a
-subscriber whose default is `message.WithAsync`:
+for every subscriber yet to take it. To outlive the request, detach the sends and bound them with a timeout:
 
 ```go
 detached := context.WithoutCancel(ctx)
@@ -323,11 +273,10 @@ b.Broadcast(detached, msg, message.WithAsync[string](), message.WithTimeout[stri
 
 ## Reconnecting
 
-A subscriber reconnects in place, without leaving. `handle` owns the connection, closes it when a call fails, and dials
-again on the next attempt, which `middleware.Retry` makes. The message is retried rather than lost, and what comes
-meanwhile waits in the buffer, in order. Once `subscriber.WithDone` sends the subscriber's ID, after `Shutdown`, close
-the last connection. Only `handle` uses it until then, and receiving the ID orders the close after its last call, so
-none of it needs a lock:
+A subscriber reconnects in place: `handle` owns the connection, closes it when a call fails, and dials again on the
+next attempt, which `middleware.Retry` makes. What comes meanwhile waits in the buffer, in order. Once
+`subscriber.WithDone` sends the ID, close the last connection: receiving it orders the close after `handle`'s last
+call, so none of it needs a lock.
 
 ```go
 var conn *Conn // only handle uses it, until done gets the ID
@@ -342,10 +291,8 @@ handle := func(ctx context.Context, _ uuid.UUID, msg Reading) error {
  if err := conn.Send(msg); err != nil {
   conn.Close()
   conn = nil // dial again on the next attempt
-
   return err
  }
-
  return nil
 }
 done := make(chan uuid.UUID, 1)
@@ -355,7 +302,6 @@ id, err := b.Subscribe(ctx, handle,
  })),
  subscriber.WithBuffer[Reading](64),           // what comes in meanwhile, in order
  subscriber.WithTimeout[Reading](time.Second), // then Broadcast stops waiting
- subscriber.WithDeadLetters[Reading](lost),    // and keeps what overflows
  subscriber.WithDone[Reading](done),
 )
 // ...
@@ -366,14 +312,9 @@ if conn != nil {
 }
 ```
 
-- For an outage longer than a buffer holds, store and forward with `store.Enqueue` and `store.Drain`, as
-  [`24-mqtt`](examples/24-mqtt/main.go) does.
-- A call that hangs never fails: give it a timeout, or close its connection from a watchdog on `Stats.Handling`
-  ([`22-watchdog`](examples/22-watchdog/main.go)).
-- `Unsubscribe` does not end a `Retry` wait: bound it with the subscription's ctx.
-- Eviction gives up on a subscriber for good: it is not a way to reconnect.
-
-See [`26-reconnect`](examples/26-reconnect/main.go) and [`25-modbus`](examples/25-modbus/main.go).
+For an outage longer than a buffer holds, store and forward with `store.Enqueue` and `store.Drain`. A call that hangs
+never fails, so give it a timeout. `Unsubscribe` does not end a `Retry` wait: the subscription's ctx does. See
+[`26-reconnect`](examples/26-reconnect/main.go) and [`25-modbus`](examples/25-modbus/main.go).
 
 ## Examples
 
@@ -397,7 +338,7 @@ See [`26-reconnect`](examples/26-reconnect/main.go) and [`25-modbus`](examples/2
 | [`14-context`](examples/14-context/main.go) | `message.WithContext`, and an async `Broadcast` outliving a request. |
 | [`15-dead-letters`](examples/15-dead-letters/main.go) | `subscriber.WithDeadLetters`, with what `Close` discards. |
 | [`16-stats`](examples/16-stats/main.go) | `Broadcastor.Stats`, for a stuck subscriber and a failing one. |
-| [`17-evict`](examples/17-evict/main.go) | `subscriber.WithEvict` on a timeout and on failures counted by a middleware, its channel, and `*subscriber.EvictedError`. |
+| [`17-evict`](examples/17-evict/main.go) | `subscriber.WithEvict` on a timeout and on failures counted by a middleware. |
 | [`18-history`](examples/18-history/main.go) | `middleware.History` and `subscriber.WithDeadLetters` sharing a store. |
 | [`19-redis`](examples/19-redis/main.go) | Dead letters and history in Redis, replayed after a restart with `subscriber.WithReplay`. |
 | [`20-filter`](examples/20-filter/main.go) | `subscriber.WithFilter` with `filter.Changed` and `filter.Every`. |
@@ -405,7 +346,7 @@ See [`26-reconnect`](examples/26-reconnect/main.go) and [`25-modbus`](examples/2
 | [`22-watchdog`](examples/22-watchdog/main.go) | `Stats.Handling` to unsubscribe a hung subscriber, and `subscriber.WithAsyncLimit`. |
 | [`23-shutdown`](examples/23-shutdown/main.go) | `Shutdown` waiting for a slow `handle` and the dead letters. |
 | [`24-mqtt`](examples/24-mqtt/main.go) | MQTT fanned out to a rule, a local store, and an uplink that stores and forwards. |
-| [`25-modbus`](examples/25-modbus/main.go) | A PLC polled over Modbus TCP, filtered with `filter.Changed`, and a rule writing a coil back that retries and reconnects in place. |
+| [`25-modbus`](examples/25-modbus/main.go) | A PLC polled over Modbus TCP, filtered, and a rule that retries and reconnects in place. |
 | [`26-reconnect`](examples/26-reconnect/main.go) | A subscriber reconnecting in place, its buffer keeping order. |
 
 `19-redis`, `24-mqtt` and `25-modbus` are modules of their own, to keep their dependencies out of the library's go.mod.

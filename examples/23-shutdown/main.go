@@ -1,8 +1,6 @@
-// On SIGTERM, or a power-fail signal, a device has seconds left. Close never waits, so exiting right after it cuts off
-// handle. Shutdown is Close, then waits until every subscriber has handled what it took, or its ctx is done. A logger
-// is writing a reading to flash, with two more in its buffer, and an uplink that is down queues every reading it misses
-// as a dead letter, to send after the reboot. Once Shutdown returns, every reading is logged, and every one the uplink
-// missed is queued.
+// On SIGTERM, Shutdown is Close, then waits until every subscriber has handled what it took. A logger is writing a
+// reading to flash, with two more in its buffer, and an uplink that is down queues what it misses as dead letters. Once
+// Shutdown returns, every reading is logged or queued, so the program can exit.
 //
 // A program would wait for the signal with signal.NotifyContext. Here, it comes once the logger is busy.
 package main

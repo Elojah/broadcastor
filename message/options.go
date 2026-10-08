@@ -27,10 +27,9 @@ func WithParallel[T any]() Option[T] {
 }
 
 // WithAsync makes Broadcast send to each subscriber from a goroutine of its own and return at once. Messages may arrive
-// out of order. Each send holds a goroutine until taken (see subscriber.WithAsyncLimit).
+// out of order, and each send holds a goroutine until taken (see subscriber.WithAsyncLimit).
 //
-// The sends keep using ctx after Broadcast returns, so cancelling it, as a request's deferred cancel does, drops every
-// message not taken yet. To outlive the caller:
+// The sends keep using the Broadcast ctx, so cancelling it drops every message not taken yet. To outlive the caller:
 //
 //	detached := context.WithoutCancel(ctx)
 //	b.Broadcast(detached, msg, message.WithAsync[T](), message.WithTimeout[T](time.Second), message.WithContext[T](detached))

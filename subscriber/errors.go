@@ -128,8 +128,7 @@ func (e *EvictedError[T]) Is(target error) bool {
 }
 
 // ClosedError is reported for a message missed because the subscriber was unsubscribed: by a Broadcast under way, or
-// discarded (WithUnsubscribeDiscard, or a SubscribeSeq loop that ended). It matches ErrClosed. For the message in a
-// SubscribeSeq loop when it ended or panicked, it is handle's error, so it goes through the middlewares.
+// discarded (WithUnsubscribeDiscard, or a SubscribeSeq loop that ended). It matches ErrClosed.
 type ClosedError[T any] struct {
 	SubscriberID uuid.UUID
 	Message      T

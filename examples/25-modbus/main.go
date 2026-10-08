@@ -1,20 +1,10 @@
-// A gateway polls a PLC's temperature over Modbus TCP, and the bus fans each reading out to a fan rule and a trend. A
-// poll repeats the value until it changes, so each subscriber filters with filter.Changed: the rule takes a reading
-// only when the fan must switch, on above 30°C and off below 29°C, and the trend once it has moved by 1°C since the
-// last kept.
+// A gateway polls a PLC's temperature over Modbus TCP and fans it out to a fan rule and a trend, each filtering the
+// repeated readings with filter.Changed. The rule writes the fan's coil over its own connection, and middleware.Retry
+// retries a busy PLC or a timed-out request. When the PLC stops answering, the rule reconnects in place, while the next
+// reading waits in its buffer.
 //
-// The rule writes the fan's coil over its own connection. The PLC, starting up, answers the first write with exception
-// 6, server device busy, which middleware.Retry retries, as it does a timed-out request, but not an exception a retry
-// cannot cure, such as an illegal address. Broadcast waits for the rule a poll at most, so that the poll keeps its
-// pace.
-//
-// The PLC never answers the rule's third write, as if a firewall had dropped the idle connection. The rule reconnects
-// in place: once a request has timed out, handle closes the connection, and Retry's next attempt opens a new one.
-// Meanwhile, the next reading that switches the fan waits in the rule's buffer, neither lost nor out of order.
-// After Shutdown, subscriber.WithDone says the rule is done with its last connection, which main closes.
-//
-// It is a module of its own, so that the library does not depend on a Modbus library: `go run -C examples/25-modbus .`.
-// It needs no device: plc.go simulates one, in process.
+// It is a module of its own, to keep simonvetter/modbus out of the library's go.mod: `go run -C examples/25-modbus .`.
+// plc.go simulates the PLC, in process.
 package main
 
 import (

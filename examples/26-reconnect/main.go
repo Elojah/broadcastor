@@ -1,8 +1,6 @@
-// A forwarder sends each message over a link, which goes down on 3. It reconnects in place, without unsubscribing:
-// handle owns the link, closes it once a send fails, and dials a new one on the next attempt, which middleware.Retry
-// makes. Meanwhile Broadcast puts 4 and 5 in the buffer without waiting, so none is lost, and the new link sends 3, 4
-// then 5, in order. After Shutdown, subscriber.WithDone says the forwarder is done with its last link, which main
-// closes.
+// A forwarder sends each message over a link, which goes down on 3. It reconnects in place: handle closes the link once
+// a send fails and dials a new one on the next attempt, which middleware.Retry makes. Meanwhile, 4 and 5 wait in the
+// buffer, so the new link sends 3, 4 then 5, in order. subscriber.WithDone tells main when to close the last link.
 //
 // Dialling waits until main brings the network back up, standing in for a slow reconnection.
 package main

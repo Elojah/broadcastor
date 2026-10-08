@@ -20,41 +20,23 @@ At `21d751b` (Intel Core Ultra 5 226V, GOMAXPROCS 8), per subscriber and per `Br
 | `BenchmarkBroadcast_Churn`                          | 0.92–1.3 µs              |      |        |
 | `BenchmarkSubscribeUnsubscribe`, per pair           | 2.1 µs                   | 737  | 11     |
 
-## Short-term: bound memory, cut wake-ups
+## Mid-term: latest values, store and forward
 
-- [x] `subscriber.WithAsyncLimit(n)` and `Stats.Sending`.
-- [x] No allocation for a `Broadcast` without options in sync, buffered and non-blocking modes.
-- [x] `subscriber.WithFilter`, and package `filter` (`Changed`, `Every`).
-- [x] `middleware.MaxAge` and `*subscriber.ExpiredError`.
-- [x] `Stats.Handling`, for a watchdog.
-
-## Mid-term: shutdown, latest values, store and forward
-
-- [x] `Shutdown(ctx)`.
 - [ ] Latest value wins: `subscriber.WithDropOldest()` for non-blocking sends, which drops the oldest buffered message
-  instead of the new one. It suits state (readings, positions, config), and with `WithBuffer(1)` each subscriber holds
-  one value. `Broadcast` then reads from `ch` too, and must report what it takes as a `*DroppedError`. First settle how
-  `Stats` counts that message, already `Delivered`.
+  instead of the new one, so that with `WithBuffer(1)` each subscriber holds one value. `Broadcast` then reads from
+  `ch` too, and reports what it takes as a `*DroppedError`. First settle how `Stats` counts that message, already
+  `Delivered`.
 - [ ] `Broadcastor.Send(ctx, id, msg, options...)`: hands msg to one subscriber through `Deliver`, so no new invariant,
-  and returns whether it was taken, or a `*SubscriberNotFoundError`. For commands to one handler. A late subscriber's
-  current value needs no `Send`: set it and broadcast under a mutex, and subscribe with
-  `subscriber.WithReplay(slices.Values([]T{current}))` under the same one, so no subscriber gets an older value after a
-  newer one.
-- [x] `subscriber.WithDone`.
-- [x] Reconnecting, with no change to the core: in place, with `handle`, `middleware.Retry` and the buffer
-  (`examples/26-reconnect`, `25-modbus`).
-- [x] `subscriber.WithReplay(iter.Seq[T])`, which `19-redis` uses to replay its dead letters after a restart.
+  and returns whether it was taken, or a `*SubscriberNotFoundError`. For commands to one handler.
 - [ ] `store.File`: a durable `store.Queue` on local disk, standard library only, for store and forward across reboots
   without Redis.
   - Append-only segments, a checksum per record so that a write torn by a power cut is dropped on reopen, and a file
     holding the ack offset.
-  - Batched fsync, every n records or every interval, since flash wears with each write. A power cut loses at most a
-    batch.
+  - Batched fsync, every n records or every interval, since flash wears with each write.
   - A size cap. Decide whether, once full, it drops the oldest segment or `Put` fails (a `StoreError`).
   - The caller gives the encoding (`func(T) ([]byte, error)` and its inverse), so it imports no codec.
   - [ ] A durable store keeps only `Record.Err`'s text, so `errors.Is(entry.Err, subscriber.ErrTimeout)` fails once
     read back. Decide whether `Record` carries the sentinel its error matches, before `store.File` sets its format.
-- [x] `examples/24-mqtt`.
 
 ## Long-term: v1.0, smaller targets
 
@@ -62,11 +44,10 @@ At `21d751b` (Intel Core Ultra 5 226V, GOMAXPROCS 8), per subscriber and per `Br
   follow semver.
 - [ ] Settle before the freeze:
   - IDs as an atomic `uint64` counter instead of UUIDv7: no dependency, a smaller binary, `ErrClosed` the only error
-    `Subscribe` returns, a cheaper `Subscribe`, and `Stats` in subscription order. It breaks handle's signature, and
-    only works because cross-process transports are out of scope.
+    `Subscribe` returns, and a cheaper `Subscribe`. It breaks handle's signature, and only works because
+    cross-process transports are out of scope.
   - `Unsubscribe`'s unused ctx: drop it, or make it wait for that subscriber's goroutine, like `Shutdown`.
-- [x] TinyGo: `make tinygo` in CI, on a pinned dev build until 0.43 (tinygo-org/tinygo#5692).
-  - [ ] Once TinyGo 0.43.0 is out, install its `.deb` in CI instead of the dev image.
+- [ ] Once TinyGo 0.43.0 is out, install its `.deb` in CI instead of the dev image.
 - [ ] `store.DrainBatch(ctx, q, n, maxWait, handle)`: hands up to n entries at once, or fewer after maxWait, and acks
   them together, since cellular and LoRa uplinks pay per request. Measure it against `Drain` once `store.File` exists.
 - [ ] Only once someone needs it: an observer hook where the counters are incremented, so that a `broadcastor/otel`

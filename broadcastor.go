@@ -16,7 +16,7 @@ import (
 )
 
 // Broadcastor hands each message to every subscriber. Create one with NewBroadcastor. It is safe for concurrent use,
-// handle included.
+// from handle included.
 type Broadcastor[T any] struct {
 	subscribers sync.Map // [uuid.UUID]*subscriber.Subscriber[T]
 
@@ -24,27 +24,24 @@ type Broadcastor[T any] struct {
 	gate gate.Gate
 
 	// running counts the subscribers not done yet, plus one until the first Close. Only add raises it, under gate, so
-	// it reaches 0 once, after Close: whoever drops it there closes stopped.
+	// it reaches 0 once, after Close, and whoever drops it there closes stopped.
 	running atomic.Int64
 	stopped chan struct{}
-	// done is stop, made once since add would allocate it.
-	done func()
 }
 
 // NewBroadcastor returns an empty Broadcastor.
 func NewBroadcastor[T any]() *Broadcastor[T] {
 	b := &Broadcastor[T]{stopped: make(chan struct{})}
 	b.running.Store(1)
-	b.done = b.stop
 
 	return b
 }
 
-// Subscribe adds a subscriber and returns its ID. Its own goroutine calls handle for each message, one at a time, with
-// the ID so that handle can unsubscribe itself. A Broadcast under way may or may not reach it.
+// Subscribe adds a subscriber and returns its ID. Its goroutine calls handle for each message, one at a time, with the
+// ID so that handle can unsubscribe itself. A Broadcast under way may or may not reach it.
 //
-// ctx is the subscription's lifetime: once it is done, the subscriber is unsubscribed, unless
-// subscriber.WithDetachedContext. handle gets ctx, unless the message has its own (message.WithContext).
+// ctx is the subscription's lifetime, unless subscriber.WithDetachedContext: once it is done, the subscriber is
+// unsubscribed. handle gets ctx, unless the message has its own (message.WithContext).
 //
 // It returns ErrClosed after Close.
 func (b *Broadcastor[T]) Subscribe(ctx context.Context, handle func(ctx context.Context, id uuid.UUID, msg T) error, options ...subscriber.Option[T]) (uuid.UUID, error) {
@@ -57,13 +54,13 @@ func (b *Broadcastor[T]) Subscribe(ctx context.Context, handle func(ctx context.
 	return s.ID(), nil
 }
 
-// SubscribeSeq is Subscribe with an iterator: the loop body replaces handle, in the caller's goroutine. fail takes the
-// error handle would return, nil if never called, and must be called before the iteration ends. The middlewares wrap
-// the body, so middleware.Retry yields a message again, but a panic in it reaches the caller, not middleware.Recover.
-// Until the loop starts, Broadcast waits for it as for a busy handle.
+// SubscribeSeq is Subscribe with an iterator, whose loop body replaces handle, in the caller's goroutine. fail takes
+// the error handle would return, and must be called before the body returns: not calling it means nil. The
+// middlewares wrap the body, but a panic in it reaches the caller. Until the loop starts, Broadcast waits for it as
+// for a busy handle.
 //
 // The loop ends on break, once ctx is done, or once unsubscribed and done with what it took. Ending unsubscribes, and
-// reports what was taken but not yielded as *subscriber.ClosedError. seq can be ranged over once.
+// reports what was taken but not yielded as a *subscriber.ClosedError. seq can be ranged over once.
 //
 // It returns ErrClosed after Close.
 func (b *Broadcastor[T]) SubscribeSeq(ctx context.Context, options ...subscriber.Option[T]) (uuid.UUID, iter.Seq2[T, func(error)], error) {
@@ -76,9 +73,9 @@ func (b *Broadcastor[T]) SubscribeSeq(ctx context.Context, options ...subscriber
 	return id, s.Seq(), nil
 }
 
-// Unsubscribe removes the subscriber, or returns a *SubscriberNotFoundError. It never waits, so handle can call it. The
-// subscriber may still handle what it took, and a Broadcast waiting on it gives up with a *subscriber.ClosedError.
-// options override subscriber.WithUnsubscribeOptions. ctx is unused.
+// Unsubscribe removes the subscriber, or returns a *SubscriberNotFoundError. It never waits, so handle can call it:
+// the subscriber may still handle what it took, and a Broadcast waiting on it gives up with a
+// *subscriber.ClosedError. options override subscriber.WithUnsubscribeOptions. ctx is unused.
 func (b *Broadcastor[T]) Unsubscribe(ctx context.Context, id uuid.UUID, options ...subscriber.UnsubscribeOption) error {
 	if !b.remove(id, options...) {
 		return &SubscriberNotFoundError{SubscriberID: id}
@@ -88,7 +85,7 @@ func (b *Broadcastor[T]) Unsubscribe(ctx context.Context, id uuid.UUID, options 
 }
 
 // Close unsubscribes every subscriber, after which Subscribe and SubscribeSeq return ErrClosed. It never waits, so
-// handle can call it: Shutdown waits. Every call after the first, Shutdown's included, returns ErrClosed.
+// handle can call it. Every call after the first returns ErrClosed.
 func (b *Broadcastor[T]) Close() error {
 	closed := b.gate.Close()
 
@@ -109,13 +106,11 @@ func (b *Broadcastor[T]) Close() error {
 	return nil
 }
 
-// Shutdown is Close, then waits until every subscriber has handled or discarded what it took and sent its ID on
-// subscriber.WithDone's channels, so that the program can exit right after, such as on SIGTERM. It returns ctx.Err()
-// if ctx ends first, else Close's error.
+// Shutdown is Close, then waits until every subscriber is done: it has handled or discarded what it took, and sent its
+// ID on its subscriber.WithDone channels. It returns ctx.Err() if ctx is done first, else Close's error.
 //
-// It waits for a Broadcast only through a subscriber, which Close frees at once, unless an error handler or store
-// blocks. A Broadcast racing it may still report a *subscriber.ClosedError after it returns. Called from handle or an
-// error handler, or with a SubscribeSeq loop never ranged, it waits until ctx is done.
+// Called from handle or an error handler, or with a SubscribeSeq loop never ranged, it waits until ctx is done. A
+// Broadcast racing it may still report a *subscriber.ClosedError after it returns.
 func (b *Broadcastor[T]) Shutdown(ctx context.Context) error {
 	err := b.Close()
 
@@ -134,18 +129,17 @@ func (b *Broadcastor[T]) Shutdown(ctx context.Context) error {
 	}
 }
 
-// Broadcast hands msg to every subscriber and returns how many took it: an async send counts once started, and a
-// subscriber that filters msg out (subscriber.WithFilter) does not.
+// Broadcast hands msg to every subscriber whose filter keeps it (subscriber.WithFilter), and returns how many took it,
+// counting an async send once started.
 //
-// By default it waits for each subscriber in turn. It gives up on one once ctx is done or the message's timeout runs
-// out, and reports why, but a ready subscriber takes msg even then. ctx only bounds the wait and never reaches handle
-// or the error handlers, but async sends keep using it (see message.WithAsync).
+// By default it waits for each subscriber in turn, and gives up on one once ctx is done or the message's timeout runs
+// out, reporting why. A ready subscriber takes msg even then. ctx never reaches handle or the error handlers, but
+// async sends keep using it after Broadcast returns.
 func (b *Broadcastor[T]) Broadcast(ctx context.Context, msg T, options ...message.Option[T]) int {
 	var (
-		// Once, not per subscriber.
 		config = message.NewConfig(options...)
 		n      int
-		// One per parallel send: whether the subscriber took msg.
+		// Whether each parallel send was taken.
 		pending []<-chan bool
 	)
 	b.subscribers.Range(func(_, value any) bool {
@@ -207,8 +201,8 @@ func (b *Broadcastor[T]) add(ctx context.Context, options []subscriber.Option[T]
 	defer b.gate.Leave()
 	b.running.Add(1)
 
-	// Before Store, so whoever removes the subscriber stops the watch.
-	ctx = s.Attach(ctx, func(options ...subscriber.UnsubscribeOption) bool { return b.remove(id, options...) }, b.done)
+	// Before Store, so that whoever removes the subscriber stops its ctx watch.
+	ctx = s.Attach(ctx, func(options ...subscriber.UnsubscribeOption) bool { return b.remove(id, options...) }, b.stop)
 	b.subscribers.Store(id, s)
 	// If ctx was already done, the watch may have run before Store and found nothing.
 	if ctx.Err() != nil {

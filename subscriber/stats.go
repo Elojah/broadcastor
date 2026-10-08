@@ -7,10 +7,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// Stats is a snapshot of a subscriber's counters. Each message a Broadcast picks it up for, and each replayed value,
-// ends up counted once in Handled, Failed, TimedOut or Dropped. Delivered is Handled + Failed + Queued, plus one while
-// handle runs, but the counters are read one at a time, so they may not add up while messages are in flight. For
-// SubscribeSeq, handle is the loop body.
+// Stats is a snapshot of a subscriber's counters. Each message, and each replayed value, is counted once in Handled,
+// Failed, TimedOut or Dropped. Delivered is Handled + Failed + Queued, plus one while handle runs, but the counters are
+// read one at a time, so they may not add up while messages are in flight. For SubscribeSeq, handle is the loop body.
 type Stats struct {
 	SubscriberID uuid.UUID
 
@@ -31,8 +30,7 @@ type Stats struct {
 
 	// HandleTime is the time spent in handle and its middlewares, middleware.Retry's waits included.
 	HandleTime time.Duration
-	// Handling is how long handle has been running on the current message, 0 when idle: a watchdog can unsubscribe a
-	// subscriber whose handle hangs.
+	// Handling is how long handle has been running on the current message, 0 when idle.
 	Handling time.Duration
 }
 
