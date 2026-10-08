@@ -4,10 +4,12 @@ package message
 import (
 	"context"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // Delivery is how Broadcast hands a message to a subscriber. The last option that sets it wins.
-type Delivery int
+type Delivery uint8
 
 const (
 	// DeliverySync waits for each subscriber in turn. It is the default.
@@ -30,6 +32,10 @@ type Message[T any] struct {
 type Config struct {
 	Delivery Delivery
 
+	// set holds the fields options set, which New lays over a subscriber's defaults even when zero. Next to Delivery, so
+	// both fit in one word: every async send copies Config to the heap.
+	set fields
+
 	// Timeout bounds the wait for the subscriber to take the message. 0 means none.
 	Timeout time.Duration
 
@@ -39,8 +45,9 @@ type Config struct {
 	// Context replaces the subscriber's ctx for this message. nil means none.
 	Context context.Context //nolint:containedctx // it travels with the message, which outlives Broadcast
 
-	// set holds the fields options set, which New lays over a subscriber's defaults even when zero.
-	set fields
+	// SubscriberFilter picks, by ID, the subscribers Broadcast hands the message to. nil means every one. Only a
+	// Broadcast's own is read.
+	SubscriberFilter func(id uuid.UUID) bool
 }
 
 // fields is a set of Config fields.

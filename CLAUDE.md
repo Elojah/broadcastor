@@ -47,7 +47,7 @@ A change to channels, removal or error reporting must keep these, and pass `make
 - **`Consume` replays before reading `ch`**, through `process`, and checks `discarding` before each value.
 - **No error path the library owns may block** (`TestSubscribe_ErrorsWithoutHandler`). Only the user's handlers and stores may. The `evicted` and `done` sends drop rather than block (`TestSubscriberWithEvict_ChannelFull`).
 - **Only `report` calls error handlers and `Store.Put`**, outside the middleware chain, with the message's ctx or else the subscriber's, never the `Broadcast` one: hence the `contextcheck` nolints. `Put` gets it `WithoutCancel`, and a failed `Put` becomes a `StoreError`, so each loss is reported once and stored at most once (`TestSubscriberWithDeadLetters_ExactlyOnce`).
-- **Each message a `Broadcast` picks a subscriber up for is counted once**, in `Handled`, `Failed`, `TimedOut` or `Dropped`, before `report` (`TestStats_AddUp`). A filtered one is not picked up. `Delivered` counts after the send, so it may briefly trail `Handled`.
+- **Each message a `Broadcast` picks a subscriber up for is counted once**, in `Handled`, `Failed`, `TimedOut` or `Dropped`, before `report` (`TestStats_AddUp`). One filtered out, by `message.WithSubscriberFilter` then `subscriber.WithFilter`, is not picked up. `Delivered` counts after the send, so it may briefly trail `Handled`.
 
 ## Decisions not to revert
 

@@ -129,8 +129,8 @@ func (b *Broadcastor[T]) Shutdown(ctx context.Context) error {
 	}
 }
 
-// Broadcast hands msg to every subscriber whose filter keeps it (subscriber.WithFilter), and returns how many took it,
-// counting an async send once started.
+// Broadcast hands msg to every subscriber the message picks (message.WithSubscriberFilter) and whose own filter keeps
+// it (subscriber.WithFilter), and returns how many took it, counting an async send once started.
 //
 // By default it waits for each subscriber in turn, and gives up on one once ctx is done or the message's timeout runs
 // out, reporting why. A ready subscriber takes msg even then. ctx never reaches handle or the error handlers, but
@@ -144,7 +144,7 @@ func (b *Broadcastor[T]) Broadcast(ctx context.Context, msg T, options ...messag
 	)
 	b.subscribers.Range(func(_, value any) bool {
 		s, ok := value.(*subscriber.Subscriber[T])
-		if !ok {
+		if !ok || (config.SubscriberFilter != nil && !config.SubscriberFilter(s.ID())) {
 			return true
 		}
 		taken, parallel := s.Deliver(ctx, msg, config)

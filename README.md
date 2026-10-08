@@ -94,6 +94,13 @@ id, err := b.Subscribe(ctx, handle,
 id, err = b.Subscribe(ctx, uplink, subscriber.WithFilter(filter.Every[float64](time.Minute))) // at most one a minute
 ```
 
+`message.WithSubscriberFilter(keep)` hands one message only to the subscribers `keep` picks by ID, before their own
+filters see it:
+
+```go
+b.Broadcast(ctx, alarm, message.WithSubscriberFilter[Alert](func(id uuid.UUID) bool { return onCall.Has(id) }))
+```
+
 ## Errors
 
 Errors go to `subscriber.WithErrorHandler`, then to `message.WithErrorHandler`, which every subscriber shares, with the

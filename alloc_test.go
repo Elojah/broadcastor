@@ -37,6 +37,12 @@ func TestBroadcast_Allocs(t *testing.T) { //nolint:paralleltest // AllocsPerRun 
 			broadcast: []message.Option[int]{message.WithNonBlocking[int]()},
 			want:      1,
 		},
+		{
+			name:      "subscriber filter",
+			subscribe: []subscriber.Option[int]{subscriber.WithBuffer[int](buffer)},
+			broadcast: []message.Option[int]{message.WithSubscriberFilter[int](func(uuid.UUID) bool { return true })},
+			want:      1,
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			b := broadcastor.NewBroadcastor[int]()
