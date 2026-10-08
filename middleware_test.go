@@ -11,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/middleware"
 	"github.com/elojah/broadcastor/subscriber"
 )
@@ -25,7 +24,7 @@ func TestSubscriberWithMiddleware(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		type key struct{}
 		ctx := context.WithValue(subscribeCtx(t), key{}, "subscribe")
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		calls := &recorder[string]{}
 		ids := &recorder[uuid.UUID]{}
 		trace := func(name string) subscriber.Middleware[int] {
@@ -75,7 +74,7 @@ func TestSubscriberWithMiddleware_SkipsHandle(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		handled := &recorder[int]{}
 		errs := &recorder[error]{}
 		evenOnly := func(next subscriber.Handler[int]) subscriber.Handler[int] {
@@ -113,7 +112,7 @@ func TestSubscriberWithMiddleware_Error(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		errs := &recorder[error]{}
 		wrap := func(next subscriber.Handler[int]) subscriber.Handler[int] {
 			return func(ctx context.Context, id uuid.UUID, msg int) error {
@@ -156,7 +155,7 @@ func TestSubscriberWithMiddleware_Recover(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		handled := &recorder[int]{}
 		errs := &recorder[error]{}
 		panicOnOne := func(next subscriber.Handler[int]) subscriber.Handler[int] {
@@ -217,7 +216,7 @@ func TestSubscriberWithMiddleware_Retry(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		handled := &recorder[int]{}
 		failures := &recorder[int]{}
 		id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
@@ -257,7 +256,7 @@ func TestSubscriberWithMiddleware_RetryContextDone(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		handled := &recorder[int]{}
 		failures := &recorder[int]{}
 		_, err := b.Subscribe(ctx, func(_ context.Context, _ uuid.UUID, msg int) error {
@@ -300,7 +299,7 @@ func TestSubscriberWithMiddleware_History(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		history := &recordStore{}
 		id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
 			switch msg {
@@ -343,7 +342,7 @@ func TestSubscriberWithMiddleware_MaxAge(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		// Every message is made now.
 		made := time.Now()
 		handled := &recorder[int]{}
@@ -391,7 +390,7 @@ func TestSubscriberWithMiddleware_SubscribeSeq(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		results := &recorder[string]{}
 		spy := func(next subscriber.Handler[int]) subscriber.Handler[int] {
 			return func(ctx context.Context, id uuid.UUID, msg int) error {
@@ -449,7 +448,7 @@ func TestSubscriberWithMiddleware_SubscribeSeqPanic(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		closed := &recorder[int]{}
 		_, seq := subscribeSeq(t, b, subscriber.WithMiddleware(middleware.Recover[int]()),
 			subscriber.WithErrorHandler[int](recordClosed(t, closed)))

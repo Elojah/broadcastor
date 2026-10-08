@@ -245,11 +245,11 @@ unsubscribed subscriber leaves the snapshot. A watchdog can unsubscribe a subscr
 - `subscriber.WithEvict(evict)` unsubscribes a subscriber, discarding, on the first error `evict` picks: a timeout, so
   that a stuck one stops costing every `Broadcast` its timeout, or an error from `handle` meaning it cannot go on. To
   evict after several errors, count them in a middleware ([`17-evict`](examples/17-evict/main.go)).
-- `subscriber.WithDone(done)` sends the subscriber's ID once it is done with what it took, so the receiver can release
-  what `handle` used without a lock. Like `signal.Notify`, it is sent without waiting: give `done` room for one per
-  subscriber sharing it.
+- `subscriber.WithDone(ctx, done)` sends the subscriber's ID once it is done with what it took, so the receiver can
+  release what `handle` used without a lock. The send waits for a receiver until ctx is done, and `Shutdown` waits for
+  it: to receive after `Shutdown`, give `done` room for one per subscriber sharing it.
 - `Shutdown(ctx)` is `Close`, then waits until every subscriber is done, or ctx is. Call it on SIGTERM: exiting right
-  after `Close` cuts `handle` off.
+  after `Close` cuts `handle` off. A `Broadcastor` runs a goroutine until it is closed and every subscriber is done.
 
 ```go
 ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
@@ -308,7 +308,7 @@ id, err := b.Subscribe(ctx, handle,
  })),
  subscriber.WithBuffer[Reading](64),           // what comes in meanwhile, in order
  subscriber.WithTimeout[Reading](time.Second), // then Broadcast stops waiting
- subscriber.WithDone[Reading](done),
+ subscriber.WithDone[Reading](ctx, done),
 )
 // ...
 b.Shutdown(ctx)

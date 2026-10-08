@@ -23,16 +23,21 @@ type Broadcastor[T any] struct {
 	// gate makes Close wait for any add under way, so Close refuses or sees each subscriber.
 	gate gate.Gate
 
+	// done gets each subscriber's ID once it is done (subscriber.WithDone), and uuid.Nil from the first Close. Only
+	// drain receives on it.
+	done chan uuid.UUID
+
 	// running counts the subscribers not done yet, plus one until the first Close. Only add raises it, under gate, so
-	// it reaches 0 once, after Close, and whoever drops it there closes stopped.
+	// it reaches 0 once, after Close, and drain closes stopped then.
 	running atomic.Int64
 	stopped chan struct{}
 }
 
-// NewBroadcastor returns an empty Broadcastor.
+// NewBroadcastor returns an empty Broadcastor. It runs a goroutine until it is closed and every subscriber is done.
 func NewBroadcastor[T any]() *Broadcastor[T] {
-	b := &Broadcastor[T]{stopped: make(chan struct{})}
+	b := &Broadcastor[T]{done: make(chan uuid.UUID), stopped: make(chan struct{})}
 	b.running.Store(1)
+	go b.drain()
 
 	return b
 }
@@ -84,8 +89,8 @@ func (b *Broadcastor[T]) Unsubscribe(ctx context.Context, id uuid.UUID, options 
 	return nil
 }
 
-// Close unsubscribes every subscriber, after which Subscribe and SubscribeSeq return ErrClosed. It never waits, so
-// handle can call it. Every call after the first returns ErrClosed.
+// Close unsubscribes every subscriber, after which Subscribe and SubscribeSeq return ErrClosed. It never waits for a
+// subscriber, so handle can call it. Every call after the first returns ErrClosed.
 func (b *Broadcastor[T]) Close() error {
 	closed := b.gate.Close()
 
@@ -101,13 +106,15 @@ func (b *Broadcastor[T]) Close() error {
 	if closed {
 		return ErrClosed
 	}
-	b.stop()
+	// Drops Close's one from running.
+	b.done <- uuid.Nil
 
 	return nil
 }
 
-// Shutdown is Close, then waits until every subscriber is done: it has handled or discarded what it took, and sent its
-// ID on its subscriber.WithDone channels. It returns ctx.Err() if ctx is done first, else Close's error.
+// Shutdown is Close, then waits until every subscriber is done: it has handled or discarded what it took, and its
+// subscriber.WithDone channels have received its ID or their ctx is done. It returns ctx.Err() if ctx is done first,
+// else Close's error.
 //
 // Called from handle or an error handler, or with a SubscribeSeq loop never ranged, it waits until ctx is done. A
 // Broadcast racing it may still report a *subscriber.ClosedError after it returns.
@@ -193,7 +200,9 @@ func (b *Broadcastor[T]) add(ctx context.Context, options []subscriber.Option[T]
 	if err != nil {
 		return nil, err
 	}
-	s := subscriber.New(id, options...)
+	// Last, so that the caller's WithDone channels get the ID before Shutdown returns. Never done, since drain always
+	// receives, so that running misses no ID.
+	s := subscriber.New(id, append(slices.Clip(options), subscriber.WithDone[T](context.WithoutCancel(ctx), b.done))...)
 
 	if !b.gate.Enter() {
 		return nil, ErrClosed
@@ -202,7 +211,7 @@ func (b *Broadcastor[T]) add(ctx context.Context, options []subscriber.Option[T]
 	b.running.Add(1)
 
 	// Before Store, so that whoever removes the subscriber stops its ctx watch.
-	ctx = s.Attach(ctx, func(options ...subscriber.UnsubscribeOption) bool { return b.remove(id, options...) }, b.stop)
+	ctx = s.Attach(ctx, func(options ...subscriber.UnsubscribeOption) bool { return b.remove(id, options...) })
 	b.subscribers.Store(id, s)
 	// If ctx was already done, the watch may have run before Store and found nothing.
 	if ctx.Err() != nil {
@@ -225,9 +234,13 @@ func (b *Broadcastor[T]) remove(id uuid.UUID, options ...subscriber.UnsubscribeO
 	return true
 }
 
-// stop drops running by one, for a subscriber done or the first Close, and closes stopped at 0.
-func (b *Broadcastor[T]) stop() {
-	if b.running.Add(-1) == 0 {
-		close(b.stopped)
+// drain drops running by one for each ID on done, and closes stopped at 0.
+func (b *Broadcastor[T]) drain() {
+	for range b.done {
+		if b.running.Add(-1) == 0 {
+			close(b.stopped)
+
+			return
+		}
 	}
 }

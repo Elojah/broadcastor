@@ -9,7 +9,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/subscriber"
 )
 
@@ -21,7 +20,7 @@ func TestWithUnsubscribeDiscard(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		type key struct{}
 		ctx := context.WithValue(subscribeCtx(t), key{}, "subscribe")
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		handled := &recorder[int]{hold: make(chan struct{})}
 		closed := &recorder[int]{}
 		id, err := b.Subscribe(ctx, handled.handle, subscriber.WithBuffer[int](2),
@@ -68,7 +67,7 @@ func TestWithUnsubscribeDiscard_Self(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		handled := &recorder[int]{}
 		closed := &recorder[int]{}
 		proceed := make(chan struct{})
@@ -107,7 +106,7 @@ func TestSubscriberWithUnsubscribeOptions(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		subscribeHeld := func(closed *recorder[int]) (*recorder[int], uuid.UUID) {
 			handled := &recorder[int]{hold: make(chan struct{})}
 			id := subscribe(t, b, handled.handle, subscriber.WithBuffer[int](2),
@@ -156,7 +155,7 @@ func TestSubscribeSeq_UnsubscribeDiscard(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		closed := &recorder[int]{}
 		id, seq := subscribeSeq(t, b, subscriber.WithBuffer[int](2),
 			subscriber.WithErrorHandler[int](recordClosed(t, closed)))
@@ -192,7 +191,7 @@ func TestSubscribeSeq_UnsubscribeDiscardSelf(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		closed := &recorder[int]{}
 		id, seq := subscribeSeq(t, b, subscriber.WithBuffer[int](2),
 			subscriber.WithErrorHandler[int](recordClosed(t, closed)))

@@ -39,7 +39,7 @@ func BenchmarkBroadcast(b *testing.B) {
 	for _, subscribers := range benchSubscribers {
 		for _, mode := range modes {
 			b.Run(fmt.Sprintf("subscribers=%d/%s", subscribers, mode.name), func(b *testing.B) {
-				bc := broadcastor.NewBroadcastor[int]()
+				bc := newBroadcastor[int](b)
 				var handled sync.WaitGroup
 				for range subscribers {
 					// Not b.Context(), which is done before Cleanup runs, and would have unsubscribed them by then.
@@ -84,7 +84,7 @@ func BenchmarkBroadcast_Throughput(b *testing.B) {
 	for _, subscribers := range benchSubscribers {
 		for _, mode := range modes {
 			b.Run(fmt.Sprintf("subscribers=%d/%s", subscribers, mode.name), func(b *testing.B) {
-				bc := broadcastor.NewBroadcastor[int]()
+				bc := newBroadcastor[int](b)
 				wait := subscribeCounting(b, bc, subscribers, b.N, subscriber.WithBuffer[int](benchBuffer))
 
 				b.ReportAllocs()
@@ -104,7 +104,7 @@ func BenchmarkBroadcast_Throughput(b *testing.B) {
 func BenchmarkBroadcast_Concurrent(b *testing.B) {
 	for _, subscribers := range benchSubscribers {
 		b.Run(fmt.Sprintf("subscribers=%d", subscribers), func(b *testing.B) {
-			bc := broadcastor.NewBroadcastor[int]()
+			bc := newBroadcastor[int](b)
 			// RunParallel shares the b.N Broadcasts out between its goroutines.
 			wait := subscribeCounting(b, bc, subscribers, b.N, subscriber.WithBuffer[int](benchBuffer))
 
@@ -127,7 +127,7 @@ func BenchmarkBroadcast_Concurrent(b *testing.B) {
 func BenchmarkBroadcast_Churn(b *testing.B) {
 	for _, subscribers := range benchSubscribers {
 		b.Run(fmt.Sprintf("subscribers=%d", subscribers), func(b *testing.B) {
-			bc := broadcastor.NewBroadcastor[int]()
+			bc := newBroadcastor[int](b)
 			wait := subscribeCounting(b, bc, subscribers, b.N, subscriber.WithBuffer[int](benchBuffer))
 
 			stop := make(chan struct{})
@@ -165,7 +165,7 @@ func BenchmarkBroadcast_Churn(b *testing.B) {
 
 // BenchmarkSubscribeUnsubscribe measures a subscription that comes and goes without ever getting a message.
 func BenchmarkSubscribeUnsubscribe(b *testing.B) {
-	bc := broadcastor.NewBroadcastor[int]()
+	bc := newBroadcastor[int](b)
 	b.ReportAllocs()
 	for b.Loop() {
 		if err := subscribeUnsubscribe(b.Context(), bc); err != nil {
@@ -177,7 +177,7 @@ func BenchmarkSubscribeUnsubscribe(b *testing.B) {
 // BenchmarkSubscribeUnsubscribe_Parallel is BenchmarkSubscribeUnsubscribe from GOMAXPROCS goroutines at once, on the
 // same Broadcastor.
 func BenchmarkSubscribeUnsubscribe_Parallel(b *testing.B) {
-	bc := broadcastor.NewBroadcastor[int]()
+	bc := newBroadcastor[int](b)
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {

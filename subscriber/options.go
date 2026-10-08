@@ -135,13 +135,13 @@ func WithReplay[T any](replay iter.Seq[T]) Option[T] {
 }
 
 // WithDone sends the subscriber's ID on done once it is unsubscribed, whatever removed it, and done with what it took:
-// after the last call to handle or the loop body, and before Shutdown returns. Like signal.Notify, the send never
-// blocks: give done room for one per subscriber sharing it. It is never sent for a SubscribeSeq loop never ranged.
-// Several add up, and a nil done is ignored.
-func WithDone[T any](done chan<- uuid.UUID) Option[T] {
+// after the last call to handle or the loop body. The send waits for a receiver until ctx is done, and Shutdown waits
+// for it, so subscribers can share done. It is never sent for a SubscribeSeq loop never ranged. Several are sent in
+// order, and a nil done is ignored.
+func WithDone[T any](ctx context.Context, done chan<- uuid.UUID) Option[T] {
 	return func(config *config[T]) {
 		if done != nil {
-			config.done = append(config.done, done)
+			config.done = append(config.done, doneChannel{ctx: ctx, ch: done})
 		}
 	}
 }

@@ -21,7 +21,7 @@ func TestShutdown(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		release := make(chan struct{})
 		handled := &recorder[int]{hold: release}
 		subscribe(t, b, handled.handle, subscriber.WithBuffer[int](2))
@@ -69,7 +69,7 @@ func TestShutdown_Discard(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		handled := &recorder[int]{hold: make(chan struct{})}
 		stored := &recordStore{}
 		subscribe(t, b, handled.handle, subscriber.WithBuffer[int](2), subscriber.WithDeadLetters[int](stored),
@@ -110,7 +110,7 @@ func TestShutdown_FreesBroadcast(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		handled := &recorder[int]{hold: make(chan struct{})}
 		closed := &recorder[int]{}
 		subscribe(t, b, handled.handle, subscriber.WithErrorHandler[int](recordClosed(t, closed)))
@@ -147,7 +147,7 @@ func TestShutdown_ContextDone(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		handled, _ := hold(t, b)
 		b.Broadcast(t.Context(), 1)
 
@@ -172,7 +172,7 @@ func TestShutdown_FromHandle(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		self := &recorder[int]{}
 		proceed := make(chan struct{})
 		errs := make(chan error, 1)
@@ -217,7 +217,7 @@ func TestShutdown_SubscribeSeqNotRanged(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		_, seq := subscribeSeq(t, b, subscriber.WithBuffer[int](1))
 		b.Broadcast(t.Context(), 1) // fills the buffer
 

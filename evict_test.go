@@ -13,7 +13,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/message"
 	"github.com/elojah/broadcastor/subscriber"
 )
@@ -24,7 +23,7 @@ func TestSubscriberWithEvict(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		stuck := &recorder[int]{hold: make(chan struct{})}
 		errs := &recorder[error]{}
 		id := subscribe(t, b, stuck.handle, subscriber.WithTimeout[int](time.Second), subscriber.WithEvict[int](isTimeout),
@@ -67,7 +66,7 @@ func TestSubscriberWithEvict_Dropped(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		stuck := &recorder[int]{hold: make(chan struct{})}
 		losses := &recorder[string]{}
 		evict := &recorder[string]{}
@@ -101,7 +100,7 @@ func TestSubscriberWithEvict_HandleError(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		handled := &recorder[int]{}
 		losses := &recorder[string]{}
 		proceed := make(chan struct{})
@@ -138,7 +137,7 @@ func TestSubscriberWithEvict_Middleware(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		handled := &recorder[int]{}
 		losses := &recorder[string]{}
 		proceed := make(chan struct{})
@@ -177,7 +176,7 @@ func TestSubscriberWithEvict_Discard(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		stuck := &recorder[int]{hold: make(chan struct{})}
 		losses := &recorder[string]{}
 		subscribe(t, b, stuck.handle, subscriber.WithBuffer[int](1), subscriber.WithTimeout[int](time.Second),
@@ -206,7 +205,7 @@ func TestSubscriberWithEvict_FreesBroadcast(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		stuck := &recorder[int]{hold: make(chan struct{})}
 		losses := &recorder[string]{}
 		subscribe(t, b, stuck.handle, subscriber.WithEvict[int](isTimeout),
@@ -242,7 +241,7 @@ func TestSubscriberWithEvict_Once(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		stuck := &recorder[int]{hold: make(chan struct{})}
 		losses := &recorder[string]{}
 		const broadcasters = 4
@@ -282,7 +281,7 @@ func TestSubscriberWithEvict_SubscribeSeq(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		losses := &recorder[string]{}
 		id, seq := subscribeSeq(t, b, subscriber.WithBuffer[int](1), subscriber.WithTimeout[int](time.Second),
 			subscriber.WithEvict[int](isTimeout), subscriber.WithErrorHandler[int](recordLosses(t, losses)))
@@ -309,7 +308,7 @@ func TestSubscriberWithEvict_SubscribeSeqFail(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		losses := &recorder[string]{}
 		id, seq := subscribeSeq(t, b, subscriber.WithBuffer[int](2),
 			subscriber.WithEvict[int](func(err error) bool { return errors.Is(err, handleError(1)) }),
@@ -342,7 +341,7 @@ func TestSubscriberWithEvict_SubscribeSeqPanic(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		losses := &recorder[string]{}
 		_, seq := subscribeSeq(t, b, subscriber.WithEvict[int](func(err error) bool {
 			t.Errorf("evict got %v, want no call", err)
@@ -381,7 +380,7 @@ func TestSubscriberWithEvict_Never(t *testing.T) {
 			t.Parallel()
 
 			synctest.Test(t, func(t *testing.T) {
-				b := broadcastor.NewBroadcastor[int]()
+				b := newBroadcastor[int](t)
 				stuck := &recorder[int]{hold: make(chan struct{})}
 				losses := &recorder[string]{}
 				id := subscribe(t, b, stuck.handle, subscriber.WithTimeout[int](time.Second),

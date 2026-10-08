@@ -6,7 +6,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/message"
 	"github.com/elojah/broadcastor/subscriber"
 )
@@ -45,7 +44,7 @@ func TestBroadcast_Allocs(t *testing.T) { //nolint:paralleltest // AllocsPerRun 
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			b := broadcastor.NewBroadcastor[int]()
+			b := newBroadcastor[int](t)
 			for range subscribers {
 				subscribe(t, b, func(context.Context, uuid.UUID, int) error { return nil }, tt.subscribe...)
 			}

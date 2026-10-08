@@ -69,13 +69,13 @@ func subscribeForwarder(ctx context.Context, b *broadcastor.Broadcastor[int], n 
 		Attempts: math.MaxInt, Delay: time.Millisecond, Multiplier: 2, MaxDelay: time.Second,
 		IsRetryable: func(err error) bool { return errors.Is(err, errDown) },
 	})
-	// Room for the forwarder's ID, since sending never waits.
+	// Room for the forwarder's ID, since Shutdown waits for the send.
 	done := make(chan uuid.UUID, 1)
 	_, err := b.Subscribe(ctx, handle,
 		subscriber.WithMiddleware(retry),
 		// What Broadcast hands the forwarder while it reconnects waits there, in order.
 		subscriber.WithBuffer[int](8),
-		subscriber.WithDone[int](done),
+		subscriber.WithDone[int](ctx, done),
 	)
 	if err != nil {
 		log.Fatal(err)

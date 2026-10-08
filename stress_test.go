@@ -72,7 +72,7 @@ func TestStress(t *testing.T) {
 // runStress runs one round, then checks it once every goroutine it started has returned.
 func runStress(t *testing.T, closeEarly, quiet bool) {
 	t.Helper()
-	s := &stress{b: broadcastor.NewBroadcastor[int](), closeEarly: closeEarly, quiet: quiet, label: uuid.NewString()}
+	s := &stress{b: newBroadcastor[int](t), closeEarly: closeEarly, quiet: quiet, label: uuid.NewString()}
 	// Every goroutine f starts carries the label, and so do theirs, the library's included.
 	pprof.Do(t.Context(), pprof.Labels(stressLabel, s.label), func(ctx context.Context) { s.run(ctx, t) })
 	s.waitGoroutines(t)
@@ -280,7 +280,7 @@ func (s *stress) subscribe(ctx context.Context, t *testing.T) *stressSub {
 	if randN(2) == 0 {
 		options = append(options, subscriber.WithAsyncLimit[int](1+randN(2)))
 	}
-	options = append(options, subscriber.WithDone[int](sub.done))
+	options = append(options, subscriber.WithDone[int](ctx, sub.done))
 	if randN(3) == 0 {
 		sub.replay = 1 + randN(stressReplay)
 		options = append(options, subscriber.WithReplay(sub.replayed))

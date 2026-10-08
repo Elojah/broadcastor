@@ -9,7 +9,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/message"
 	"github.com/elojah/broadcastor/subscriber"
 )
@@ -20,7 +19,7 @@ func TestSubscriberWithFilter(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		stuck := &recorder[int]{hold: make(chan struct{})}
 		id := subscribe(t, b, stuck.handle, subscriber.WithFilter(even), subscriber.WithTimeout[int](time.Second),
 			subscriber.WithErrorHandler[int](func(_ context.Context, err error) {
@@ -61,7 +60,7 @@ func TestSubscriberWithFilter_Several(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		seen := &recorder[int]{}
 		r := &recorder[int]{}
 		id := subscribe(t, b, r.handle,
@@ -94,7 +93,7 @@ func TestMessageWithSubscriberFilter(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		stuck := &recorder[int]{hold: make(chan struct{})}
 		stuckID := subscribe(t, b, stuck.handle, subscriber.WithTimeout[int](time.Second),
 			subscriber.WithErrorHandler[int](func(_ context.Context, err error) {
@@ -135,7 +134,7 @@ func TestMessageWithSubscriberFilter_BeforeSubscriberFilter(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		seen := &recorder[int]{}
 		r := &recorder[int]{}
 		id := subscribe(t, b, r.handle, subscriber.WithFilter(func(msg int) bool {
@@ -166,7 +165,7 @@ func TestMessageWithSubscriberFilter_Several(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		first, firstID := record(t, b)
 		second, secondID := record(t, b)
 		third, thirdID := record(t, b)
@@ -211,7 +210,7 @@ func TestSubscriberWithDefaultMessageOptions_SubscriberFilterIgnored(t *testing.
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		r := &recorder[int]{}
 		id := subscribe(t, b, r.handle, subscriber.WithDefaultMessageOptions(
 			message.WithSubscriberFilter[int](func(uuid.UUID) bool { return false }),

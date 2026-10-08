@@ -32,7 +32,7 @@ func TestSubscriberWithDeadLetters(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		events := &recorder[string]{}
 		stored := &recordStore{}
 		id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
@@ -162,7 +162,7 @@ func TestSubscriberWithDeadLetters_Lost(t *testing.T) {
 			t.Parallel()
 
 			synctest.Test(t, func(t *testing.T) {
-				b := broadcastor.NewBroadcastor[int]()
+				b := newBroadcastor[int](t)
 				stored := &recordStore{}
 				id := tt.lose(t, b, subscriber.WithDeadLetters[int](stored))
 				synctest.Wait()
@@ -185,7 +185,7 @@ func TestSubscriberWithDeadLetters_PutFails(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		stored := &recordStore{err: errPut}
 		failures := &recorder[int]{}
 		recordFailure := recordFailures(t, failures)
@@ -236,7 +236,7 @@ func TestSubscriberWithDeadLetters_Context(t *testing.T) {
 		type key struct{}
 		ctx, cancel := context.WithCancel(context.WithValue(subscribeCtx(t), key{}, "subscribe"))
 		messageCtx, cancelMessage := context.WithCancel(context.WithValue(t.Context(), key{}, "message"))
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		handled := &recorder[int]{hold: make(chan struct{})}
 		puts := &recorder[string]{}
 		_, err := b.Subscribe(ctx, handled.handle, subscriber.WithBuffer[int](2),
@@ -274,7 +274,7 @@ func TestSubscriberWithDeadLetters_ExactlyOnce(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		stored := &recordStore{}
 		options := []subscriber.Option[int]{
 			subscriber.WithBuffer[int](1),
@@ -363,7 +363,7 @@ func TestSubscriberWithDeadLetters_Ring(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		lost := store.NewRing[int](8)
 		id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
 			if msg%2 == 0 {
@@ -416,7 +416,7 @@ func TestStoreAndForward(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		queue := store.NewRing[int](8)
 		id := subscribe(t, b, store.Enqueue[int](queue))
 

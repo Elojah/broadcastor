@@ -23,7 +23,7 @@ func TestSubscriberWithReplay(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		events := &recorder[string]{}
 		middleware := func(next subscriber.Handler[int]) subscriber.Handler[int] {
 			return func(ctx context.Context, id uuid.UUID, msg int) error {
@@ -103,7 +103,7 @@ func TestSubscriberWithReplay_Unsubscribe(t *testing.T) {
 			t.Parallel()
 
 			synctest.Test(t, func(t *testing.T) {
-				b := broadcastor.NewBroadcastor[int]()
+				b := newBroadcastor[int](t)
 				events := &recorder[string]{}
 				hold := make(chan struct{})
 				id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
@@ -139,7 +139,7 @@ func TestSubscriberWithReplay_BroadcastWaits(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		events := &recorder[string]{}
 		hold := make(chan struct{})
 		subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
@@ -175,7 +175,7 @@ func TestSubscriberWithReplay_Evicted(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		events := &recorder[string]{}
 		id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
 			events.record(fmt.Sprintf("handled %d", msg))
@@ -203,7 +203,7 @@ func TestSubscriberWithReplay_SubscribeSeq(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		events := &recorder[string]{}
 		_, seq := subscribeSeq(t, b, subscriber.WithReplay(replayOf(events, 1, 2)))
 		loopDone := make(chan struct{})
@@ -231,7 +231,7 @@ func TestSubscriberWithReplay_SubscribeSeqBreak(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		events := &recorder[string]{}
 		_, seq := subscribeSeq(t, b, subscriber.WithReplay(replayOf(events, 1, 2, 3)),
 			subscriber.WithErrorHandler[int](func(_ context.Context, err error) { t.Errorf("error handler got %v", err) }))

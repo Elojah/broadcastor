@@ -29,9 +29,6 @@ type Subscriber[T any] struct {
 	// remove removes the subscriber from its Broadcastor, and reports whether this call did. Set by Attach.
 	remove func(options ...UnsubscribeOption) bool
 
-	// stop tells the Broadcastor the subscriber is done. Set by Attach, called last by Consume.
-	stop func()
-
 	// done is closed by Unsubscribe, so that no send waits on a subscriber that is gone.
 	done chan struct{}
 
@@ -62,7 +59,13 @@ type config[T any] struct {
 	filter       func(msg T) bool
 	evict        func(err error) bool
 
-	done []chan<- uuid.UUID
+	done []doneChannel
+}
+
+// doneChannel is a WithDone channel, and the ctx that bounds the send on it.
+type doneChannel struct {
+	ctx context.Context //nolint:containedctx // bounds a send at the end of the subscription
+	ch  chan<- uuid.UUID
 }
 
 // New returns a subscriber holding the subscription's reference, which Unsubscribe drops.
@@ -84,12 +87,11 @@ func (s *Subscriber[T]) ID() uuid.UUID {
 	return s.id
 }
 
-// Attach sets the subscriber's ctx, and its Broadcastor's callbacks: remove, called once ctx is done, when a Seq loop
-// ends and to evict, and stop, called last by Consume. It must be called once, first, and returns the subscriber's
-// ctx: context.WithoutCancel(ctx) with WithDetachedContext.
-func (s *Subscriber[T]) Attach(ctx context.Context, remove func(options ...UnsubscribeOption) bool, stop func()) context.Context {
+// Attach sets the subscriber's ctx, and its Broadcastor's remove, called once ctx is done, when a Seq loop ends and to
+// evict. It must be called once, first, and returns the subscriber's ctx: context.WithoutCancel(ctx) with
+// WithDetachedContext.
+func (s *Subscriber[T]) Attach(ctx context.Context, remove func(options ...UnsubscribeOption) bool) context.Context {
 	s.remove = remove
-	s.stop = stop
 	if s.config.detached {
 		s.ctx = context.WithoutCancel(ctx)
 
@@ -165,7 +167,7 @@ func (s *Subscriber[T]) Unsubscribe(options ...UnsubscribeOption) {
 }
 
 // Consume calls handle, wrapped in the middlewares, for each replayed value then each message until ch closes, and
-// reports errors. It runs once, then sends its ID on each WithDone channel and calls stop.
+// reports errors. It runs once, then sends its ID on each WithDone channel.
 func (s *Subscriber[T]) Consume(handle Handler[T]) {
 	defer s.finish()
 	handle = chain(handle, s.config.middlewares...)
@@ -225,15 +227,20 @@ func (s *Subscriber[T]) Stats() Stats {
 	}
 }
 
-// finish sends the ID on each WithDone channel, without blocking, then calls stop, so that Shutdown returns after.
+// finish sends the ID on each WithDone channel in turn, each waiting for a receiver until its ctx is done.
 func (s *Subscriber[T]) finish() {
 	for _, done := range s.config.done {
+		// Tried first, since select picks at random: a ready receiver gets the ID even once ctx is done.
 		select {
-		case done <- s.id:
+		case done.ch <- s.id:
+			continue
 		default:
 		}
+		select {
+		case done.ch <- s.id:
+		case <-done.ctx.Done():
+		}
 	}
-	s.stop()
 }
 
 // replay processes each replayed value like a message, until the subscriber discards.

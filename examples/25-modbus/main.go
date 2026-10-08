@@ -140,7 +140,7 @@ func subscribeRule(ctx context.Context, b *broadcastor.Broadcastor[reading], add
 			return errors.Is(err, modbus.ErrServerDeviceBusy) || errors.Is(err, modbus.ErrRequestTimedOut)
 		},
 	})
-	// Room for the rule's ID, since sending never waits.
+	// Room for the rule's ID, since Shutdown waits for the send.
 	done := make(chan uuid.UUID, 1)
 	_, err = b.Subscribe(ctx, handle,
 		// In parallel, so that the trend never waits for the rule.
@@ -157,7 +157,7 @@ func subscribeRule(ctx context.Context, b *broadcastor.Broadcastor[reading], add
 		})),
 		subscriber.WithMiddleware(retry),
 		subscriber.WithErrorHandler[reading](logError),
-		subscriber.WithDone[reading](done),
+		subscriber.WithDone[reading](ctx, done),
 	)
 	if err != nil {
 		log.Fatal(err)

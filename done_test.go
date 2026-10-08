@@ -16,7 +16,7 @@ import (
 )
 
 // done gets the ID once, after handle's last call, however the subscriber was removed: once it has handled its buffer
-// by default, or reported it with discard.
+// by default, or reported it with discard. With room in done, it gets the ID even once its ctx is done.
 func TestSubscriberWithDone(t *testing.T) {
 	t.Parallel()
 
@@ -56,7 +56,7 @@ func TestSubscriberWithDone(t *testing.T) {
 			t.Parallel()
 
 			synctest.Test(t, func(t *testing.T) {
-				b := broadcastor.NewBroadcastor[int]()
+				b := newBroadcastor[int](t)
 				events := &recorder[string]{}
 				hold := make(chan struct{})
 				ctx, cancel := context.WithCancel(subscribeCtx(t))
@@ -66,9 +66,9 @@ func TestSubscriberWithDone(t *testing.T) {
 				options := []subscriber.Option[int]{
 					subscriber.WithBuffer[int](1),
 					subscriber.WithErrorHandler[int](recordLosses(t, events)),
-					subscriber.WithDone[int](dones[0]),
-					subscriber.WithDone[int](nil),
-					subscriber.WithDone[int](dones[1]),
+					subscriber.WithDone[int](ctx, dones[0]),
+					subscriber.WithDone[int](ctx, nil),
+					subscriber.WithDone[int](ctx, dones[1]),
 				}
 				if tt.evict {
 					options = append(options, subscriber.WithEvict[int](isTimeout), subscriber.WithTimeout[int](time.Second))
@@ -109,34 +109,53 @@ func TestSubscriberWithDone(t *testing.T) {
 	}
 }
 
-// Shutdown returns once the ID is sent on done, or dropped if done has no room: it never waits for a receiver.
+// Shutdown returns once done has received the ID, or once WithDone's ctx is done: until then, it waits for a receiver.
 func TestSubscriberWithDone_Shutdown(t *testing.T) {
 	t.Parallel()
 
 	for _, tt := range []struct {
 		name string
 		room int
+		// end frees a Shutdown waiting on the send, and returns what done got.
+		end  func(done <-chan uuid.UUID, cancel context.CancelFunc) []uuid.UUID
+		want bool
 	}{
-		{"Room", 1},
-		{"NoRoom", 0},
+		{"Room", 1, nil, true},
+		{"Receiver", 0, func(done <-chan uuid.UUID, _ context.CancelFunc) []uuid.UUID {
+			return []uuid.UUID{<-done}
+		}, true},
+		{"ContextDone", 0, func(_ <-chan uuid.UUID, cancel context.CancelFunc) []uuid.UUID {
+			cancel()
+
+			return nil
+		}, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
 			synctest.Test(t, func(t *testing.T) {
-				b := broadcastor.NewBroadcastor[int]()
+				b := newBroadcastor[int](t)
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
 				done := make(chan uuid.UUID, tt.room)
-				id := subscribe(t, b, func(context.Context, uuid.UUID, int) error { return nil }, subscriber.WithDone[int](done))
+				id := subscribe(t, b, func(context.Context, uuid.UUID, int) error { return nil }, subscriber.WithDone[int](ctx, done))
 
-				if err := waitShutdown(t, shutdown(t.Context(), b)); err != nil {
+				errs := shutdown(t.Context(), b)
+				var got []uuid.UUID
+				if tt.end != nil {
+					checkWaiting(t, errs, "nothing received the ID")
+					got = tt.end(done, cancel)
+				}
+				if err := waitShutdown(t, errs); err != nil {
 					t.Fatalf("Shutdown = %v, want nil", err)
 				}
 				// Without synctest.Wait: Shutdown returning is enough.
+				got = append(got, received(done)...)
 				var want []uuid.UUID
-				if tt.room != 0 {
+				if tt.want {
 					want = []uuid.UUID{id}
 				}
-				if got := received(done); !slices.Equal(got, want) {
+				if !slices.Equal(got, want) {
 					t.Errorf("done got %v once Shutdown returned, want %v", got, want)
 				}
 			})
@@ -149,12 +168,12 @@ func TestSubscriberWithDone_Shared(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		done := make(chan uuid.UUID, 2) // one per subscriber
 		handle := func(context.Context, uuid.UUID, int) error { return nil }
 		ids := []uuid.UUID{
-			subscribe(t, b, handle, subscriber.WithDone[int](done)),
-			subscribe(t, b, handle, subscriber.WithDone[int](done)),
+			subscribe(t, b, handle, subscriber.WithDone[int](t.Context(), done)),
+			subscribe(t, b, handle, subscriber.WithDone[int](t.Context(), done)),
 		}
 		unsubscribeAll(t, b, ids...)
 		synctest.Wait()
@@ -166,8 +185,8 @@ func TestSubscriberWithDone_Shared(t *testing.T) {
 	})
 }
 
-// For SubscribeSeq, done gets the ID after the loop body's last call, however the loop ended, and never for a loop
-// never ranged.
+// For SubscribeSeq, done gets the ID after the loop body's last call, however the loop ended, and not for a loop until
+// it is ranged.
 func TestSubscriberWithDone_SubscribeSeq(t *testing.T) {
 	t.Parallel()
 
@@ -206,10 +225,10 @@ func TestSubscriberWithDone_SubscribeSeq(t *testing.T) {
 			t.Parallel()
 
 			synctest.Test(t, func(t *testing.T) {
-				b := broadcastor.NewBroadcastor[int]()
+				b := newBroadcastor[int](t)
 				events := &recorder[string]{}
 				done := make(chan uuid.UUID, 1)
-				id, seq := subscribeSeq(t, b, subscriber.WithDone[int](done))
+				id, seq := subscribeSeq(t, b, subscriber.WithDone[int](t.Context(), done))
 				tt.run(t, b, id, seq, done, events)
 				synctest.Wait()
 				if got := events.messages(); !slices.Equal(got, tt.want) {
@@ -221,6 +240,9 @@ func TestSubscriberWithDone_SubscribeSeq(t *testing.T) {
 				}
 				if got := received(done); !slices.Equal(got, want) {
 					t.Errorf("done got %v, want %v", got, want)
+				}
+				// Else the Broadcastor waits for it until the bubble ends. Unsubscribed, it ends at once.
+				for range seq {
 				}
 			})
 		})

@@ -75,7 +75,7 @@ func main() {
 		} else {
 			fmt.Println("sensor failed:", err)
 		}
-	}), subscriber.WithDone[int](sensorDone))
+	}), subscriber.WithDone[int](ctx, sensorDone))
 	if err != nil {
 		log.Fatal(err)
 	}
