@@ -2276,6 +2276,19 @@ func recovered(f func()) any {
 	return r
 }
 
+// received returns what ch holds, without waiting.
+func received[E any](ch <-chan E) []E {
+	var got []E
+	for {
+		select {
+		case e := <-ch:
+			got = append(got, e)
+		default:
+			return got
+		}
+	}
+}
+
 func isNotFound(err error) bool {
 	var notFound *broadcastor.SubscriberNotFoundError
 

@@ -1,7 +1,8 @@
 // subscriber.WithEvict unsubscribes a subscriber on the first error its evict picks. A sensor, unplugged after reading
 // 2, fails on every later one: failedInARow, our own middleware, turns its third failure in a row into errInARow, which
 // evict picks. A stuck subscriber is evicted on its first timeout, so Broadcast no longer waits for it. The error
-// handlers, then the callback, get a *subscriber.EvictedError wrapping the evicting error.
+// handlers get a *subscriber.EvictedError wrapping the evicting error, which is then sent on evicted, a channel both
+// subscribers share.
 //
 // handle waits for release, standing in for slow work.
 package main
@@ -59,7 +60,8 @@ func main() {
 		log.Fatal(err)
 	}
 
-	unplugged := make(chan struct{})
+	// Room for one per subscriber sending on it, since sending never waits.
+	evicted := make(chan *subscriber.EvictedError[int], 2)
 	_, err = b.Subscribe(ctx, func(_ context.Context, _ uuid.UUID, reading int) error {
 		if reading > 2 {
 			return fmt.Errorf("reading %d: %w", reading, errUnplugged)
@@ -68,10 +70,7 @@ func main() {
 		return nil
 	}, subscriber.WithMiddleware(failedInARow(3)), subscriber.WithEvict(func(err error) bool {
 		return errors.Is(err, errInARow)
-	}, func(_ context.Context, evicted *subscriber.EvictedError[int]) {
-		fmt.Println("sensor evicted:", evicted.Err)
-		close(unplugged)
-	}), subscriber.WithErrorHandler[int](func(_ context.Context, err error) {
+	}, evicted), subscriber.WithErrorHandler[int](func(_ context.Context, err error) {
 		if !errors.Is(err, subscriber.ErrEvicted) {
 			fmt.Println("sensor failed:", err)
 		}
@@ -83,7 +82,7 @@ func main() {
 	for reading := 1; reading <= 5; reading++ {
 		b.Broadcast(ctx, reading)
 	}
-	<-unplugged // evicted in its own goroutine
+	fmt.Println("sensor evicted:", (<-evicted).Err) // in its own goroutine
 
 	release := make(chan struct{})
 	_, err = b.Subscribe(ctx, func(context.Context, uuid.UUID, int) error {
@@ -92,9 +91,7 @@ func main() {
 		return nil
 	}, subscriber.WithEvict(func(err error) bool {
 		return errors.Is(err, subscriber.ErrTimeout)
-	}, func(_ context.Context, evicted *subscriber.EvictedError[int]) {
-		fmt.Println("stuck evicted on losing", evicted.Message)
-	}), subscriber.WithErrorHandler[int](func(_ context.Context, err error) {
+	}, evicted), subscriber.WithErrorHandler[int](func(_ context.Context, err error) {
 		var timeout *subscriber.TimeoutError[int]
 		if errors.As(err, &timeout) {
 			fmt.Printf("stuck lost %d, evicted: %t\n", timeout.Message, errors.Is(err, subscriber.ErrEvicted))
@@ -108,6 +105,7 @@ func main() {
 	for n := 7; n <= 8; n++ {
 		fmt.Println(n, "handed to", b.Broadcast(ctx, n, message.WithTimeout[int](10*time.Millisecond)), "subscribers")
 	}
+	fmt.Println("stuck evicted on losing", (<-evicted).Message) // sent before the Broadcast of 7 returned
 	fmt.Println("subscribers left:", len(b.Stats()))
 
 	close(release)

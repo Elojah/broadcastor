@@ -40,7 +40,7 @@ At `21d751b` (Intel Core Ultra 5 226V, GOMAXPROCS 8), per subscriber and per `Br
   current value needs no `Send`: set it and broadcast under a mutex, and subscribe with
   `subscriber.WithReplay(slices.Values([]T{current}))` under the same one, so no subscriber gets an older value after a
   newer one.
-- [x] `subscriber.WithOnDone`.
+- [x] `subscriber.WithDone`.
 - [x] Reconnecting, with no change to the core: in place, with `handle`, `middleware.Retry` and the buffer
   (`examples/26-reconnect`, `25-modbus`).
 - [x] `subscriber.WithReplay(iter.Seq[T])`, which `19-redis` uses to replay its dead letters after a restart.
@@ -79,3 +79,8 @@ At `21d751b` (Intel Core Ultra 5 226V, GOMAXPROCS 8), per subscriber and per `Br
 - Priority lanes: two channels per subscriber would double the invariants on closing and references. Two
   `Broadcastor`s, one for alarms and one for telemetry, do it.
 - MQTT, Redis or NATS clients in the library: they go in example modules, each with its own go.mod.
+
+## Manual personal notes
+
+- Clean Shutdown and OnDone functions
+- Explicit Suspend method ?

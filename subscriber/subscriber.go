@@ -29,6 +29,9 @@ type Subscriber[T any] struct {
 	// remove is Broadcastor.Unsubscribe for this subscriber. Set by Attach.
 	remove func(options ...UnsubscribeOption) bool
 
+	// stop tells the Broadcastor the subscriber is done. Set by Attach, called last by Consume.
+	stop func()
+
 	// done is closed by Unsubscribe, so that no send waits on a subscriber that is gone.
 	done chan struct{}
 
@@ -59,8 +62,8 @@ type config[T any] struct {
 	filter       func(msg T) bool
 
 	evict   func(err error) bool
-	onEvict func(ctx context.Context, evicted *EvictedError[T])
-	onDone  func()
+	evicted chan<- *EvictedError[T]
+	done    []chan<- uuid.UUID
 }
 
 // New returns a subscriber holding the subscription's reference, which Unsubscribe drops.
@@ -82,11 +85,12 @@ func (s *Subscriber[T]) ID() uuid.UUID {
 	return s.id
 }
 
-// Attach sets the subscriber's ctx and remove, which it calls once ctx is done, when a Seq loop ends, and to evict
-// itself. With WithDetachedContext, its ctx is context.WithoutCancel(ctx), which never removes it. It returns the
-// subscriber's ctx, and must be called once, first.
-func (s *Subscriber[T]) Attach(ctx context.Context, remove func(options ...UnsubscribeOption) bool) context.Context {
+// Attach sets the subscriber's ctx, remove, which it calls once ctx is done, when a Seq loop ends, and to evict itself,
+// and stop, which Consume calls last. With WithDetachedContext, its ctx is context.WithoutCancel(ctx), which never
+// removes it. It returns the subscriber's ctx, and must be called once, first.
+func (s *Subscriber[T]) Attach(ctx context.Context, remove func(options ...UnsubscribeOption) bool, stop func()) context.Context {
 	s.remove = remove
+	s.stop = stop
 	if s.config.detached {
 		s.ctx = context.WithoutCancel(ctx)
 
@@ -162,11 +166,9 @@ func (s *Subscriber[T]) Unsubscribe(options ...UnsubscribeOption) {
 }
 
 // Consume calls handle, wrapped in the middlewares, for each replayed value then each message until ch closes, and
-// reports errors. It runs once, then calls onDone.
+// reports errors. It runs once, then sends its ID on each WithDone channel and calls stop.
 func (s *Subscriber[T]) Consume(handle Handler[T]) {
-	if onDone := s.config.onDone; onDone != nil {
-		defer onDone()
-	}
+	defer s.finish()
 	handle = chain(handle, s.config.middlewares...)
 	if s.config.replay != nil {
 		s.replay(handle)
@@ -225,6 +227,18 @@ func (s *Subscriber[T]) Stats() Stats {
 	}
 }
 
+// finish sends the ID on each WithDone channel, without blocking, then calls stop, so that Shutdown returns with every
+// ID sent.
+func (s *Subscriber[T]) finish() {
+	for _, done := range s.config.done {
+		select {
+		case done <- s.id:
+		default:
+		}
+	}
+	s.stop()
+}
+
 // replay processes each replayed value like a message, until the subscriber discards: that value and the rest stay in
 // the source.
 func (s *Subscriber[T]) replay(handle Handler[T]) {
@@ -244,7 +258,7 @@ func (s *Subscriber[T]) process(handle Handler[T], m message.Message[T]) {
 	err := handle(s.context(m), s.id, m.Value)
 	s.counters.handleStart.Store(0)
 	s.counters.handle(time.Since(start), err)
-	// Reported outside the chain, so Recover never catches a panic in an error handler, evict or onEvict.
+	// Reported outside the chain, so Recover never catches a panic in an error handler or evict.
 	if err != nil {
 		s.lose(m, err)
 	}
@@ -306,8 +320,9 @@ func (s *Subscriber[T]) send(ctx context.Context, m message.Message[T]) bool {
 }
 
 // lose reports m, lost or failed with err, and evicts the subscriber if evict returns true for err. Only the error whose
-// remove deleted it reports an *EvictedError, after removing, then calls onEvict: so once, and never for a subscriber
-// that something else removed first. A *ClosedError never reaches evict: an ended Seq loop's would race its remove.
+// remove deleted it reports an *EvictedError, after removing, then sends it on evicted: so once, and never for a
+// subscriber that something else removed first. A *ClosedError never reaches evict: an ended Seq loop's would race its
+// remove.
 func (s *Subscriber[T]) lose(m message.Message[T], err error) {
 	if s.config.evict == nil || errors.Is(err, ErrClosed) || !s.config.evict(err) || !s.remove(WithUnsubscribeDiscard()) {
 		s.report(m, err)
@@ -316,8 +331,10 @@ func (s *Subscriber[T]) lose(m message.Message[T], err error) {
 	}
 	evicted := &EvictedError[T]{SubscriberID: s.id, Message: m.Value, Err: err}
 	s.report(m, evicted)
-	if s.config.onEvict != nil {
-		s.config.onEvict(s.context(m), evicted)
+	// Never blocks: the error handlers got it already.
+	select {
+	case s.config.evicted <- evicted:
+	default:
 	}
 }
 

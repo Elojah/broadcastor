@@ -281,15 +281,17 @@ for _, s := range b.Stats() {
 - An unsubscribed subscriber still handles what it took: its buffer, and a message racing `Unsubscribe`.
   `subscriber.WithUnsubscribeDiscard` reports them as `*subscriber.ClosedError` instead, and
   `subscriber.WithUnsubscribeOptions` makes that a default, the only way `Close` applies it.
-- `subscriber.WithEvict(evict, onEvict)` unsubscribes a subscriber, discarding what it took, on the first error `evict`
+- `subscriber.WithEvict(evict, evicted)` unsubscribes a subscriber, discarding what it took, on the first error `evict`
   returns true for: a timeout, so that a stuck one stops costing every `Broadcast` its timeout, or an error from
   `handle` meaning it cannot go on. To evict after several, count them in a middleware returning an error `evict`
-  matches, or in `evict`, which may run concurrently. `onEvict`, unless nil, then gets the `*subscriber.EvictedError`,
-  once, after the error handlers.
-- `subscriber.WithOnDone(onDone)` runs once the subscriber is done, however it was unsubscribed: after `handle`'s last
-  call, in its goroutine, so it can release what `handle` used without a lock.
-- `Shutdown(ctx)` is `Close`, then waits until every subscriber has handled or discarded what it took and run its
-  `onDone`, or until ctx is done. A program that exits right after `Close` cuts `handle` off, so call `Shutdown` on
+  matches, or in `evict`, which may run concurrently. The `evicted` channel, unless nil, then gets the
+  `*subscriber.EvictedError`, once, after the error handlers.
+- `subscriber.WithDone(done)` sends the subscriber's ID on `done` once it is done, however it was unsubscribed: after
+  `handle`'s last call, so the receiver can release what `handle` used without a lock.
+- Like `signal.Notify`, neither send ever waits: give the channel room for one per subscriber sending on it, or the
+  value is dropped. Each carries the subscriber's ID, so subscribers can share one.
+- `Shutdown(ctx)` is `Close`, then waits until every subscriber has handled or discarded what it took and sent its ID
+  on `done`, or until ctx is done. It does not wait for the receiver: release after it returns. A program that exits right after `Close` cuts `handle` off, so call `Shutdown` on
   SIGTERM. From `handle`, it waits on itself until ctx is done.
 
 ```go
@@ -323,11 +325,12 @@ b.Broadcast(detached, msg, message.WithAsync[string](), message.WithTimeout[stri
 
 A subscriber reconnects in place, without leaving. `handle` owns the connection, closes it when a call fails, and dials
 again on the next attempt, which `middleware.Retry` makes. The message is retried rather than lost, and what comes
-meanwhile waits in the buffer, in order. `subscriber.WithOnDone` closes the last connection. All of it runs in the
-subscriber's goroutine, so none of it needs a lock:
+meanwhile waits in the buffer, in order. Once `subscriber.WithDone` sends the subscriber's ID, after `Shutdown`, close
+the last connection. Only `handle` uses it until then, and receiving the ID orders the close after its last call, so
+none of it needs a lock:
 
 ```go
-var conn *Conn // only the subscriber's goroutine uses it
+var conn *Conn // only handle uses it, until done gets the ID
 handle := func(ctx context.Context, _ uuid.UUID, msg Reading) error {
  if conn == nil {
   c, err := dial(ctx)
@@ -345,6 +348,7 @@ handle := func(ctx context.Context, _ uuid.UUID, msg Reading) error {
 
  return nil
 }
+done := make(chan uuid.UUID, 1)
 id, err := b.Subscribe(ctx, handle,
  subscriber.WithMiddleware(middleware.Retry[Reading](middleware.RetryPolicy{
   Attempts: math.MaxInt, Delay: time.Second, Multiplier: 2, MaxDelay: time.Minute,
@@ -352,12 +356,14 @@ id, err := b.Subscribe(ctx, handle,
  subscriber.WithBuffer[Reading](64),           // what comes in meanwhile, in order
  subscriber.WithTimeout[Reading](time.Second), // then Broadcast stops waiting
  subscriber.WithDeadLetters[Reading](lost),    // and keeps what overflows
- subscriber.WithOnDone[Reading](func() {
-  if conn != nil {
-   conn.Close()
-  }
- }),
+ subscriber.WithDone[Reading](done),
 )
+// ...
+b.Shutdown(ctx)
+<-done
+if conn != nil {
+ conn.Close()
+}
 ```
 
 - For an outage longer than a buffer holds, store and forward with `store.Enqueue` and `store.Drain`, as
@@ -391,7 +397,7 @@ See [`26-reconnect`](examples/26-reconnect/main.go) and [`25-modbus`](examples/2
 | [`14-context`](examples/14-context/main.go) | `message.WithContext`, and an async `Broadcast` outliving a request. |
 | [`15-dead-letters`](examples/15-dead-letters/main.go) | `subscriber.WithDeadLetters`, with what `Close` discards. |
 | [`16-stats`](examples/16-stats/main.go) | `Broadcastor.Stats`, for a stuck subscriber and a failing one. |
-| [`17-evict`](examples/17-evict/main.go) | `subscriber.WithEvict` on a timeout and on failures counted by a middleware, its callback, and `*subscriber.EvictedError`. |
+| [`17-evict`](examples/17-evict/main.go) | `subscriber.WithEvict` on a timeout and on failures counted by a middleware, its channel, and `*subscriber.EvictedError`. |
 | [`18-history`](examples/18-history/main.go) | `middleware.History` and `subscriber.WithDeadLetters` sharing a store. |
 | [`19-redis`](examples/19-redis/main.go) | Dead letters and history in Redis, replayed after a restart with `subscriber.WithReplay`. |
 | [`20-filter`](examples/20-filter/main.go) | `subscriber.WithFilter` with `filter.Changed` and `filter.Every`. |

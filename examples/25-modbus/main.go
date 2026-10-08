@@ -11,7 +11,7 @@
 // The PLC never answers the rule's third write, as if a firewall had dropped the idle connection. The rule reconnects
 // in place: once a request has timed out, handle closes the connection, and Retry's next attempt opens a new one.
 // Meanwhile, the next reading that switches the fan waits in the rule's buffer, neither lost nor out of order.
-// subscriber.WithOnDone closes the last connection.
+// After Shutdown, subscriber.WithDone says the rule is done with its last connection, which main closes.
 //
 // It is a module of its own, so that the library does not depend on a Modbus library: `go run -C examples/25-modbus .`.
 // It needs no device: plc.go simulates one, in process.
@@ -72,7 +72,7 @@ func main() {
 	}
 
 	b := broadcastor.NewBroadcastor[reading]()
-	subscribeRule(ctx, b, addr)
+	closeRule := subscribeRule(ctx, b, addr)
 	trend := store.NewRing[reading](1024)
 	subscribeTrend(ctx, b, trend)
 	poll(ctx, b, poller, len(readings))
@@ -82,6 +82,7 @@ func main() {
 	if err := b.Shutdown(shutdownCtx); err != nil {
 		log.Fatal(err)
 	}
+	closeRule()
 	if err := poller.Close(); err != nil {
 		log.Fatal(err)
 	}
@@ -111,10 +112,10 @@ func connect(addr string) (*modbus.ModbusClient, error) {
 }
 
 // subscribeRule subscribes the fan rule, which writes the fan's coil over its own connection, and opens a new one after
-// a timeout.
-func subscribeRule(ctx context.Context, b *broadcastor.Broadcastor[reading], addr string) {
-	// Only the rule's goroutine uses it, in handle then onDone, so it needs no lock. nil once closed, until the next
-	// attempt.
+// a timeout. It returns a func that closes the last connection once the rule is done.
+func subscribeRule(ctx context.Context, b *broadcastor.Broadcastor[reading], addr string) func() {
+	// Only the rule's goroutine uses it in handle, and the returned func once done has the ID, so it needs no lock. nil
+	// once closed, until the next attempt.
 	client, err := connect(addr)
 	if err != nil {
 		log.Fatal(err)
@@ -149,6 +150,8 @@ func subscribeRule(ctx context.Context, b *broadcastor.Broadcastor[reading], add
 			return errors.Is(err, modbus.ErrServerDeviceBusy) || errors.Is(err, modbus.ErrRequestTimedOut)
 		},
 	})
+	// Room for the rule's ID, since sending never waits.
+	done := make(chan uuid.UUID, 1)
 	_, err = b.Subscribe(ctx, handle,
 		// In parallel, so that the trend never waits for the rule.
 		subscriber.WithDefaultMessageOptions(message.WithParallel[reading](), message.WithTimeout[reading](pollEvery)),
@@ -164,14 +167,17 @@ func subscribeRule(ctx context.Context, b *broadcastor.Broadcastor[reading], add
 		})),
 		subscriber.WithMiddleware(retry),
 		subscriber.WithErrorHandler[reading](logError),
-		subscriber.WithOnDone[reading](func() {
-			if client != nil {
-				closeClient(client)
-			}
-		}),
+		subscriber.WithDone[reading](done),
 	)
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	return func() {
+		<-done // sent after handle's last call
+		if client != nil {
+			closeClient(client)
+		}
 	}
 }
 

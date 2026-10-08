@@ -5,6 +5,8 @@ import (
 	"iter"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/elojah/broadcastor/message"
 )
 
@@ -88,13 +90,14 @@ func WithTimeout[T any](timeout time.Duration) Option[T] {
 // *TimeoutError or *DroppedError, in Broadcast's goroutine, so that a stuck subscriber stops costing every Broadcast
 // its timeout, or handle's error past every middleware, in the subscriber's, such as one meaning it cannot go on. So
 // evict may run concurrently. It never gets a *ClosedError. The evicting error is reported as an *EvictedError, then
-// passed to onEvict unless nil, once, where the error handlers run. To evict after several errors, count them in evict,
-// or in a middleware returning an error evict matches. A nil evict, the default, never evicts. Eviction is for good,
-// not a way to reconnect.
-func WithEvict[T any](evict func(err error) bool, onEvict func(ctx context.Context, evicted *EvictedError[T])) Option[T] {
+// sent on evicted unless nil, once, before the subscriber's WithDone. Like signal.Notify, the send never blocks: give
+// evicted room for one per subscriber sending on it, or only the error handlers get it. To evict after several errors,
+// count them in evict, or in a middleware returning an error evict matches. A nil evict, the default, never evicts.
+// Eviction is for good, not a way to reconnect.
+func WithEvict[T any](evict func(err error) bool, evicted chan<- *EvictedError[T]) Option[T] {
 	return func(config *config[T]) {
 		config.evict = evict
-		config.onEvict = onEvict
+		config.evicted = evicted
 	}
 }
 
@@ -142,24 +145,15 @@ func WithReplay[T any](replay iter.Seq[T]) Option[T] {
 	}
 }
 
-// WithOnDone adds onDone, which runs once the subscriber is unsubscribed, whatever removed it, and done with what it
-// took, so that it can release what handle used. It runs in the subscriber's goroutine after the last call to handle or the loop body,
-// so they can share state without a lock. Shutdown waits for it. It never runs for a SubscribeSeq loop never ranged.
-// Several run in order. A nil onDone is ignored.
-func WithOnDone[T any](onDone func()) Option[T] {
+// WithDone sends the subscriber's ID on done once it is unsubscribed, whatever removed it, and done with what it took:
+// after the last call to handle or the loop body, so that the receiver can release what handle used without a lock.
+// Shutdown returns once it is sent, without waiting for the receiver: release after Shutdown. Like signal.Notify, the
+// send never blocks: give done room for one per subscriber sending on it, or the ID is dropped. It is never sent for a
+// SubscribeSeq loop never ranged. Several add up. A nil done is ignored.
+func WithDone[T any](done chan<- uuid.UUID) Option[T] {
 	return func(config *config[T]) {
-		if onDone == nil {
-			return
-		}
-		previous := config.onDone
-		if previous == nil {
-			config.onDone = onDone
-
-			return
-		}
-		config.onDone = func() {
-			previous()
-			onDone()
+		if done != nil {
+			config.done = append(config.done, done)
 		}
 	}
 }

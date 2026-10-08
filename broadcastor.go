@@ -27,15 +27,15 @@ type Broadcastor[T any] struct {
 	// it reaches 0 once, after Close: whoever drops it there closes stopped.
 	running atomic.Int64
 	stopped chan struct{}
-	// done is subscriber.WithOnDone(stop), made once since add would allocate it.
-	done subscriber.Option[T]
+	// done is stop, made once since add would allocate it.
+	done func()
 }
 
 // NewBroadcastor returns an empty Broadcastor.
 func NewBroadcastor[T any]() *Broadcastor[T] {
 	b := &Broadcastor[T]{stopped: make(chan struct{})}
 	b.running.Store(1)
-	b.done = subscriber.WithOnDone[T](b.stop)
+	b.done = b.stop
 
 	return b
 }
@@ -109,9 +109,9 @@ func (b *Broadcastor[T]) Close() error {
 	return nil
 }
 
-// Shutdown is Close, then waits until every subscriber has handled or discarded what it took and run its onDone, so
-// that the program can exit right after, such as on SIGTERM. It returns ctx.Err() if ctx ends first, else Close's
-// error.
+// Shutdown is Close, then waits until every subscriber has handled or discarded what it took and sent its ID on
+// subscriber.WithDone's channels, so that the program can exit right after, such as on SIGTERM. It returns ctx.Err()
+// if ctx ends first, else Close's error.
 //
 // It waits for a Broadcast only through a subscriber, which Close frees at once, unless an error handler or store
 // blocks. A Broadcast racing it may still report a *subscriber.ClosedError after it returns. Called from handle or an
@@ -199,8 +199,7 @@ func (b *Broadcastor[T]) add(ctx context.Context, options []subscriber.Option[T]
 	if err != nil {
 		return nil, err
 	}
-	// Last, so running drops after the caller's onDone. Clipped, so as not to write to the caller's array.
-	s := subscriber.New(id, append(slices.Clip(options), b.done)...)
+	s := subscriber.New(id, options...)
 
 	if !b.gate.Enter() {
 		return nil, ErrClosed
@@ -209,7 +208,7 @@ func (b *Broadcastor[T]) add(ctx context.Context, options []subscriber.Option[T]
 	b.running.Add(1)
 
 	// Before Store, so whoever removes the subscriber stops the watch.
-	ctx = s.Attach(ctx, func(options ...subscriber.UnsubscribeOption) bool { return b.remove(id, options...) })
+	ctx = s.Attach(ctx, func(options ...subscriber.UnsubscribeOption) bool { return b.remove(id, options...) }, b.done)
 	b.subscribers.Store(id, s)
 	// If ctx was already done, the watch may have run before Store and found nothing.
 	if ctx.Err() != nil {

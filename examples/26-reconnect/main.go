@@ -1,7 +1,8 @@
 // A forwarder sends each message over a link, which goes down on 3. It reconnects in place, without unsubscribing:
 // handle owns the link, closes it once a send fails, and dials a new one on the next attempt, which middleware.Retry
 // makes. Meanwhile Broadcast puts 4 and 5 in the buffer without waiting, so none is lost, and the new link sends 3, 4
-// then 5, in order. subscriber.WithOnDone closes the last link.
+// then 5, in order. After Shutdown, subscriber.WithDone says the forwarder is done with its last link, which main
+// closes.
 //
 // Dialling waits until main brings the network back up, standing in for a slow reconnection.
 package main
@@ -27,7 +28,7 @@ func main() {
 	ctx := context.Background()
 	b := broadcastor.NewBroadcastor[int]()
 	n := &network{dialling: make(chan struct{}), up: make(chan struct{})}
-	subscribeForwarder(ctx, b, n)
+	closeLink := subscribeForwarder(ctx, b, n)
 
 	for msg := 1; msg <= 3; msg++ {
 		b.Broadcast(ctx, msg)
@@ -41,13 +42,14 @@ func main() {
 	if err := b.Shutdown(ctx); err != nil {
 		log.Fatal(err)
 	}
+	closeLink()
 }
 
 // subscribeForwarder subscribes the forwarder, which sends each message over its own link, and dials a new one after a
-// failed send.
-func subscribeForwarder(ctx context.Context, b *broadcastor.Broadcastor[int], n *network) {
-	// Only the forwarder's goroutine uses it, in handle then onDone, so it needs no lock. nil once closed, until the
-	// next attempt.
+// failed send. It returns a func that closes the last link once the forwarder is done.
+func subscribeForwarder(ctx context.Context, b *broadcastor.Broadcastor[int], n *network) func() {
+	// Only the forwarder's goroutine uses it in handle, and the returned func once done has the ID, so it needs no
+	// lock. nil once closed, until the next attempt.
 	l := n.dial()
 	handle := func(_ context.Context, _ uuid.UUID, msg int) error {
 		if l == nil {
@@ -69,18 +71,23 @@ func subscribeForwarder(ctx context.Context, b *broadcastor.Broadcastor[int], n 
 		Attempts: math.MaxInt, Delay: time.Millisecond, Multiplier: 2, MaxDelay: time.Second,
 		IsRetryable: func(err error) bool { return errors.Is(err, errDown) },
 	})
+	// Room for the forwarder's ID, since sending never waits.
+	done := make(chan uuid.UUID, 1)
 	_, err := b.Subscribe(ctx, handle,
 		subscriber.WithMiddleware(retry),
 		// What Broadcast hands the forwarder while it reconnects waits there, in order.
 		subscriber.WithBuffer[int](8),
-		subscriber.WithOnDone[int](func() {
-			if l != nil {
-				l.close()
-			}
-		}),
+		subscriber.WithDone[int](done),
 	)
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	return func() {
+		<-done // sent after handle's last call
+		if l != nil {
+			l.close()
+		}
 	}
 }
 

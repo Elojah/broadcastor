@@ -39,7 +39,7 @@
 // Unsubscribe and Close never wait, so handle can call them, and a Broadcast waiting on the subscriber gives up. The
 // subscriber still handles what it took, unless subscriber.WithUnsubscribeDiscard. It is also unsubscribed once its
 // Subscribe ctx is done (unless subscriber.WithDetachedContext), and on an error that subscriber.WithEvict picks.
-// subscriber.WithOnDone runs once it is done. Shutdown is Close, then waits for every subscriber to be done, or for its
+// subscriber.WithDone sends its ID once it is done. Shutdown is Close, then waits for every subscriber to be done, or for its
 // ctx.
 //
 // To reconnect, a subscriber need not leave: handle dials again, middleware.Retry retries the message, and
