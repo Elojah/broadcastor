@@ -59,11 +59,11 @@ type config[T any] struct {
 	filter       func(msg T) bool
 	evict        func(err error) bool
 
-	done []doneChannel
+	done []ctxchan
 }
 
-// doneChannel is a WithDone channel, and the ctx that bounds the send on it.
-type doneChannel struct {
+// ctxchan is a WithDone channel, and the ctx that bounds the send on it.
+type ctxchan struct {
 	ctx context.Context //nolint:containedctx // bounds a send at the end of the subscription
 	ch  chan<- uuid.UUID
 }

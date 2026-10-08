@@ -141,7 +141,7 @@ func WithReplay[T any](replay iter.Seq[T]) Option[T] {
 func WithDone[T any](ctx context.Context, done chan<- uuid.UUID) Option[T] {
 	return func(config *config[T]) {
 		if done != nil {
-			config.done = append(config.done, doneChannel{ctx: ctx, ch: done})
+			config.done = append(config.done, ctxchan{ctx: ctx, ch: done})
 		}
 	}
 }
