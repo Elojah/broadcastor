@@ -120,7 +120,7 @@ Errors go to error handlers, or are discarded:
 | `*subscriber.TimeoutError` | `Broadcast` gave up waiting. |
 | `*subscriber.DroppedError` | A non-blocking `Broadcast` found the subscriber busy, or an async one hit `subscriber.WithAsyncLimit`. |
 | `*subscriber.ClosedError` | The subscriber was unsubscribed before handling the message. |
-| `*subscriber.EvictedError` | Wraps the loss that evicted the subscriber (`subscriber.WithEvictAfter`). |
+| `*subscriber.EvictedError` | Wraps the error that evicted the subscriber (`subscriber.WithEvict`). |
 | `*subscriber.StoreError` | Wraps a loss the dead-letter store failed to keep. |
 
 Each type matches a sentinel with `errors.Is` (`subscriber.ErrTimeout`, `subscriber.ErrClosed`, …) without needing the
@@ -281,9 +281,11 @@ for _, s := range b.Stats() {
 - An unsubscribed subscriber still handles what it took: its buffer, and a message racing `Unsubscribe`.
   `subscriber.WithUnsubscribeDiscard` reports them as `*subscriber.ClosedError` instead, and
   `subscriber.WithUnsubscribeOptions` makes that a default, the only way `Close` applies it.
-- `subscriber.WithEvictAfter(n, onEvict)` unsubscribes a subscriber after n losses in a row, so that a stuck one stops
-  costing every `Broadcast` its timeout. `onEvict`, unless nil, then gets the `*subscriber.EvictedError`, once, after
-  the error handlers.
+- `subscriber.WithEvict(evict, onEvict)` unsubscribes a subscriber, discarding what it took, on the first error `evict`
+  returns true for: a timeout, so that a stuck one stops costing every `Broadcast` its timeout, or an error from
+  `handle` meaning it cannot go on. To evict after several, count them in a middleware returning an error `evict`
+  matches, or in `evict`, which may run concurrently. `onEvict`, unless nil, then gets the `*subscriber.EvictedError`,
+  once, after the error handlers.
 - `subscriber.WithOnDone(onDone)` runs once the subscriber is done, however it was unsubscribed: after `handle`'s last
   call, in its goroutine, so it can release what `handle` used without a lock.
 - `Shutdown(ctx)` is `Close`, then waits until every subscriber has handled or discarded what it took and run its
@@ -389,7 +391,7 @@ See [`26-reconnect`](examples/26-reconnect/main.go) and [`25-modbus`](examples/2
 | [`14-context`](examples/14-context/main.go) | `message.WithContext`, and an async `Broadcast` outliving a request. |
 | [`15-dead-letters`](examples/15-dead-letters/main.go) | `subscriber.WithDeadLetters`, with what `Close` discards. |
 | [`16-stats`](examples/16-stats/main.go) | `Broadcastor.Stats`, for a stuck subscriber and a failing one. |
-| [`17-evict`](examples/17-evict/main.go) | `subscriber.WithEvictAfter`, its callback, and `*subscriber.EvictedError`. |
+| [`17-evict`](examples/17-evict/main.go) | `subscriber.WithEvict` on a timeout and on failures counted by a middleware, its callback, and `*subscriber.EvictedError`. |
 | [`18-history`](examples/18-history/main.go) | `middleware.History` and `subscriber.WithDeadLetters` sharing a store. |
 | [`19-redis`](examples/19-redis/main.go) | Dead letters and history in Redis, replayed after a restart with `subscriber.WithReplay`. |
 | [`20-filter`](examples/20-filter/main.go) | `subscriber.WithFilter` with `filter.Changed` and `filter.Every`. |

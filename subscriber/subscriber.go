@@ -4,6 +4,7 @@ package subscriber
 
 import (
 	"context"
+	"errors"
 	"iter"
 	"sync/atomic"
 	"time"
@@ -40,9 +41,6 @@ type Subscriber[T any] struct {
 	// refs counts the subscription plus each send on ch. Whoever drops it to 0 closes ch, so never under a sender.
 	refs atomic.Int64
 
-	// misses counts the messages lost in a row, for WithEvictAfter.
-	misses atomic.Int64
-
 	counters counters
 }
 
@@ -54,13 +52,13 @@ type config[T any] struct {
 	detached            bool
 	store               Store[T]
 	middlewares         []Middleware[T]
-	evictAfter          int
 	asyncLimit          int
 	replay              iter.Seq[T]
 
 	errorHandler func(ctx context.Context, err error)
 	filter       func(msg T) bool
 
+	evict   func(err error) bool
 	onEvict func(ctx context.Context, evicted *EvictedError[T])
 	onDone  func()
 }
@@ -119,7 +117,7 @@ func (s *Subscriber[T]) Deliver(ctx context.Context, value T, config message.Con
 		if !s.reserve() {
 			defer s.release()
 			s.counters.dropped.Add(1)
-			s.lose(m, &DroppedError[T]{SubscriberID: s.id, Message: value})
+			s.lose(m, &DroppedError[T]{SubscriberID: s.id, Message: value}) //nolint:contextcheck // reported with the message's ctx
 
 			return false, nil
 		}
@@ -246,9 +244,9 @@ func (s *Subscriber[T]) process(handle Handler[T], m message.Message[T]) {
 	err := handle(s.context(m), s.id, m.Value)
 	s.counters.handleStart.Store(0)
 	s.counters.handle(time.Since(start), err)
-	// Reported outside the chain, so Recover never catches a panic in an error handler.
+	// Reported outside the chain, so Recover never catches a panic in an error handler, evict or onEvict.
 	if err != nil {
-		s.report(m, err)
+		s.lose(m, err)
 	}
 }
 
@@ -270,7 +268,7 @@ func (s *Subscriber[T]) send(ctx context.Context, m message.Message[T]) bool {
 	// is done.
 	select {
 	case s.ch <- m:
-		s.taken()
+		s.counters.delivered.Add(1)
 
 		return true
 	default:
@@ -278,7 +276,7 @@ func (s *Subscriber[T]) send(ctx context.Context, m message.Message[T]) bool {
 
 	if m.Config.Delivery == message.DeliveryNonBlocking {
 		s.counters.dropped.Add(1)
-		s.lose(m, &DroppedError[T]{SubscriberID: s.id, Message: m.Value})
+		s.lose(m, &DroppedError[T]{SubscriberID: s.id, Message: m.Value}) //nolint:contextcheck // reported with the message's ctx
 
 		return false
 	}
@@ -292,7 +290,7 @@ func (s *Subscriber[T]) send(ctx context.Context, m message.Message[T]) bool {
 
 	select {
 	case s.ch <- m:
-		s.taken()
+		s.counters.delivered.Add(1)
 
 		return true
 	case <-s.done:
@@ -301,25 +299,17 @@ func (s *Subscriber[T]) send(ctx context.Context, m message.Message[T]) bool {
 		return false
 	case <-sendCtx.Done():
 		s.counters.timedOut.Add(1)
-		s.lose(m, &TimeoutError[T]{SubscriberID: s.id, Message: m.Value, Err: sendCtx.Err()})
+		s.lose(m, &TimeoutError[T]{SubscriberID: s.id, Message: m.Value, Err: sendCtx.Err()}) //nolint:contextcheck // reported with the message's ctx
 
 		return false
 	}
 }
 
-// taken counts a message the subscriber took, which ends a run of losses.
-func (s *Subscriber[T]) taken() {
-	s.counters.delivered.Add(1)
-	if s.config.evictAfter > 0 {
-		s.misses.Store(0)
-	}
-}
-
-// lose reports m, lost to err, and evicts the subscriber after evictAfter losses in a row. Only the loss whose remove
-// deleted it reports an *EvictedError, after removing, then calls onEvict: so once, and never for a subscriber that
-// something else removed first.
+// lose reports m, lost or failed with err, and evicts the subscriber if evict returns true for err. Only the error whose
+// remove deleted it reports an *EvictedError, after removing, then calls onEvict: so once, and never for a subscriber
+// that something else removed first. A *ClosedError never reaches evict: an ended Seq loop's would race its remove.
 func (s *Subscriber[T]) lose(m message.Message[T], err error) {
-	if s.config.evictAfter <= 0 || s.misses.Add(1) < int64(s.config.evictAfter) || !s.remove(WithUnsubscribeDiscard()) {
+	if s.config.evict == nil || errors.Is(err, ErrClosed) || !s.config.evict(err) || !s.remove(WithUnsubscribeDiscard()) {
 		s.report(m, err)
 
 		return

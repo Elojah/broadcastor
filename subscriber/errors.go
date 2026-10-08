@@ -107,8 +107,8 @@ func (e *DroppedError[T]) Is(target error) bool {
 	return target == ErrDropped
 }
 
-// EvictedError replaces the error about the loss that evicted the subscriber (WithEvictAfter): Err is the
-// *TimeoutError or *DroppedError. It matches ErrEvicted, and unwraps to Err.
+// EvictedError replaces the error that evicted the subscriber (WithEvict): Err is the *TimeoutError, the *DroppedError
+// or handle's error. It matches ErrEvicted, and unwraps to Err.
 type EvictedError[T any] struct {
 	SubscriberID uuid.UUID
 	Message      T

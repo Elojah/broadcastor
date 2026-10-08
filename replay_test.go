@@ -2,6 +2,7 @@ package broadcastor_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"iter"
 	"slices"
@@ -132,8 +133,8 @@ func TestSubscriberWithReplay_Unsubscribe(t *testing.T) {
 	}
 }
 
-// A Broadcast during the replay waits as for a busy handle, and its timeout counts towards WithEvictAfter: eviction
-// ends the replay.
+// A Broadcast during the replay waits as for a busy handle, and its timeout reaches WithEvict: eviction ends the
+// replay.
 func TestSubscriberWithReplay_BroadcastWaits(t *testing.T) {
 	t.Parallel()
 
@@ -149,7 +150,7 @@ func TestSubscriberWithReplay_BroadcastWaits(t *testing.T) {
 		},
 			subscriber.WithReplay(replayOf(events, 1, 2)),
 			subscriber.WithTimeout[int](time.Second),
-			subscriber.WithEvictAfter[int](1, nil),
+			subscriber.WithEvict[int](isTimeout, nil),
 			subscriber.WithErrorHandler[int](recordLosses(t, events)),
 		)
 
@@ -165,6 +166,34 @@ func TestSubscriberWithReplay_BroadcastWaits(t *testing.T) {
 		synctest.Wait()
 		if got, want := events.messages(), []string{"handled 1", "3 evicted, timed out", "acked 1", "stopped at 2"}; !slices.Equal(got, want) {
 			t.Errorf("got %q, want %q", got, want)
+		}
+	})
+}
+
+// A replayed value's error reaches WithEvict like handle's: eviction ends the replay, and the rest stays in the source.
+func TestSubscriberWithReplay_Evicted(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := broadcastor.NewBroadcastor[int]()
+		events := &recorder[string]{}
+		id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
+			events.record(fmt.Sprintf("handled %d", msg))
+
+			return handleError(msg)
+		},
+			subscriber.WithReplay(replayOf(events, 1, 2, 3)),
+			subscriber.WithEvict[int](func(err error) bool { return errors.Is(err, handleError(2)) }, nil),
+			subscriber.WithErrorHandler[int](recordLosses(t, events)),
+		)
+		synctest.Wait()
+
+		want := []string{"handled 1", "1 failed", "acked 1", "handled 2", "2 evicted, failed", "acked 2", "stopped at 3"}
+		if got := events.messages(); !slices.Equal(got, want) {
+			t.Errorf("got %q, want %q", got, want)
+		}
+		if err := b.Unsubscribe(t.Context(), id); !isNotFound(err) {
+			t.Errorf("Unsubscribe once evicted = %v, want a *SubscriberNotFoundError", err)
 		}
 	})
 }

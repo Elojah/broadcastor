@@ -47,6 +47,7 @@ var (
 	errAfterShutdown = errors.New("handled or reported once Shutdown had returned")
 	errAfterDone     = errors.New("handled once onDone had run")
 	errReplayLate    = errors.New("replayed after a broadcast message")
+	errEvictClosed   = errors.New("evict got a *subscriber.ClosedError")
 )
 
 // TestStress interleaves every method at random from several goroutines, in real time so that timeouts race sends, over
@@ -120,8 +121,8 @@ type stressSub struct {
 	id     uuid.UUID
 	seq    bool
 	cancel context.CancelFunc
-	// evictAfter is its subscriber.WithEvictAfter, 0 for none.
-	evictAfter int
+	// evictOn says what its subscriber.WithEvict picks, "" for none.
+	evictOn string
 	// shut is the round's stress.shut.
 	shut *atomic.Bool
 
@@ -285,8 +286,7 @@ func (s *stress) subscribe(ctx context.Context, t *testing.T) *stressSub {
 		options = append(options, subscriber.WithReplay(sub.replayed))
 	}
 	if randN(2) == 0 {
-		sub.evictAfter = 1 + randN(3)
-		options = append(options, subscriber.WithEvictAfter(sub.evictAfter, func(_ context.Context, evicted *subscriber.EvictedError[int]) {
+		options = append(options, subscriber.WithEvict(sub.evicter(), func(_ context.Context, evicted *subscriber.EvictedError[int]) {
 			sub.onEvict(evicted.Message)
 		}))
 	}
@@ -385,7 +385,7 @@ func (s *stress) unsubscribe(ctx context.Context, sub *stressSub, id uuid.UUID, 
 		return nil
 	case isNotFound(err) && s.closing.Load() != 0:
 		return nil
-	case isNotFound(err) && sub.evictAfter > 0:
+	case isNotFound(err) && sub.evictOn != "":
 		// Its error handler may not have been told yet: check then that it was.
 		sub.notFound.Store(true)
 
@@ -613,6 +613,37 @@ func (sub *stressSub) fail(n int) {
 	sub.failed[n] = true
 }
 
+// evicter sets sub.evictOn and returns an evict picking, at random, losses, handle's errors, or the kth error of any kind.
+// It records a *subscriber.ClosedError as unexpected.
+func (sub *stressSub) evicter() func(error) bool {
+	var (
+		pick func(error) bool
+		seen atomic.Int64
+	)
+	switch k := 1 + randN(3); randN(3) {
+	case 0:
+		sub.evictOn = "losses"
+		pick = func(err error) bool {
+			return errors.Is(err, subscriber.ErrTimeout) || errors.Is(err, subscriber.ErrDropped)
+		}
+	case 1:
+		sub.evictOn = "handle's errors"
+		pick = func(err error) bool { return errors.As(err, new(handleError)) }
+	default:
+		// Called from several goroutines at once.
+		sub.evictOn = fmt.Sprintf("error %d", k)
+		pick = func(error) bool { return seen.Add(1) >= int64(k) }
+	}
+
+	return func(err error) bool {
+		if errors.Is(err, subscriber.ErrClosed) {
+			sub.unexpect(fmt.Errorf("%w: %w", errEvictClosed, err))
+		}
+
+		return pick(err)
+	}
+}
+
 // evict records that the loss of n evicted the subscriber.
 func (sub *stressSub) evict(n int) {
 	sub.mu.Lock()
@@ -657,8 +688,8 @@ func (sub *stressSub) problems(broadcasts []stressBroadcast, byNumber map[int]st
 	if len(sub.unexpected) != 0 {
 		problems = append(problems, fmt.Sprintf("got unexpected errors %v", first(sub.unexpected)))
 	}
-	if sub.evictAfter == 0 && sub.evictions != 0 || sub.evictions > 1 {
-		problems = append(problems, fmt.Sprintf("evicted %d times, with WithEvictAfter(%d)", sub.evictions, sub.evictAfter))
+	if sub.evictOn == "" && sub.evictions != 0 || sub.evictions > 1 {
+		problems = append(problems, fmt.Sprintf("evicted %d times, evicting on %q", sub.evictions, sub.evictOn))
 	}
 	if len(sub.onEvicted) != sub.evictions || sub.evictions != 0 && sub.onEvicted[0] != sub.evicted {
 		problems = append(problems, fmt.Sprintf("onEvict got %v, but the error handler got %d evictions, the first by %d",
@@ -670,11 +701,7 @@ func (sub *stressSub) problems(broadcasts []stressBroadcast, byNumber map[int]st
 	problems = append(problems, sub.optionProblems()...)
 
 	// Every message broadcast entirely while it was subscribed, and none broadcast entirely outside that.
-	leaving, gone := min(tickOrNever(&sub.leaving), closing), min(tickOrNever(&sub.gone), closed)
-	if sub.evictions != 0 {
-		// Evicted by that message's Broadcast, once it started.
-		leaving = min(leaving, byNumber[sub.evicted].start)
-	}
+	leaving, gone := sub.left(byNumber, closing), min(tickOrNever(&sub.gone), closed)
 	var missing, extra []int
 	for _, b := range broadcasts {
 		if _, ok := sub.got[b.number]; !ok && b.start > sub.subscribed && b.end < leaving {
@@ -715,6 +742,21 @@ func (sub *stressSub) problems(broadcasts []stressBroadcast, byNumber map[int]st
 	}
 
 	return problems
+}
+
+// left returns the earliest tick before something removed the subscriber, given the first Close's. sub.mu must be held.
+func (sub *stressSub) left(byNumber map[int]stressBroadcast, closing int64) int64 {
+	leaving := min(tickOrNever(&sub.leaving), closing)
+	if sub.evictions == 0 {
+		return leaving
+	}
+	// Evicted by that message's Broadcast or handle, once the Broadcast started.
+	if b, ok := byNumber[sub.evicted]; ok {
+		return min(leaving, b.start)
+	}
+
+	// Evicted by a replayed value.
+	return min(leaving, sub.subscribing)
 }
 
 // optionProblems checks what onDone and the replay got. sub.mu must be held.

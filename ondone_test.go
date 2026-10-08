@@ -48,7 +48,7 @@ func TestSubscriberWithOnDone(t *testing.T) {
 			cancel()
 		}, []string{"handled 1", "handled 2", "done 1", "done 2"}},
 		// 3 finds the buffer full and evicts the subscriber, which then discards 2.
-		{"Evicted", []subscriber.Option[int]{subscriber.WithEvictAfter[int](1, nil), subscriber.WithTimeout[int](time.Second)},
+		{"Evicted", []subscriber.Option[int]{subscriber.WithEvict[int](isTimeout, nil), subscriber.WithTimeout[int](time.Second)},
 			func(t *testing.T, b *broadcastor.Broadcastor[int], _ uuid.UUID, _ context.CancelFunc) {
 				t.Helper()
 				b.Broadcast(t.Context(), 3)
