@@ -242,13 +242,12 @@ unsubscribed subscriber leaves the snapshot. A watchdog can unsubscribe a subscr
   up. After `Close`, `Subscribe` and `SubscribeSeq` return `broadcastor.ErrClosed`.
 - An unsubscribed subscriber still handles what it took, unless `subscriber.WithUnsubscribeDiscard`, which reports it
   as `*subscriber.ClosedError` instead. `subscriber.WithUnsubscribeOptions` makes that the default, for `Close` too.
-- `subscriber.WithEvict(evict, evicted)` unsubscribes a subscriber, discarding, on the first error `evict` picks: a
-  timeout, so that a stuck one stops costing every `Broadcast` its timeout, or an error from `handle` meaning it cannot
-  go on. To evict after several errors, count them in a middleware ([`17-evict`](examples/17-evict/main.go)).
+- `subscriber.WithEvict(evict)` unsubscribes a subscriber, discarding, on the first error `evict` picks: a timeout, so
+  that a stuck one stops costing every `Broadcast` its timeout, or an error from `handle` meaning it cannot go on. To
+  evict after several errors, count them in a middleware ([`17-evict`](examples/17-evict/main.go)).
 - `subscriber.WithDone(done)` sends the subscriber's ID once it is done with what it took, so the receiver can release
-  what `handle` used without a lock.
-- Like `signal.Notify`, `evicted` and `done` are sent without waiting: give the channel room for one per subscriber
-  sharing it.
+  what `handle` used without a lock. Like `signal.Notify`, it is sent without waiting: give `done` room for one per
+  subscriber sharing it.
 - `Shutdown(ctx)` is `Close`, then waits until every subscriber is done, or ctx is. Call it on SIGTERM: exiting right
   after `Close` cuts `handle` off.
 

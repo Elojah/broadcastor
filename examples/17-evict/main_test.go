@@ -11,6 +11,5 @@ func Example() {
 	// stuck lost 7, evicted: true
 	// 7 handed to 1 subscribers
 	// 8 handed to 1 subscribers
-	// stuck evicted on losing 7
 	// subscribers left: 1
 }

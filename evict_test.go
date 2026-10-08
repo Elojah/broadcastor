@@ -26,15 +26,17 @@ func TestSubscriberWithEvict(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b := broadcastor.NewBroadcastor[int]()
 		stuck := &recorder[int]{hold: make(chan struct{})}
-		losses := &recorder[string]{}
-		id := subscribe(t, b, stuck.handle, subscriber.WithTimeout[int](time.Second), subscriber.WithEvict[int](isTimeout, nil),
-			subscriber.WithErrorHandler[int](recordLosses(t, losses)))
+		errs := &recorder[error]{}
+		id := subscribe(t, b, stuck.handle, subscriber.WithTimeout[int](time.Second), subscriber.WithEvict[int](isTimeout),
+			subscriber.WithErrorHandler[int](func(_ context.Context, err error) { errs.record(err) }))
 
 		// stuck holds on to 1, so 2 times out and evicts it.
 		b.Broadcast(t.Context(), 1)
 		b.Broadcast(t.Context(), 2)
-		if got, want := losses.messages(), []string{"2 evicted, timed out"}; !slices.Equal(got, want) {
-			t.Errorf("error handler got %q, want %q", got, want)
+		got := errs.messages()
+		var evicted *subscriber.EvictedError[int]
+		if len(got) != 1 || !errors.As(got[0], &evicted) || evicted.SubscriberID != id || describeLoss(t, got[0]) != "2 evicted, timed out" {
+			t.Errorf("error handler got %v, want 2's eviction of %s, on a timeout", got, id)
 		}
 
 		start := time.Now()
@@ -59,61 +61,6 @@ func TestSubscriberWithEvict(t *testing.T) {
 	})
 }
 
-// evicted gets the *subscriber.EvictedError the error handler got, before the evicting Broadcast returns.
-func TestSubscriberWithEvict_Channel(t *testing.T) {
-	t.Parallel()
-
-	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
-		stuck := &recorder[int]{hold: make(chan struct{})}
-		reported := &recorder[error]{}
-		evicted := make(chan *subscriber.EvictedError[int], 1)
-		id := subscribe(t, b, stuck.handle, subscriber.WithTimeout[int](time.Second), subscriber.WithEvict(isTimeout, evicted),
-			subscriber.WithErrorHandler[int](func(_ context.Context, err error) { reported.record(err) }))
-
-		// stuck holds on to 1, so 2 times out and evicts it.
-		b.Broadcast(t.Context(), 1)
-		b.Broadcast(t.Context(), 2)
-		got := received(evicted)
-		if len(got) != 1 || got[0].SubscriberID != id || describeLoss(t, got[0]) != "2 evicted, timed out" {
-			t.Fatalf("evicted got %v, want 2's eviction of %v", got, id)
-		}
-		if errs := reported.messages(); len(errs) != 1 || !errors.Is(errs[0], got[0]) {
-			t.Errorf("error handler got %v, want the *EvictedError evicted got", errs)
-		}
-
-		stuck.release()
-		synctest.Wait()
-	})
-}
-
-// An evicted channel without room never holds Broadcast up: only the error handlers get the eviction.
-func TestSubscriberWithEvict_ChannelFull(t *testing.T) {
-	t.Parallel()
-
-	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
-		stuck := &recorder[int]{hold: make(chan struct{})}
-		losses := &recorder[string]{}
-		evicted := make(chan *subscriber.EvictedError[int]) // which nothing receives
-		subscribe(t, b, stuck.handle, subscriber.WithTimeout[int](time.Second), subscriber.WithEvict(isTimeout, evicted),
-			subscriber.WithErrorHandler[int](recordLosses(t, losses)))
-
-		b.Broadcast(t.Context(), 1) // stuck holds on to 1, so 2 times out and evicts it
-		start := time.Now()
-		b.Broadcast(t.Context(), 2)
-		if elapsed := time.Since(start); elapsed != time.Second {
-			t.Errorf("Broadcast evicting returned after %v, want %v, its timeout", elapsed, time.Second)
-		}
-		if got, want := losses.messages(), []string{"2 evicted, timed out"}; !slices.Equal(got, want) {
-			t.Errorf("error handler got %q, want %q", got, want)
-		}
-
-		stuck.release()
-		synctest.Wait()
-	})
-}
-
 // Only the errors evict picks evict: here drops, not timeouts. A detached subscriber (subscriber.WithDetachedContext)
 // is evicted like any other.
 func TestSubscriberWithEvict_Dropped(t *testing.T) {
@@ -128,7 +75,7 @@ func TestSubscriberWithEvict_Dropped(t *testing.T) {
 			evict.record(describeLoss(t, err))
 
 			return errors.Is(err, subscriber.ErrDropped)
-		}, nil), subscriber.WithDetachedContext[int](), subscriber.WithErrorHandler[int](recordLosses(t, losses)))
+		}), subscriber.WithDetachedContext[int](), subscriber.WithErrorHandler[int](recordLosses(t, losses)))
 
 		b.Broadcast(t.Context(), 1) // stuck holds on to 1, so 2 times out and 3 is dropped
 		b.Broadcast(t.Context(), 2, message.WithTimeout[int](time.Second))
@@ -157,7 +104,6 @@ func TestSubscriberWithEvict_HandleError(t *testing.T) {
 		b := broadcastor.NewBroadcastor[int]()
 		handled := &recorder[int]{}
 		losses := &recorder[string]{}
-		evicted := make(chan *subscriber.EvictedError[int], 1)
 		proceed := make(chan struct{})
 		id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
 			<-proceed
@@ -165,7 +111,7 @@ func TestSubscriberWithEvict_HandleError(t *testing.T) {
 
 			return handleError(msg)
 		}, subscriber.WithBuffer[int](3),
-			subscriber.WithEvict(func(err error) bool { return errors.Is(err, handleError(2)) }, evicted),
+			subscriber.WithEvict[int](func(err error) bool { return errors.Is(err, handleError(2)) }),
 			subscriber.WithErrorHandler[int](recordLosses(t, losses)))
 
 		for msg := 1; msg <= 3; msg++ {
@@ -176,9 +122,6 @@ func TestSubscriberWithEvict_HandleError(t *testing.T) {
 
 		if got, want := losses.messages(), []string{"1 failed", "2 evicted, failed", "3 closed"}; !slices.Equal(got, want) {
 			t.Errorf("error handler got %q, want %q", got, want)
-		}
-		if got, want := receivedLosses(t, evicted), []string{"2 evicted, failed"}; !slices.Equal(got, want) {
-			t.Errorf("evicted got %q, want %q", got, want)
 		}
 		if got, want := handled.messages(), []int{1, 2}; !slices.Equal(got, want) {
 			t.Errorf("handle got %v, want %v", got, want)
@@ -208,7 +151,7 @@ func TestSubscriberWithEvict_Middleware(t *testing.T) {
 
 			return handleError(msg)
 		}, subscriber.WithBuffer[int](5), subscriber.WithMiddleware(failedInARow(2)),
-			subscriber.WithEvict[int](func(err error) bool { return errors.Is(err, errInARow) }, nil),
+			subscriber.WithEvict[int](func(err error) bool { return errors.Is(err, errInARow) }),
 			subscriber.WithErrorHandler[int](recordLosses(t, losses)))
 
 		for msg := 1; msg <= 5; msg++ {
@@ -238,7 +181,7 @@ func TestSubscriberWithEvict_Discard(t *testing.T) {
 		stuck := &recorder[int]{hold: make(chan struct{})}
 		losses := &recorder[string]{}
 		subscribe(t, b, stuck.handle, subscriber.WithBuffer[int](1), subscriber.WithTimeout[int](time.Second),
-			subscriber.WithEvict[int](isTimeout, nil), subscriber.WithErrorHandler[int](recordLosses(t, losses)),
+			subscriber.WithEvict[int](isTimeout), subscriber.WithErrorHandler[int](recordLosses(t, losses)),
 			subscriber.WithUnsubscribeOptions[int](subscriber.WithUnsubscribeDeliver()))
 
 		// stuck holds on to 1, and 2 fills its buffer, so 3 times out and evicts it.
@@ -266,7 +209,7 @@ func TestSubscriberWithEvict_FreesBroadcast(t *testing.T) {
 		b := broadcastor.NewBroadcastor[int]()
 		stuck := &recorder[int]{hold: make(chan struct{})}
 		losses := &recorder[string]{}
-		subscribe(t, b, stuck.handle, subscriber.WithEvict[int](isTimeout, nil),
+		subscribe(t, b, stuck.handle, subscriber.WithEvict[int](isTimeout),
 			subscriber.WithErrorHandler[int](recordLosses(t, losses)))
 
 		b.Broadcast(t.Context(), 1) // stuck holds on to 1, and the Broadcast of 2 waits with no timeout
@@ -294,7 +237,7 @@ func TestSubscriberWithEvict_FreesBroadcast(t *testing.T) {
 	})
 }
 
-// Simultaneous losses evict once: exactly one is reported as a *subscriber.EvictedError and sent on evicted.
+// Simultaneous losses evict once: exactly one is reported as a *subscriber.EvictedError.
 func TestSubscriberWithEvict_Once(t *testing.T) {
 	t.Parallel()
 
@@ -303,10 +246,8 @@ func TestSubscriberWithEvict_Once(t *testing.T) {
 		stuck := &recorder[int]{hold: make(chan struct{})}
 		losses := &recorder[string]{}
 		const broadcasters = 4
-		// Room for every loss, so that a second eviction would show.
-		evicted := make(chan *subscriber.EvictedError[int], broadcasters)
 		subscribe(t, b, stuck.handle, subscriber.WithTimeout[int](time.Second),
-			subscriber.WithEvict(func(error) bool { return true }, evicted),
+			subscriber.WithEvict[int](func(error) bool { return true }),
 			subscriber.WithErrorHandler[int](recordLosses(t, losses)))
 
 		b.Broadcast(t.Context(), 1) // stuck holds on to 1, so every other message times out at the same time
@@ -332,10 +273,6 @@ func TestSubscriberWithEvict_Once(t *testing.T) {
 		if len(got) != broadcasters || evictions != 1 {
 			t.Errorf("error handler got %q, want %d losses, one of them evicting", got, broadcasters)
 		}
-		evicting := slices.DeleteFunc(got, func(loss string) bool { return !strings.Contains(loss, "evicted") })
-		if sent := receivedLosses(t, evicted); !slices.Equal(sent, evicting) {
-			t.Errorf("evicted got %q, want the evicting loss, %q", sent, evicting)
-		}
 	})
 }
 
@@ -348,7 +285,7 @@ func TestSubscriberWithEvict_SubscribeSeq(t *testing.T) {
 		b := broadcastor.NewBroadcastor[int]()
 		losses := &recorder[string]{}
 		id, seq := subscribeSeq(t, b, subscriber.WithBuffer[int](1), subscriber.WithTimeout[int](time.Second),
-			subscriber.WithEvict[int](isTimeout, nil), subscriber.WithErrorHandler[int](recordLosses(t, losses)))
+			subscriber.WithEvict[int](isTimeout), subscriber.WithErrorHandler[int](recordLosses(t, losses)))
 
 		// Nothing reads before the loop starts: 1 fills the buffer, so 2 times out and evicts the subscriber.
 		b.Broadcast(t.Context(), 1)
@@ -375,7 +312,7 @@ func TestSubscriberWithEvict_SubscribeSeqFail(t *testing.T) {
 		b := broadcastor.NewBroadcastor[int]()
 		losses := &recorder[string]{}
 		id, seq := subscribeSeq(t, b, subscriber.WithBuffer[int](2),
-			subscriber.WithEvict[int](func(err error) bool { return errors.Is(err, handleError(1)) }, nil),
+			subscriber.WithEvict[int](func(err error) bool { return errors.Is(err, handleError(1)) }),
 			subscriber.WithErrorHandler[int](recordLosses(t, losses)))
 
 		b.Broadcast(t.Context(), 1)
@@ -407,12 +344,11 @@ func TestSubscriberWithEvict_SubscribeSeqPanic(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b := broadcastor.NewBroadcastor[int]()
 		losses := &recorder[string]{}
-		evicted := make(chan *subscriber.EvictedError[int], 1)
-		_, seq := subscribeSeq(t, b, subscriber.WithEvict(func(err error) bool {
+		_, seq := subscribeSeq(t, b, subscriber.WithEvict[int](func(err error) bool {
 			t.Errorf("evict got %v, want no call", err)
 
 			return true
-		}, evicted), subscriber.WithErrorHandler[int](recordLosses(t, losses)))
+		}), subscriber.WithErrorHandler[int](recordLosses(t, losses)))
 
 		go b.Broadcast(t.Context(), 1)
 		if p := recovered(func() {
@@ -427,14 +363,10 @@ func TestSubscriberWithEvict_SubscribeSeqPanic(t *testing.T) {
 		if got, want := losses.messages(), []string{"1 closed"}; !slices.Equal(got, want) {
 			t.Errorf("error handler got %q, want %q", got, want)
 		}
-		if got := received(evicted); len(got) != 0 {
-			t.Errorf("evicted got %v, want nothing", got)
-		}
 	})
 }
 
-// A nil evict, the default, or one returning false never evicts, however many messages the subscriber loses, and
-// nothing is sent on evicted.
+// A nil evict, the default, or one returning false never evicts, however many messages the subscriber loses.
 func TestSubscriberWithEvict_Never(t *testing.T) {
 	t.Parallel()
 
@@ -452,9 +384,8 @@ func TestSubscriberWithEvict_Never(t *testing.T) {
 				b := broadcastor.NewBroadcastor[int]()
 				stuck := &recorder[int]{hold: make(chan struct{})}
 				losses := &recorder[string]{}
-				evicted := make(chan *subscriber.EvictedError[int], 1)
 				id := subscribe(t, b, stuck.handle, subscriber.WithTimeout[int](time.Second),
-					subscriber.WithEvict(tt.evict, evicted), subscriber.WithErrorHandler[int](recordLosses(t, losses)))
+					subscriber.WithEvict[int](tt.evict), subscriber.WithErrorHandler[int](recordLosses(t, losses)))
 
 				for msg := 1; msg <= 4; msg++ {
 					b.Broadcast(t.Context(), msg) // stuck holds on to 1, so the others time out
@@ -466,9 +397,6 @@ func TestSubscriberWithEvict_Never(t *testing.T) {
 				unsubscribe(t, b, id)
 				stuck.release()
 				synctest.Wait()
-				if got := received(evicted); len(got) != 0 {
-					t.Errorf("evicted got %v, want nothing", got)
-				}
 			})
 		})
 	}
@@ -511,18 +439,6 @@ func recordLosses(t *testing.T, r *recorder[string]) func(context.Context, error
 	return func(_ context.Context, err error) {
 		r.record(describeLoss(t, err))
 	}
-}
-
-// receivedLosses describes what evicted holds, as describeLoss does, without waiting.
-func receivedLosses(t *testing.T, evicted <-chan *subscriber.EvictedError[int]) []string {
-	t.Helper()
-	errs := received(evicted)
-	losses := make([]string, 0, len(errs))
-	for _, err := range errs {
-		losses = append(losses, describeLoss(t, err))
-	}
-
-	return losses
 }
 
 // describeLoss describes err as "<message> timed out", "dropped", "failed" (a handleError) or "closed", with "evicted, "

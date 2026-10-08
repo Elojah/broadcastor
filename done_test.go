@@ -16,7 +16,7 @@ import (
 )
 
 // done gets the ID once, after handle's last call, however the subscriber was removed: once it has handled its buffer
-// by default, or reported it with discard. An evicted subscriber has sent on evicted by then.
+// by default, or reported it with discard.
 func TestSubscriberWithDone(t *testing.T) {
 	t.Parallel()
 
@@ -63,7 +63,6 @@ func TestSubscriberWithDone(t *testing.T) {
 				defer cancel()
 				// Room for two, so that a second send would show.
 				dones := []chan uuid.UUID{make(chan uuid.UUID, 2), make(chan uuid.UUID, 2)}
-				evicted := make(chan *subscriber.EvictedError[int], 1)
 				options := []subscriber.Option[int]{
 					subscriber.WithBuffer[int](1),
 					subscriber.WithErrorHandler[int](recordLosses(t, events)),
@@ -72,7 +71,7 @@ func TestSubscriberWithDone(t *testing.T) {
 					subscriber.WithDone[int](dones[1]),
 				}
 				if tt.evict {
-					options = append(options, subscriber.WithEvict(isTimeout, evicted), subscriber.WithTimeout[int](time.Second))
+					options = append(options, subscriber.WithEvict[int](isTimeout), subscriber.WithTimeout[int](time.Second))
 				}
 				id, err := b.Subscribe(ctx, func(_ context.Context, _ uuid.UUID, msg int) error {
 					events.record(fmt.Sprintf("handled %d", msg))
@@ -93,9 +92,6 @@ func TestSubscriberWithDone(t *testing.T) {
 					if len(done) != 0 {
 						t.Fatalf("done got the ID while handle held on to 1: %q", events.messages())
 					}
-				}
-				if sent := len(evicted) != 0; sent != tt.evict {
-					t.Errorf("evicted got an error: %t, want %t", sent, tt.evict)
 				}
 
 				close(hold)

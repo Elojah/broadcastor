@@ -60,10 +60,9 @@ type config[T any] struct {
 
 	errorHandler func(ctx context.Context, err error)
 	filter       func(msg T) bool
+	evict        func(err error) bool
 
-	evict   func(err error) bool
-	evicted chan<- *EvictedError[T]
-	done    []chan<- uuid.UUID
+	done []chan<- uuid.UUID
 }
 
 // New returns a subscriber holding the subscription's reference, which Unsubscribe drops.
@@ -317,21 +316,15 @@ func (s *Subscriber[T]) send(ctx context.Context, m message.Message[T]) bool {
 }
 
 // lose reports m, lost or failed with err, and evicts the subscriber if evict picks err. Only the call whose remove
-// succeeds reports an *EvictedError, then sends it on evicted, so a subscriber is evicted once, and never once removed.
-// A *ClosedError never reaches evict: an ended Seq loop's would race its own removal.
+// succeeds reports an *EvictedError, so a subscriber is evicted once, and never once removed. A *ClosedError never
+// reaches evict: an ended Seq loop's would race its own removal.
 func (s *Subscriber[T]) lose(m message.Message[T], err error) {
 	if s.config.evict == nil || errors.Is(err, ErrClosed) || !s.config.evict(err) || !s.remove(WithUnsubscribeDiscard()) {
 		s.report(m, err)
 
 		return
 	}
-	evicted := &EvictedError[T]{SubscriberID: s.id, Message: m.Value, Err: err}
-	s.report(m, evicted)
-	// Never blocks: the error handlers got it already.
-	select {
-	case s.config.evicted <- evicted:
-	default:
-	}
+	s.report(m, &EvictedError[T]{SubscriberID: s.id, Message: m.Value, Err: err})
 }
 
 // reserve counts an async send under way, unless WithAsyncLimit's are already.

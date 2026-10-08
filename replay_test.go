@@ -150,7 +150,7 @@ func TestSubscriberWithReplay_BroadcastWaits(t *testing.T) {
 		},
 			subscriber.WithReplay(replayOf(events, 1, 2)),
 			subscriber.WithTimeout[int](time.Second),
-			subscriber.WithEvict[int](isTimeout, nil),
+			subscriber.WithEvict[int](isTimeout),
 			subscriber.WithErrorHandler[int](recordLosses(t, events)),
 		)
 
@@ -183,7 +183,7 @@ func TestSubscriberWithReplay_Evicted(t *testing.T) {
 			return handleError(msg)
 		},
 			subscriber.WithReplay(replayOf(events, 1, 2, 3)),
-			subscriber.WithEvict[int](func(err error) bool { return errors.Is(err, handleError(2)) }, nil),
+			subscriber.WithEvict[int](func(err error) bool { return errors.Is(err, handleError(2)) }),
 			subscriber.WithErrorHandler[int](recordLosses(t, events)),
 		)
 		synctest.Wait()

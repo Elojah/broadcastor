@@ -54,7 +54,7 @@ var (
 // rounds with a Broadcastor each. It checks that nothing panics, every goroutine returns once closed, no subscriber
 // gets a message twice, a subscriber gets every message broadcast while subscribed and none outside, its replay comes
 // first, Stats add up once idle, done gets the ID once after handle's last call, and nothing is handled, reported or
-// sent on done or evicted after Shutdown.
+// sent on done after Shutdown.
 func TestStress(t *testing.T) {
 	t.Parallel()
 
@@ -135,12 +135,10 @@ type stressSub struct {
 	leave atomic.Bool
 	// notFound is set once an Unsubscribe found no subscriber before Close, which only an eviction explains.
 	notFound atomic.Bool
-	// done gets the ID once the subscriber is done (subscriber.WithDone), and evictedSent the eviction
-	// (subscriber.WithEvict). Room for two, so that a second send would show.
-	done        chan uuid.UUID
-	evictedSent chan *subscriber.EvictedError[int]
-	// doneAtShut and evictedAtShut are how many each held when Shutdown returned.
-	doneAtShut, evictedAtShut int
+	// done gets the ID once the subscriber is done (subscriber.WithDone). Room for two, so that a second send would show.
+	done chan uuid.UUID
+	// doneAtShut is how many it held when Shutdown returned.
+	doneAtShut int
 
 	mu     sync.Mutex
 	got    map[int]stressOutcome
@@ -263,7 +261,7 @@ func (s *stress) subscribe(ctx context.Context, t *testing.T) *stressSub {
 	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	sub := &stressSub{
 		seq: randN(3) == 0, cancel: cancel, shut: &s.shut, got: map[int]stressOutcome{}, failed: map[int]bool{},
-		done: make(chan uuid.UUID, 2), evictedSent: make(chan *subscriber.EvictedError[int], 2),
+		done: make(chan uuid.UUID, 2),
 	}
 	options := []subscriber.Option[int]{
 		subscriber.WithBuffer[int](randN(4)),
@@ -288,7 +286,7 @@ func (s *stress) subscribe(ctx context.Context, t *testing.T) *stressSub {
 		options = append(options, subscriber.WithReplay(sub.replayed))
 	}
 	if randN(2) == 0 {
-		options = append(options, subscriber.WithEvict(sub.evicter(), sub.evictedSent))
+		options = append(options, subscriber.WithEvict[int](sub.evicter()))
 	}
 
 	var (
@@ -369,7 +367,7 @@ func (s *stress) shutdown(ctx context.Context, t *testing.T) error {
 	s.shut.Store(true)
 	s.mu.Lock()
 	for _, sub := range s.subs {
-		sub.doneAtShut, sub.evictedAtShut = len(sub.done), len(sub.evictedSent)
+		sub.doneAtShut = len(sub.done)
 	}
 	s.mu.Unlock()
 	if errors.Is(err, context.DeadlineExceeded) {
@@ -688,7 +686,6 @@ func (sub *stressSub) problems(broadcasts []stressBroadcast, byNumber map[int]st
 	if sub.evictOn == "" && sub.evictions != 0 || sub.evictions > 1 {
 		problems = append(problems, fmt.Sprintf("evicted %d times, evicting on %q", sub.evictions, sub.evictOn))
 	}
-	problems = append(problems, sub.evictedProblems()...)
 	if sub.notFound.Load() && sub.evictions == 0 {
 		problems = append(problems, "Unsubscribe found no subscriber before Close, but it was never evicted")
 	}
@@ -751,25 +748,6 @@ func (sub *stressSub) left(byNumber map[int]stressBroadcast, closing int64) int6
 
 	// Evicted by a replayed value.
 	return min(leaving, sub.subscribing)
-}
-
-// evictedProblems checks what evicted got against what the error handler did. sub.mu must be held.
-func (sub *stressSub) evictedProblems() []string {
-	var problems []string
-	if n := len(sub.evictedSent); n != sub.evictedAtShut {
-		problems = append(problems, fmt.Sprintf("evicted held %d when Shutdown returned, %d after", sub.evictedAtShut, n))
-	}
-	errs := received(sub.evictedSent)
-	sent := make([]int, 0, len(errs))
-	for _, evicted := range errs {
-		sent = append(sent, evicted.Message)
-	}
-	if len(sent) != sub.evictions || sub.evictions != 0 && sent[0] != sub.evicted {
-		problems = append(problems, fmt.Sprintf("evicted got %v, but the error handler got %d evictions, the first by %d",
-			first(sent), sub.evictions, sub.evicted))
-	}
-
-	return problems
 }
 
 // optionProblems checks what done and the replay got. sub.mu must be held.
