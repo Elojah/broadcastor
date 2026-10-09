@@ -22,7 +22,7 @@ func TestSubscribe_ContextDone(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		handled := &recorder[int]{}
 		id, err := b.Subscribe(ctx, handled.handle)
 		if err != nil {
@@ -52,7 +52,7 @@ func TestSubscribe_ContextDoneWhileHandling(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		handled := &recorder[int]{hold: make(chan struct{})}
 		closed := &recorder[int]{}
 		id, err := b.Subscribe(ctx, handled.handle, subscriber.WithBuffer[int](1),
@@ -94,7 +94,7 @@ func TestSubscribe_ContextDoneFirst(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		handled := &recorder[int]{}
 		if _, err := b.Subscribe(ctx, handled.handle); err != nil {
 			t.Fatalf("Subscribe: %v", err)
@@ -117,7 +117,7 @@ func TestSubscribeSeq_ContextDoneBeforeLoop(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		closed := &recorder[int]{}
 		_, seq, err := b.SubscribeSeq(ctx, subscriber.WithBuffer[int](1),
 			subscriber.WithErrorHandler[int](recordClosed(t, closed)))
@@ -167,7 +167,7 @@ func TestSubscribe_ContextNoLeak(t *testing.T) {
 
 			synctest.Test(t, func(t *testing.T) {
 				ctx := neverDone{Context: context.Background(), done: make(chan struct{})}
-				b := broadcastor.NewBroadcastor[int]()
+				b := newBroadcastor[int](t)
 				handled := &recorder[int]{}
 				id, err := b.Subscribe(ctx, handled.handle)
 				if err != nil {
@@ -192,7 +192,7 @@ func TestSubscribe_ContextDoneRacesUnsubscribe(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		handled := &recorder[int]{}
 		id, err := b.Subscribe(ctx, handled.handle)
 		if err != nil {
@@ -211,15 +211,15 @@ func TestSubscribe_ContextDoneRacesUnsubscribe(t *testing.T) {
 	})
 }
 
-// A subscriber with subscriber.WithDetachedContext stays subscribed once its ctx is done, and handle gets a ctx with
-// the same values that is never done.
+// subscriber.WithDetachedContext keeps the subscriber once its ctx is done, and handle gets a ctx with the same values,
+// never done.
 func TestSubscriberWithDetachedContext(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
 		type key struct{}
 		ctx, cancel := context.WithCancel(context.WithValue(t.Context(), key{}, "subscribe"))
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		handled := &recorder[int]{}
 		id, err := b.Subscribe(ctx, func(ctx context.Context, id uuid.UUID, msg int) error {
 			if err := ctx.Err(); err != nil {
@@ -249,14 +249,13 @@ func TestSubscriberWithDetachedContext(t *testing.T) {
 	})
 }
 
-// A SubscribeSeq loop with subscriber.WithDetachedContext goes on once its ctx is done, and ends once its subscriber is
-// unsubscribed.
+// A SubscribeSeq loop with subscriber.WithDetachedContext outlives its ctx, and ends once unsubscribed.
 func TestSubscriberWithDetachedContext_SubscribeSeq(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		id, seq, err := b.SubscribeSeq(ctx, subscriber.WithDetachedContext[int]())
 		if err != nil {
 			t.Fatalf("SubscribeSeq: %v", err)
@@ -294,7 +293,7 @@ func TestMessageWithContext(t *testing.T) {
 		ctx := context.WithValue(subscribeCtx(t), key{}, "subscribe")
 		messageCtx := context.WithValue(t.Context(), key{}, "message")
 		defaultCtx := context.WithValue(t.Context(), key{}, "default")
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		subscribeRecording := func(options ...subscriber.Option[int]) (*recorder[string], uuid.UUID) {
 			values := &recorder[string]{}
 			id, err := b.Subscribe(ctx, func(ctx context.Context, _ uuid.UUID, _ int) error {
@@ -334,7 +333,7 @@ func TestMessageWithContext_Cancel(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(subscribeCtx(t))
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		release := make(chan struct{})
 		errs := &recorder[error]{}
 		id, err := b.Subscribe(ctx, func(ctx context.Context, _ uuid.UUID, _ int) error {
@@ -439,7 +438,7 @@ func TestMessageWithContext_ErrorHandlers(t *testing.T) {
 						got.record(fmt.Sprintf("%s: %t, ctx %s, done %v", who, errors.Is(err, tt.want), v, ctx.Err()))
 					}
 				}
-				b := broadcastor.NewBroadcastor[int]()
+				b := newBroadcastor[int](t)
 				tt.fail(t, b, subscriber.WithErrorHandler[int](errorHandler("subscriber")),
 					message.WithContext[int](context.WithValue(t.Context(), key{}, "message")),
 					message.WithErrorHandler[int](errorHandler("message")))
@@ -454,7 +453,7 @@ func TestMessageWithContext_ErrorHandlers(t *testing.T) {
 	}
 }
 
-// neverDone is a ctx type the context package does not know, so AfterFunc on it starts a goroutine, which leaks unless
+// neverDone is a ctx type unknown to package context, so AfterFunc on it starts a goroutine, which leaks unless
 // stopped.
 type neverDone struct {
 	context.Context //nolint:containedctx // it is the ctx itself, not a struct carrying one

@@ -1,5 +1,5 @@
-// A non-blocking Broadcast never waits: a subscriber that is busy in handle, or whose buffer is full, misses the
-// message, and its error handlers are given a *subscriber.DroppedError.
+// A non-blocking Broadcast never waits: a subscriber busy in handle, or with a full buffer, misses the message with a
+// *subscriber.DroppedError.
 //
 // handle waits for release, standing in for slow work.
 package main

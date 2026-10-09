@@ -1,5 +1,5 @@
-// A parallel Broadcast sends to every subscriber at once and waits for all of them: a slow subscriber holds up nobody
-// else, and messages stay in order, unlike with message.WithAsync.
+// A parallel Broadcast sends to every subscriber at once and waits for all: a slow subscriber holds up nobody else, and
+// messages stay in order, unlike with message.WithAsync.
 //
 // The slow subscriber's handle waits for release, which the fast one closes once it has got "second".
 package main
@@ -47,8 +47,8 @@ func main() {
 
 	handled.Add(4)
 	b.Broadcast(ctx, "first") // the slow subscriber takes it, then waits in handle
-	// Without message.WithParallel, this could wait forever: a sync Broadcast that gets to the slow subscriber first
-	// waits for it to be done with "first", which waits for the fast one to get "second".
+	// Without message.WithParallel, this could wait forever: a sync Broadcast reaching the slow subscriber first waits
+	// for it to finish "first", which waits for the fast one to get "second".
 	n := b.Broadcast(ctx, "second", message.WithParallel[string]())
 	handled.Wait()
 	fmt.Println("second handed to", n, "subscribers")

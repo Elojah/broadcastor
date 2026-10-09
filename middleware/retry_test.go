@@ -14,8 +14,7 @@ import (
 	"github.com/elojah/broadcastor/subscriber"
 )
 
-// The tests that check how long Retry waits run in a synctest bubble, whose fake clock makes the time between two calls
-// exactly the wait.
+// Tests of Retry's waits run in a synctest bubble, whose fake clock makes the time between two calls exactly the wait.
 
 // Retry calls the handler again after each error, with the same ctx, subscriber and message, first after Delay and then
 // after Delay times Multiplier, and returns nil once a call succeeds.
@@ -104,8 +103,7 @@ func TestRetry_Backoff(t *testing.T) {
 	}
 }
 
-// Once IsRetryable rejects an error, which it gets as the handler returned it, Retry returns that error without calling
-// the handler again.
+// Once IsRetryable, given the handler's error as is, rejects it, Retry returns it without calling the handler again.
 func TestRetry_NotRetryable(t *testing.T) {
 	t.Parallel()
 
@@ -197,8 +195,8 @@ func TestRetry_Jitter(t *testing.T) {
 	}
 }
 
-// Once ctx is done, Retry stops waiting and returns the error of the last call without calling the handler again. It
-// still makes the first call.
+// Once ctx is done, Retry stops waiting and returns the last error without calling the handler again. It still makes
+// the first call.
 func TestRetry_ContextDone(t *testing.T) {
 	t.Parallel()
 
@@ -235,6 +233,32 @@ func TestRetry_ContextDone(t *testing.T) {
 	if len(f.calls) != 1 {
 		t.Errorf("with ctx done and no delay, handler was called %d times, want once", len(f.calls))
 	}
+}
+
+// Do calls f again with ctx after each error, as Retry calls a handler, and returns nil once a call succeeds.
+func TestRetryPolicy_Do(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		type key struct{}
+		ctx := context.WithValue(t.Context(), key{}, "dial")
+		f := &flaky{errs: []error{attemptError(1), attemptError(2)}}
+		policy := middleware.RetryPolicy{Attempts: 5, Delay: time.Second, Multiplier: 3}
+
+		err := policy.Do(ctx, func(ctx context.Context) error {
+			if v := ctx.Value(key{}); v != "dial" {
+				t.Errorf("f got ctx value %v, want %q", v, "dial")
+			}
+
+			return f.handle(ctx, uuid.Nil, 0)
+		})
+		if err != nil {
+			t.Errorf("Do returned %v, want nil once a call succeeds", err)
+		}
+		if got, want := f.gaps(), []time.Duration{time.Second, 3 * time.Second}; !slices.Equal(got, want) {
+			t.Errorf("Do waited %v between calls, want %v", got, want)
+		}
+	})
 }
 
 // asIs reports whether err is want itself, not wrapped: the handler's errors must reach Retry's caller and IsRetryable

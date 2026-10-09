@@ -21,8 +21,8 @@ import (
 	"github.com/elojah/broadcastor/subscriber"
 )
 
-// deadlockTimeout bounds every wait, so a deadlock fails the test instead of hanging. In a synctest bubble, it fires
-// exactly when the bubble is deadlocked. The bubble also fails a test that leaves a subscriber's channel open.
+// deadlockTimeout bounds every wait, so a deadlock fails instead of hanging. In a synctest bubble, it fires exactly
+// when the bubble deadlocks.
 const deadlockTimeout = 10 * time.Second
 
 func TestBroadcast_DeliversAllMessagesInOrder(t *testing.T) {
@@ -30,7 +30,7 @@ func TestBroadcast_DeliversAllMessagesInOrder(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		const subscribers = 3
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		ids := make([]uuid.UUID, 0, subscribers)
 		recorders := make([]*recorder[int], 0, subscribers)
 		for range subscribers {
@@ -56,12 +56,24 @@ func TestBroadcast_DeliversAllMessagesInOrder(t *testing.T) {
 func TestBroadcast_NoSubscribers(t *testing.T) {
 	t.Parallel()
 
-	b := broadcastor.NewBroadcastor[int]()
+	b := newBroadcastor[int](t)
 	b.Broadcast(t.Context(), 1)
 }
 
-// The error handler is given every error handle returns, as is and in order, and both handle and the error handler are
-// given the ctx that was passed to Subscribe.
+// A Broadcastor never closed leaves no goroutine once its subscribers are done, so it can be garbage collected.
+func TestNewBroadcastor_NotClosed(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := broadcastor.NewBroadcastor[int]()
+		id := subscribe(t, b, func(context.Context, uuid.UUID, int) error { return nil })
+		b.Broadcast(t.Context(), 1)
+		unsubscribe(t, b, id)
+		// synctest.Test fails if a goroutine is left.
+	})
+}
+
+// The error handler gets every error handle returns, as is and in order, and both get the Subscribe ctx.
 func TestWithErrorHandler(t *testing.T) {
 	t.Parallel()
 
@@ -73,7 +85,7 @@ func TestWithErrorHandler(t *testing.T) {
 				t.Errorf("%s got a ctx with value %v, want the one passed to Subscribe", what, v)
 			}
 		}
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		errs := &recorder[error]{}
 		id, err := b.Subscribe(ctx, func(ctx context.Context, _ uuid.UUID, msg int) error {
 			checkCtx(ctx, "handle")
@@ -102,12 +114,12 @@ func TestWithErrorHandler(t *testing.T) {
 	})
 }
 
-// Without an error handler, errors from handle are discarded, and they do not hold the subscriber up.
+// Without an error handler, handle's errors are discarded without holding the subscriber up.
 func TestSubscribe_ErrorsWithoutHandler(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		r := &recorder[int]{}
 		id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
 			r.record(msg)
@@ -136,7 +148,7 @@ func TestSubscribe_ErrorsWithoutHandler(t *testing.T) {
 func TestUnsubscribe_UnknownID(t *testing.T) {
 	t.Parallel()
 
-	b := broadcastor.NewBroadcastor[int]()
+	b := newBroadcastor[int](t)
 	for _, id := range []uuid.UUID{uuid.Nil, uuid.New()} {
 		err := b.Unsubscribe(t.Context(), id)
 		var notFound *broadcastor.SubscriberNotFoundError
@@ -159,12 +171,11 @@ func TestUnsubscribe_Twice(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		r, id := record(t, b)
 		unsubscribe(t, b, id)
 
-		// A repeated Unsubscribe must fail without dropping the subscription's reference again, whether it comes before
-		// a Broadcast...
+		// A repeated Unsubscribe fails without dropping the reference again, before a Broadcast...
 		if err := b.Unsubscribe(t.Context(), id); !isNotFound(err) {
 			t.Errorf("second Unsubscribe = %v, want *SubscriberNotFoundError", err)
 		}
@@ -192,7 +203,7 @@ func TestUnsubscribe_StopsDelivery(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		gone, goneID := record(t, b)
 		stay, stayID := record(t, b)
 
@@ -210,13 +221,12 @@ func TestUnsubscribe_StopsDelivery(t *testing.T) {
 	})
 }
 
-// A subscriber stuck in handle holds Broadcast up only until ctx is done, and the messages Broadcast gave up on are
-// dropped rather than delivered late.
+// A stuck subscriber holds Broadcast up only until ctx is done, and what Broadcast gave up on is never delivered late.
 func TestBroadcast_ContextUnblocksStuckSubscriber(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		stuck, stuckID := hold(t, b)
 		b.Broadcast(t.Context(), 0) // stuck is now processing 0 and not reading
 
@@ -240,17 +250,15 @@ func TestBroadcast_ContextUnblocksStuckSubscriber(t *testing.T) {
 		if got, want := stuck.messages(), []int{0}; !slices.Equal(got, want) {
 			t.Errorf("stuck subscriber received %v, want %v", got, want)
 		}
-		// The reader is visited before or after the deadline depending on map order, and takes 2 even once ctx is done,
-		// since it is ready for it.
+		// Before or after the deadline, the ready reader takes 2.
 		if got, want := reader.messages(), []int{2}; !slices.Equal(got, want) {
 			t.Errorf("reader received %v, want %v", got, want)
 		}
 	})
 }
 
-// Removing a subscriber stuck in handle frees a Broadcast waiting on it right away, with a ctx that is never done, however
-// the subscriber is removed and the message sent: the message is reported as a *subscriber.ClosedError, and what the
-// subscriber took is still handled.
+// However a stuck subscriber is removed, and whatever the delivery, a Broadcast waiting on it with a ctx never done is
+// freed at once: the message is reported as a *subscriber.ClosedError, and what the subscriber took is still handled.
 func TestUnsubscribe_FreesBroadcast(t *testing.T) {
 	t.Parallel()
 
@@ -289,7 +297,7 @@ func TestUnsubscribe_FreesBroadcast(t *testing.T) {
 				synctest.Test(t, func(t *testing.T) {
 					ctx, cancel := context.WithCancel(subscribeCtx(t))
 					defer cancel()
-					b := broadcastor.NewBroadcastor[int]()
+					b := newBroadcastor[int](t)
 					handled := &recorder[int]{hold: make(chan struct{})}
 					closed := &recorder[int]{}
 					id, err := b.Subscribe(ctx, handled.handle, subscriber.WithBuffer[int](1),
@@ -330,14 +338,13 @@ func TestUnsubscribe_FreesBroadcast(t *testing.T) {
 	}
 }
 
-// handle unsubscribes itself while a Broadcast waits on it, so Unsubscribe must not wait for that Broadcast, which gives
-// up instead.
+// handle unsubscribes itself while a Broadcast waits on it: Unsubscribe must not wait, and the Broadcast gives up.
 func TestUnsubscribe_SelfDuringBroadcast(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx := t.Context()
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		other, otherID := record(t, b)
 
 		self := &recorder[int]{}
@@ -377,14 +384,14 @@ func TestUnsubscribe_SelfDuringBroadcast(t *testing.T) {
 	})
 }
 
-// Unsubscribing a subscriber while a Broadcast is stuck on another one: the victim gets that Broadcast's message or not
-// depending on map order, and its channel is closed once that Broadcast is done with it.
+// Unsubscribing one subscriber while a Broadcast is stuck on another: the first may or may not get the message, and its
+// channel closes once that Broadcast is done with it.
 func TestUnsubscribe_OtherSubscriberDuringBroadcast(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx := t.Context()
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		gate, gateID := hold(t, b)
 		victim, victimID := record(t, b)
 		b.Broadcast(ctx, 0) // gate is now processing 0 and not reading
@@ -413,14 +420,13 @@ func TestUnsubscribe_OtherSubscriberDuringBroadcast(t *testing.T) {
 	})
 }
 
-// A subscriber added while a Broadcast is running gets that Broadcast's message or not, and everything broadcast
-// afterwards.
+// A subscriber added during a Broadcast may or may not get its message, and gets everything after.
 func TestSubscribe_DuringBroadcast(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx := t.Context()
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		gate, gateID := hold(t, b)
 		b.Broadcast(ctx, 0) // gate is now processing 0 and not reading
 
@@ -448,14 +454,14 @@ func TestSubscribe_DuringBroadcast(t *testing.T) {
 	})
 }
 
-// With a buffer, Broadcast only waits for a stuck subscriber once its buffer is full, and whatever is still buffered
-// when it unsubscribes is processed before its channel is done.
+// Broadcast waits for a stuck buffered subscriber only once the buffer is full, and what is buffered at Unsubscribe is
+// still handled.
 func TestSubscriberWithBuffer(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
 		const buffer = 3
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		stuck := &recorder[int]{hold: make(chan struct{})}
 		id := subscribe(t, b, stuck.handle, subscriber.WithBuffer[int](buffer))
 		b.Broadcast(t.Context(), 0)
@@ -485,13 +491,13 @@ func TestSubscriberWithBuffer(t *testing.T) {
 	})
 }
 
-// An async Broadcast waits for no stuck subscriber, and its send to one gives up once that one is unsubscribed,
-// reporting the message as a *subscriber.ClosedError.
+// An async Broadcast never waits, and its send to a stuck subscriber gives up with a *subscriber.ClosedError once that
+// one is unsubscribed.
 func TestMessageWithAsync(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		stuck := &recorder[int]{hold: make(chan struct{})}
 		closed := &recorder[int]{}
 		stuckID := subscribe(t, b, stuck.handle, subscriber.WithErrorHandler[int](recordClosed(t, closed)))
@@ -524,13 +530,12 @@ func TestMessageWithAsync(t *testing.T) {
 	})
 }
 
-// An async Broadcast gives up on a stuck subscriber once ctx is done, drops the message and tells the subscriber's error
-// handler.
+// An async send to a stuck subscriber gives up once ctx is done, and tells its error handler.
 func TestMessageWithAsync_ContextDone(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		stuck := &recorder[int]{hold: make(chan struct{})}
 		errs := &recorder[error]{}
 		id := subscribe(t, b, stuck.handle, subscriber.WithErrorHandler[int](func(ctx context.Context, err error) {
@@ -566,13 +571,13 @@ func TestMessageWithAsync_ContextDone(t *testing.T) {
 	})
 }
 
-// Once a stuck subscriber has subscriber.WithAsyncLimit async sends under way, an async message is dropped right away,
-// and Broadcast does not count it. Once the subscriber has taken them, there is room again.
+// Past subscriber.WithAsyncLimit sends under way, an async message is dropped at once and not counted, until the
+// subscriber takes them.
 func TestSubscriberWithAsyncLimit(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		stuck := &recorder[int]{hold: make(chan struct{})}
 		losses := &recorder[string]{}
 		id := subscribe(t, b, stuck.handle, subscriber.WithAsyncLimit[int](2),
@@ -611,15 +616,15 @@ func TestSubscriberWithAsyncLimit(t *testing.T) {
 	})
 }
 
-// A message's error handler is given the errors about that message only, with the ctx passed to Subscribe, and the
-// failing subscriber's own error handler still gets them too.
+// A message's error handler gets only that message's errors, with the Subscribe ctx, and the subscriber's own still
+// gets them.
 func TestMessageWithErrorHandler(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
 		type key struct{}
 		ctx := context.WithValue(subscribeCtx(t), key{}, "subscribe")
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		subscriberErrs := &recorder[int]{}
 		failingID, err := b.Subscribe(ctx, func(_ context.Context, _ uuid.UUID, msg int) error {
 			return handleError(msg)
@@ -649,13 +654,13 @@ func TestMessageWithErrorHandler(t *testing.T) {
 	})
 }
 
-// A message's error handler is told when Broadcast gives up on a stuck subscriber, even one without an error handler of
-// its own, with the subscriber's ctx, which is not done, rather than the Broadcast one, which is.
+// A message's error handler learns when Broadcast gives up on a stuck subscriber with no handler of its own, with the
+// subscriber's ctx, not the done Broadcast one.
 func TestMessageWithErrorHandler_ContextDone(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		stuck, id := hold(t, b)
 		b.Broadcast(t.Context(), 0) // stuck is now processing 0 and not reading
 
@@ -686,13 +691,13 @@ func TestMessageWithErrorHandler_ContextDone(t *testing.T) {
 	})
 }
 
-// A subscriber whose default message options include message.WithAsync is sent every message from its own goroutine, so
-// a synchronous Broadcast does not wait for it, while the other subscribers still get the message before it returns.
+// A subscriber defaulting to message.WithAsync does not hold up a sync Broadcast, while the others still get the
+// message before it returns.
 func TestSubscriberWithDefaultMessageOptions_Async(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		stuck := &recorder[int]{hold: make(chan struct{})}
 		stuckID := subscribe(t, b, stuck.handle,
 			subscriber.WithDefaultMessageOptions(message.WithAsync[int]()))
@@ -723,13 +728,13 @@ func TestSubscriberWithDefaultMessageOptions_Async(t *testing.T) {
 	})
 }
 
-// A default message error handler gets the errors of every message, except those of a Broadcast that passes its own
-// error handler, which replaces it for that message.
+// A default message error handler gets every message's errors, except for a Broadcast passing its own, which replaces
+// it.
 func TestSubscriberWithDefaultMessageOptions_ErrorHandlerOverridden(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		defaults, override := &recorder[int]{}, &recorder[int]{}
 		id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
 			return handleError(msg)
@@ -756,7 +761,7 @@ func TestMessageWithTimeout(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		first, firstID := hold(t, b)
 		second, secondID := hold(t, b)
 		b.Broadcast(t.Context(), 0) // both are now processing 0 and not reading
@@ -790,13 +795,13 @@ func TestMessageWithTimeout(t *testing.T) {
 	})
 }
 
-// A subscriber's timeout bounds how long every Broadcast waits for it, unless the Broadcast passes a timeout of its own,
-// longer or shorter, or 0 for none.
+// A subscriber's timeout bounds every Broadcast's wait, unless the Broadcast passes its own: longer, shorter, or 0 for
+// none.
 func TestSubscriberWithTimeout(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		stuck := &recorder[int]{hold: make(chan struct{})}
 		timeouts := &recorder[int]{}
 		id := subscribe(t, b, stuck.handle, subscriber.WithTimeout[int](time.Second),
@@ -839,8 +844,7 @@ func TestSubscriberWithTimeout(t *testing.T) {
 	})
 }
 
-// Several goroutines broadcasting at once to a fixed set of subscribers: everyone gets every message, and each
-// broadcaster's messages arrive in the order it sent them.
+// Concurrent broadcasters to fixed subscribers: everyone gets every message, each broadcaster's in order.
 func TestBroadcast_Concurrent(t *testing.T) {
 	t.Parallel()
 
@@ -849,7 +853,7 @@ func TestBroadcast_Concurrent(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx := t.Context()
-		b := broadcastor.NewBroadcastor[msg]()
+		b := newBroadcastor[msg](t)
 		ids := make([]uuid.UUID, subscribers)
 		recorders := make([]*recorder[msg], subscribers)
 		for i := range subscribers {
@@ -891,15 +895,14 @@ func TestBroadcast_Concurrent(t *testing.T) {
 	})
 }
 
-// Two goroutines broadcasting at once, with an Unsubscribe in between: neither the Unsubscribe nor the second Broadcast
-// may close a channel that the first Broadcast is still sending on. The Unsubscribe frees the first Broadcast, so the
-// subscriber never gets 1.
+// Two concurrent Broadcasts with an Unsubscribe in between: neither the Unsubscribe nor the second Broadcast may close
+// the channel the first is sending on. The Unsubscribe frees the first, so 1 never arrives.
 func TestBroadcast_ConcurrentWithUnsubscribe(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx := t.Context()
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		stuck, id := hold(t, b)
 		b.Broadcast(ctx, 0) // stuck is now processing 0 and not reading
 
@@ -926,8 +929,8 @@ func TestBroadcast_ConcurrentWithUnsubscribe(t *testing.T) {
 	})
 }
 
-// A Broadcast that picks a channel up from the map just as it is unsubscribed must either send to it before it is
-// closed or skip it, never send to it after. The window is a few instructions wide, so this takes many rounds to hit.
+// A Broadcast that picks a subscriber up just as it is unsubscribed sends before its channel closes or skips it, never
+// after. The window is a few instructions wide, hence many rounds.
 func TestUnsubscribe_RacesBroadcastPickingUpChannel(t *testing.T) {
 	t.Parallel()
 
@@ -936,7 +939,7 @@ func TestUnsubscribe_RacesBroadcastPickingUpChannel(t *testing.T) {
 	for i := range iterations {
 		synctest.Test(t, func(t *testing.T) {
 			ctx := t.Context()
-			b := broadcastor.NewBroadcastor[int]()
+			b := newBroadcastor[int](t)
 			r, id := record(t, b)
 
 			start := make(chan struct{})
@@ -967,14 +970,13 @@ func TestUnsubscribe_RacesBroadcastPickingUpChannel(t *testing.T) {
 	}
 }
 
-// handle unsubscribes both of its consumer's subscriptions while a Broadcast waits on the first one: Unsubscribe must
-// never wait on a Broadcast, even through a lock. In real time, since a goroutine stuck on a mutex would hang a
-// synctest bubble.
+// handle unsubscribes both of its consumer's subscriptions while a Broadcast waits on the first: Unsubscribe never
+// waits on a Broadcast, even through a lock. In real time, since a goroutine stuck on a mutex hangs a synctest bubble.
 func TestUnsubscribe_SeveralThenDrain(t *testing.T) {
 	t.Parallel()
 
 	ctx := t.Context()
-	b := broadcastor.NewBroadcastor[int]()
+	b := newBroadcastor[int](t)
 
 	proceed := make(chan struct{})
 	handleDone := make(chan struct{})
@@ -1016,8 +1018,8 @@ func TestUnsubscribe_SeveralThenDrain(t *testing.T) {
 	waitClosed(t, secondBroadcastDone, "second Broadcast")
 }
 
-// Several goroutines unsubscribing the same subscriber at once, while a Broadcast runs: exactly one call must succeed,
-// since each success drops the subscription's reference and there is only one to drop.
+// Concurrent Unsubscribes of one subscriber during a Broadcast: exactly one succeeds, since there is one reference to
+// drop.
 func TestUnsubscribe_ParallelSameID(t *testing.T) {
 	t.Parallel()
 
@@ -1026,7 +1028,7 @@ func TestUnsubscribe_ParallelSameID(t *testing.T) {
 	for i := range iterations {
 		synctest.Test(t, func(t *testing.T) {
 			ctx := t.Context()
-			b := broadcastor.NewBroadcastor[int]()
+			b := newBroadcastor[int](t)
 			_, id := record(t, b)
 
 			var succeeded atomic.Int32
@@ -1069,7 +1071,7 @@ func TestUnsubscribe_ParallelDistinctIDs(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx := t.Context()
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		ids := make([]uuid.UUID, subscribers)
 		recorders := make([]*recorder[int], subscribers)
 		for i := range subscribers {
@@ -1103,7 +1105,7 @@ func TestSubscribe_Parallel(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx := subscribeCtx(t)
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		var mu sync.Mutex
 		recorders := make(map[uuid.UUID]*recorder[int], subscribers)
 		var wg sync.WaitGroup
@@ -1146,7 +1148,7 @@ func TestSubscribeUnsubscribe_ChurnDuringBroadcasts(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx := subscribeCtx(t)
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 
 		stop := make(chan struct{})
 		broadcasterDone := make(chan struct{})
@@ -1217,8 +1219,7 @@ func TestSubscribeUnsubscribe_ChurnDuringBroadcasts(t *testing.T) {
 	})
 }
 
-// Each typed error matches its own sentinel and no other, so errors.Is can tell them apart without knowing T, and still
-// matches whatever it wraps.
+// Each typed error matches its own sentinel only, without T, and still matches what it wraps.
 func TestErrors_Is(t *testing.T) {
 	t.Parallel()
 
@@ -1272,13 +1273,12 @@ func TestErrors_Is(t *testing.T) {
 	}
 }
 
-// A Broadcast passing message.WithSync waits for subscribers whose default is message.WithParallel, message.WithAsync or
-// message.WithNonBlocking, one at a time, as if they had none.
+// message.WithSync overrides a default of message.WithParallel, message.WithAsync or message.WithNonBlocking.
 func TestMessageWithSync(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		timeouts := &recorder[int]{}
 		defaults := []message.Option[int]{
 			message.WithParallel[int](), message.WithAsync[int](), message.WithNonBlocking[int](),
@@ -1321,13 +1321,12 @@ func TestMessageWithSync(t *testing.T) {
 	})
 }
 
-// Broadcast returns how many subscribers it handed the message to: those that took it when it waits for them, and every
-// one it started sending to when it does not.
+// Broadcast returns how many subscribers took the message, or, when it does not wait, how many sends it started.
 func TestBroadcast_Count(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		stuck, stuckID := hold(t, b)
 		_, firstID := record(t, b)
 		_, secondID := record(t, b)
@@ -1360,13 +1359,13 @@ func TestBroadcast_Count(t *testing.T) {
 	})
 }
 
-// A non-blocking Broadcast never waits: it hands the message to the subscribers that are idle, and drops it for those
-// still busy in handle, telling their error handlers.
+// A non-blocking Broadcast hands the message to idle subscribers, and drops it for busy ones, telling their error
+// handlers.
 func TestMessageWithNonBlocking(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		stuck, stuckID := hold(t, b)
 		reader, readerID := record(t, b)
 		b.Broadcast(t.Context(), 0)
@@ -1410,7 +1409,7 @@ func TestMessageWithNonBlocking_Buffer(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		const buffer = 2
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		stuck := &recorder[int]{hold: make(chan struct{})}
 		dropped := &recorder[int]{}
 		id := subscribe(t, b, stuck.handle, subscriber.WithBuffer[int](buffer),
@@ -1449,13 +1448,12 @@ func TestMessageWithNonBlocking_Buffer(t *testing.T) {
 	})
 }
 
-// A parallel Broadcast reaches the other subscribers without waiting for a stuck one, and returns only once the stuck
-// one has taken the message too.
+// A parallel Broadcast reaches the others without waiting for a stuck one, and returns once that one took it too.
 func TestMessageWithParallel(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		stuck, stuckID := hold(t, b)
 		reader, readerID := record(t, b)
 		b.Broadcast(t.Context(), 0)
@@ -1496,7 +1494,7 @@ func TestMessageWithParallel_Timeout(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		first, firstID := hold(t, b)
 		second, secondID := hold(t, b)
 		reader, readerID := record(t, b)
@@ -1531,13 +1529,12 @@ func TestMessageWithParallel_Timeout(t *testing.T) {
 	})
 }
 
-// Once ctx is done, a parallel Broadcast gives up on a stuck subscriber, but every idle one has already taken the
-// message.
+// Once ctx is done, a parallel Broadcast gives up on a stuck subscriber, after every idle one took the message.
 func TestMessageWithParallel_ContextDone(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		stuck := &recorder[int]{hold: make(chan struct{})}
 		errs := &recorder[error]{}
 		stuckID := subscribe(t, b, stuck.handle, subscriber.WithErrorHandler[int](func(_ context.Context, err error) {
@@ -1576,14 +1573,13 @@ func TestMessageWithParallel_ContextDone(t *testing.T) {
 	})
 }
 
-// Successive parallel Broadcasts from one goroutine reach every subscriber in order, however slow it is, since each
-// returns only once every subscriber has taken its message.
+// Parallel Broadcasts from one goroutine reach every subscriber in order, however slow, since each waits for all.
 func TestMessageWithParallel_Order(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
 		const messages = 50
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		delays := []time.Duration{time.Millisecond, 3 * time.Millisecond}
 		ids := make([]uuid.UUID, 0, len(delays))
 		recorders := make([]*recorder[int], 0, len(delays))
@@ -1621,7 +1617,7 @@ func TestSubscribeSeq(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		_, seq := subscribeSeq(t, b)
 
 		go func() {
@@ -1647,13 +1643,12 @@ func TestSubscribeSeq(t *testing.T) {
 	})
 }
 
-// The loop body takes the place of handle: while it runs, the subscriber is busy and takes nothing, so a non-blocking
-// Broadcast drops its message and a sync one waits.
+// While the loop body runs, the subscriber is busy: a non-blocking Broadcast drops its message and a sync one waits.
 func TestSubscribeSeq_BodyHoldsSubscriber(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		errs := &recorder[error]{}
 		_, seq := subscribeSeq(t, b, subscriber.WithErrorHandler[int](func(_ context.Context, err error) {
 			errs.record(err)
@@ -1703,15 +1698,15 @@ func TestSubscribeSeq_BodyHoldsSubscriber(t *testing.T) {
 	})
 }
 
-// Once the loop has broken, the messages the subscriber took but did not yield are reported as *subscriber.ClosedError,
-// with the ctx passed to SubscribeSeq, and a Broadcast that was waiting on the subscriber returns.
+// After a break, what was taken but not yielded is reported as *subscriber.ClosedError with the SubscribeSeq ctx, and a
+// waiting Broadcast returns.
 func TestSubscribeSeq_BreakReportsUnyielded(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
 		type key struct{}
 		ctx := context.WithValue(subscribeCtx(t), key{}, "seq")
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		closed := &recorder[int]{}
 		id, seq, err := b.SubscribeSeq(ctx, subscriber.WithBuffer[int](2),
 			subscriber.WithErrorHandler[int](func(ctx context.Context, err error) {
@@ -1766,7 +1761,7 @@ func TestSubscribeSeq_ContextDone(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		_, seq, err := b.SubscribeSeq(ctx)
 		if err != nil {
 			t.Fatalf("SubscribeSeq: %v", err)
@@ -1801,7 +1796,7 @@ func TestSubscribeSeq_ContextDoneFirst(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		errs := &recorder[error]{}
 		_, seq, err := b.SubscribeSeq(ctx, subscriber.WithBuffer[int](1),
 			subscriber.WithErrorHandler[int](func(_ context.Context, err error) {
@@ -1823,13 +1818,12 @@ func TestSubscribeSeq_ContextDoneFirst(t *testing.T) {
 	})
 }
 
-// Unsubscribing a SubscribeSeq subscriber from elsewhere ends its loop once it has yielded every message it took, like
-// a handle subscriber processes them after Unsubscribe.
+// Unsubscribing a SubscribeSeq subscriber ends its loop once it has yielded what it took.
 func TestSubscribeSeq_Unsubscribe(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		id, seq := subscribeSeq(t, b, subscriber.WithBuffer[int](2),
 			subscriber.WithErrorHandler[int](func(_ context.Context, err error) {
 				t.Errorf("error handler got %v, want no error", err)
@@ -1850,13 +1844,13 @@ func TestSubscribeSeq_Unsubscribe(t *testing.T) {
 	})
 }
 
-// The error a loop body passes to fail is handle's: the error handler gets it as is, and Stats count the message as
-// Failed. Not calling fail, or calling it with nil last, counts the message as Handled.
+// fail's error is handle's: the error handler gets it as is, and Stats count Failed. Not calling fail, or nil last,
+// counts Handled.
 func TestSubscribeSeq_Fail(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		failures := &recorder[int]{}
 		id, seq := subscribeSeq(t, b, subscriber.WithErrorHandler[int](recordFailures(t, failures)))
 
@@ -1894,7 +1888,7 @@ func TestSubscribeSeq_RangeOnce(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		_, seq := subscribeSeq(t, b)
 
 		done := make(chan struct{})
@@ -1921,13 +1915,12 @@ func TestSubscribeSeq_RangeOnce(t *testing.T) {
 	})
 }
 
-// A panic in the loop body reaches the caller, and still unsubscribes. The message is reported as a
-// *subscriber.ClosedError.
+// A panic in the loop body reaches the caller, unsubscribes, and reports the message as a *subscriber.ClosedError.
 func TestSubscribeSeq_Panic(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		closed := &recorder[int]{}
 		_, seq := subscribeSeq(t, b, subscriber.WithErrorHandler[int](recordClosed(t, closed)))
 
@@ -1955,7 +1948,7 @@ func TestClose(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		buffered := &recorder[int]{hold: make(chan struct{})}
 		bufferedID := subscribe(t, b, buffered.handle, subscriber.WithBuffer[int](2))
 		unbuffered, unbufferedID := record(t, b)
@@ -2006,14 +1999,13 @@ func TestClose(t *testing.T) {
 	})
 }
 
-// handle closes the Broadcastor while a Broadcast waits on it, so Close must not wait for that Broadcast, which gives up
-// instead.
+// handle closes the Broadcastor while a Broadcast waits on it: Close must not wait, and the Broadcast gives up.
 func TestClose_FromHandle(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx := t.Context()
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		other, _ := record(t, b)
 
 		self := &recorder[int]{}
@@ -2044,14 +2036,14 @@ func TestClose_FromHandle(t *testing.T) {
 		if got, want := self.messages(), []int{1}; !slices.Equal(got, want) {
 			t.Errorf("closing subscriber received %v, want %v", got, want)
 		}
-		// other is visited before or after self depending on map order, and after self it is already unsubscribed.
+		// other may come after self, already unsubscribed.
 		if got := other.messages(); !slices.Equal(got, []int{1}) && !slices.Equal(got, []int{1, 2}) {
 			t.Errorf("other subscriber received %v, want [1] or [1 2]", got)
 		}
 	})
 }
 
-// Close races with every other method: exactly one Close succeeds, and every subscription is refused or ended.
+// Close and Shutdown race every other method: exactly one succeeds, and every subscription is refused or ended.
 func TestClose_Parallel(t *testing.T) {
 	t.Parallel()
 
@@ -2059,7 +2051,7 @@ func TestClose_Parallel(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx := t.Context()
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 
 		stop := make(chan struct{})
 		broadcasterDone := make(chan struct{})
@@ -2084,13 +2076,17 @@ func TestClose_Parallel(t *testing.T) {
 			subscribersWG.Go(func() { subscribeUntilClosed(t, b, i%3) })
 		}
 		var succeeded atomic.Int32
-		for range closers {
+		for i := range closers {
 			closersWG.Go(func() {
-				switch err := b.Close(); {
+				name, closeIt := "Close", b.Close
+				if i%2 == 0 {
+					name, closeIt = "Shutdown", func() error { return b.Shutdown(ctx) }
+				}
+				switch err := closeIt(); {
 				case err == nil:
 					succeeded.Add(1)
 				case !errors.Is(err, broadcastor.ErrClosed):
-					t.Errorf("Close = %v, want nil or ErrClosed", err)
+					t.Errorf("%s = %v, want nil or ErrClosed", name, err)
 				}
 				if n := b.Broadcast(ctx, -1); n != 0 {
 					t.Errorf("Broadcast after Close handed the message to %d subscribers, want 0", n)
@@ -2105,7 +2101,7 @@ func TestClose_Parallel(t *testing.T) {
 		synctest.Wait()
 
 		if n := succeeded.Load(); n != 1 {
-			t.Errorf("%d Close calls succeeded, want 1", n)
+			t.Errorf("%d Close and Shutdown calls succeeded, want 1", n)
 		}
 	})
 }
@@ -2137,8 +2133,8 @@ func subscribeUntilClosed(t *testing.T, b *broadcastor.Broadcastor[int], kind in
 	}
 }
 
-// recorder is a handle function that records every message it is given, in order. If hold is set, handle does not
-// return until it is closed, so the subscriber stops reading and holds up the next Broadcast until then.
+// recorder is a handle that records every message, in order. With hold, handle blocks until it is closed, holding up
+// the next Broadcast.
 type recorder[T any] struct {
 	hold chan struct{}
 
@@ -2183,8 +2179,7 @@ func (e handleError) Error() string {
 	return fmt.Sprintf("handling %d failed", int(e))
 }
 
-// recordFailures returns an error handler that records the message of every handleError it is given into r, and fails
-// the test on any other error.
+// recordFailures returns an error handler that records each handleError's message into r, and fails on any other error.
 func recordFailures(t *testing.T, r *recorder[int]) func(context.Context, error) {
 	t.Helper()
 
@@ -2199,8 +2194,8 @@ func recordFailures(t *testing.T, r *recorder[int]) func(context.Context, error)
 	}
 }
 
-// recordTimeouts returns an error handler that records the message of every *TimeoutError wrapping
-// context.DeadlineExceeded it is given into r, and fails the test on any other error.
+// recordTimeouts returns an error handler that records the message of each *TimeoutError wrapping
+// context.DeadlineExceeded into r, and fails on any other error.
 func recordTimeouts(t *testing.T, r *recorder[int]) func(context.Context, error) {
 	t.Helper()
 
@@ -2215,8 +2210,16 @@ func recordTimeouts(t *testing.T, r *recorder[int]) func(context.Context, error)
 	}
 }
 
-// subscribeCtx is the test's ctx, never done, so a leaked subscriber fails the synctest test instead of being
-// unsubscribed when the test ends.
+// newBroadcastor returns a Broadcastor closed in Cleanup, since its goroutine would otherwise outlive a synctest bubble.
+func newBroadcastor[T any](tb testing.TB) *broadcastor.Broadcastor[T] {
+	tb.Helper()
+	b := broadcastor.NewBroadcastor[T]()
+	tb.Cleanup(func() { _ = b.Close() })
+
+	return b
+}
+
+// subscribeCtx is the test's ctx, never done, so that a leaked subscriber fails the test.
 func subscribeCtx(t *testing.T) context.Context {
 	t.Helper()
 
@@ -2295,6 +2298,19 @@ func recovered(f func()) any {
 	return r
 }
 
+// received returns what ch holds, without waiting.
+func received[E any](ch <-chan E) []E {
+	var got []E
+	for {
+		select {
+		case e := <-ch:
+			got = append(got, e)
+		default:
+			return got
+		}
+	}
+}
+
 func isNotFound(err error) bool {
 	var notFound *broadcastor.SubscriberNotFoundError
 
@@ -2322,8 +2338,7 @@ func waitGroup(t *testing.T, wg *sync.WaitGroup, what string) {
 
 var errNotConsecutive = errors.New("reordered or skipped")
 
-// checkConsecutive checks that got is a run of consecutive numbers, which is what one subscription receives while a
-// single goroutine broadcasts increasing numbers.
+// checkConsecutive checks that got is a run of consecutive numbers, as one subscription gets from one broadcaster.
 func checkConsecutive(got []int) error {
 	for i := 1; i < len(got); i++ {
 		if got[i] != got[i-1]+1 {

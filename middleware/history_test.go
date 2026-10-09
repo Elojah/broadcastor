@@ -14,8 +14,8 @@ import (
 
 var errPut = errors.New("put failed")
 
-// History puts a message the handler succeeds on, with the subscriber and a nil Err, and Put gets ctx's values but
-// never a done ctx. It puts nothing when the handler fails or panics, and returns what the handler returns.
+// History puts each message the handler succeeds on, with the subscriber, a nil Err, and a ctx with the same values,
+// never done. It puts nothing when the handler fails or panics, and returns what the handler returns.
 func TestHistory(t *testing.T) {
 	t.Parallel()
 

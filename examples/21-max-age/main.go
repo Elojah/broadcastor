@@ -1,7 +1,7 @@
-// middleware.MaxAge does not hand handle a message older than d, since a reading that waited behind a slow handle may be
-// worse than none. Each reading carries when it was taken, since the library stamps none. Here handle is busy with
-// reading 1 while reading 2 waits in the buffer, too long: the error handlers get a *subscriber.ExpiredError for it
-// instead. Reading 3 is fresh, and handled.
+// middleware.MaxAge does not hand handle a message older than d, since a reading that waited behind a slow handle may
+// be worse than none. Each reading carries when it was taken. handle is busy with reading 1 while reading 2 waits in
+// the buffer too long, so the error handlers get a *subscriber.ExpiredError for it instead. Reading 3 is fresh, and
+// handled.
 //
 // handle waits for release, standing in for slow work.
 package main

@@ -1,6 +1,6 @@
-// A Broadcast with a timeout gives up on a subscriber that does not take the message in time, and tells the error
-// handlers with a *subscriber.TimeoutError. message.WithErrorHandler gives the message a handler of its own, and
-// subscriber.WithTimeout sets a timeout for every message sent to one subscriber.
+// A Broadcast with a timeout gives up on a subscriber that does not take the message in time, with a
+// *subscriber.TimeoutError. message.WithErrorHandler gives the message a handler of its own, and subscriber.WithTimeout
+// sets a subscriber's default timeout.
 //
 // handle waits for release, standing in for slow work.
 package main

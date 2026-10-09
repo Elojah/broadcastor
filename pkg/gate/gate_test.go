@@ -9,8 +9,8 @@ import (
 	"github.com/elojah/broadcastor/pkg/gate"
 )
 
-// deadlockTimeout bounds every wait, so a deadlock fails the test instead of hanging. These tests run in real time: a
-// goroutine blocked on a sync.RWMutex would hang a synctest bubble.
+// deadlockTimeout bounds every wait, so a deadlock fails instead of hanging. In real time, since a goroutine blocked on
+// a sync.RWMutex hangs a synctest bubble.
 const deadlockTimeout = 10 * time.Second
 
 func TestGate_Close(t *testing.T) {

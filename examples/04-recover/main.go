@@ -1,5 +1,5 @@
-// With middleware.Recover, a panic in handle is reported to the error handler as a *subscriber.PanicError, and the
-// subscriber goes on with the next message. Without it, the panic crashes the program.
+// With middleware.Recover, a panic in handle reaches the error handler as a *subscriber.PanicError, and the subscriber
+// goes on. Without it, the program crashes.
 package main
 
 import (
@@ -23,6 +23,9 @@ func main() {
 	// Every message is either handled or reported.
 	var done sync.WaitGroup
 	id, err := b.Subscribe(ctx, func(_ context.Context, _ uuid.UUID, n int) error {
+		if n == 0 {
+			panic("division by zero")
+		}
 		fmt.Println("100 /", n, "=", 100/n)
 		done.Done()
 

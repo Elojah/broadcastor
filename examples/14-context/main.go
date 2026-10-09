@@ -1,6 +1,6 @@
 // message.WithContext gives a message its own ctx, which handle and the error handlers get instead of the Subscribe
-// ctx. Here a request broadcasts asynchronously and returns while the subscriber is busy, so the Broadcast is detached
-// from the request's ctx with context.WithoutCancel, bounded by a timeout, and carries the request ID.
+// ctx. Here a request broadcasts async and returns while the subscriber is busy, so the Broadcast is detached from the
+// request's ctx (context.WithoutCancel), bounded by a timeout, and carries the request ID.
 //
 // handle waits for release, standing in for slow work.
 package main

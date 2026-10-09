@@ -1,6 +1,5 @@
-// Every subscriber gets every message, and Broadcast returns how many subscribers it handed the message to.
-//
-// Each subscriber runs in its own goroutine, so the output of different subscribers interleaves.
+// Every subscriber gets every message, and Broadcast returns how many took it. Each subscriber runs in its own
+// goroutine, so their output interleaves.
 package main
 
 import (

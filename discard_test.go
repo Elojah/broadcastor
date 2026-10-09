@@ -9,19 +9,18 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/subscriber"
 )
 
-// Once unsubscribed with WithUnsubscribeDiscard, the subscriber reports what is left in its buffer instead of passing it
-// to handle, and a Broadcast that was waiting on it reports its message right away.
+// Once unsubscribed with WithUnsubscribeDiscard, the subscriber reports its buffer instead of handling it, and a
+// waiting Broadcast reports its message at once.
 func TestWithUnsubscribeDiscard(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
 		type key struct{}
 		ctx := context.WithValue(subscribeCtx(t), key{}, "subscribe")
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		handled := &recorder[int]{hold: make(chan struct{})}
 		closed := &recorder[int]{}
 		id, err := b.Subscribe(ctx, handled.handle, subscriber.WithBuffer[int](2),
@@ -62,13 +61,13 @@ func TestWithUnsubscribeDiscard(t *testing.T) {
 	})
 }
 
-// handle unsubscribes its own subscriber with WithUnsubscribeDiscard while a Broadcast is waiting to send to it:
-// Unsubscribe must not wait for that Broadcast, whose message is then reported instead of handled.
+// handle unsubscribes itself with WithUnsubscribeDiscard while a Broadcast waits on it: Unsubscribe must not wait, and
+// the message is reported, not handled.
 func TestWithUnsubscribeDiscard_Self(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		handled := &recorder[int]{}
 		closed := &recorder[int]{}
 		proceed := make(chan struct{})
@@ -107,7 +106,7 @@ func TestSubscriberWithUnsubscribeOptions(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		subscribeHeld := func(closed *recorder[int]) (*recorder[int], uuid.UUID) {
 			handled := &recorder[int]{hold: make(chan struct{})}
 			id := subscribe(t, b, handled.handle, subscriber.WithBuffer[int](2),
@@ -150,13 +149,13 @@ func TestSubscriberWithUnsubscribeOptions(t *testing.T) {
 	})
 }
 
-// A SubscribeSeq loop whose subscriber was unsubscribed with WithUnsubscribeDiscard yields nothing more, and every
-// message the subscriber took is reported, after that of a Broadcast that was waiting on it, which gives up right away.
+// After WithUnsubscribeDiscard, a SubscribeSeq loop yields nothing more, and everything taken is reported, after the
+// message of a waiting Broadcast, which gives up at once.
 func TestSubscribeSeq_UnsubscribeDiscard(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		closed := &recorder[int]{}
 		id, seq := subscribeSeq(t, b, subscriber.WithBuffer[int](2),
 			subscriber.WithErrorHandler[int](recordClosed(t, closed)))
@@ -186,13 +185,13 @@ func TestSubscribeSeq_UnsubscribeDiscard(t *testing.T) {
 	})
 }
 
-// A SubscribeSeq loop body that unsubscribes its own subscriber with WithUnsubscribeDiscard ends the loop, without
-// breaking out of it, and what is left in the buffer is reported.
+// A loop body unsubscribing itself with WithUnsubscribeDiscard ends the loop without a break, and its buffer is
+// reported.
 func TestSubscribeSeq_UnsubscribeDiscardSelf(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		closed := &recorder[int]{}
 		id, seq := subscribeSeq(t, b, subscriber.WithBuffer[int](2),
 			subscriber.WithErrorHandler[int](recordClosed(t, closed)))
@@ -217,8 +216,8 @@ func TestSubscribeSeq_UnsubscribeDiscardSelf(t *testing.T) {
 	})
 }
 
-// recordClosed returns an error handler that records the message of every *subscriber.ClosedError it is given into r,
-// and fails the test on any other error.
+// recordClosed returns an error handler that records each *subscriber.ClosedError's message into r, and fails on any
+// other error.
 func recordClosed(t *testing.T, r *recorder[int]) func(context.Context, error) {
 	t.Helper()
 

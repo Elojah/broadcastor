@@ -3,6 +3,8 @@ package message
 import (
 	"context"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // Option configures a message, when passed to Broadcast or to subscriber.WithDefaultMessageOptions.
@@ -18,8 +20,7 @@ func WithSync[T any]() Option[T] {
 }
 
 // WithParallel makes Broadcast send to every subscriber at once, then wait for all of them. A slow subscriber holds up
-// Broadcast but no other subscriber, and messages from one goroutine stay in order. ctx and the timeout start at the
-// same moment for every subscriber.
+// Broadcast but no other subscriber. Messages from one goroutine stay in order.
 func WithParallel[T any]() Option[T] {
 	return func(config *Config) {
 		config.Delivery = DeliveryParallel
@@ -27,12 +28,10 @@ func WithParallel[T any]() Option[T] {
 	}
 }
 
-// WithAsync makes Broadcast send to every subscriber from its own goroutine and return right away. A slow subscriber
-// holds up nobody, but successive messages may arrive out of order. Each send holds a goroutine until the subscriber
-// takes the message, which subscriber.WithAsyncLimit bounds.
+// WithAsync makes Broadcast send to each subscriber from a goroutine of its own and return at once. Messages may arrive
+// out of order, and each send holds a goroutine until taken (see subscriber.WithAsyncLimit).
 //
-// The sends keep using ctx after Broadcast returns, so cancelling it, as a request's deferred cancel does, drops every
-// message not taken yet. To let the sends outlive the caller:
+// The sends keep using the Broadcast ctx, so cancelling it drops every message not taken yet. To outlive the caller:
 //
 //	detached := context.WithoutCancel(ctx)
 //	b.Broadcast(detached, msg, message.WithAsync[T](), message.WithTimeout[T](time.Second), message.WithContext[T](detached))
@@ -43,8 +42,8 @@ func WithAsync[T any]() Option[T] {
 	}
 }
 
-// WithNonBlocking makes Broadcast never wait: a subscriber that is busy or has a full buffer misses the message, with a
-// *subscriber.DroppedError. ctx and the timeout play no part.
+// WithNonBlocking makes Broadcast never wait: a busy subscriber, or one with a full buffer, misses the message with a
+// *subscriber.DroppedError.
 func WithNonBlocking[T any]() Option[T] {
 	return func(config *Config) {
 		config.Delivery = DeliveryNonBlocking
@@ -52,9 +51,8 @@ func WithNonBlocking[T any]() Option[T] {
 	}
 }
 
-// WithContext makes handle, its middlewares and the error handlers get ctx for this message, instead of the
-// subscription's. ctx is used as is, so a message taken once ctx is done is handled with a done ctx: pass
-// context.WithoutCancel(ctx) to keep only its values. nil overrides a default.
+// WithContext gives handle, its middlewares and the error handlers ctx for this message, instead of the subscription's.
+// It is used as is, done or not: pass context.WithoutCancel(ctx) to keep only its values. nil overrides a default.
 func WithContext[T any](ctx context.Context) Option[T] {
 	return func(config *Config) {
 		config.Context = ctx
@@ -62,8 +60,8 @@ func WithContext[T any](ctx context.Context) Option[T] {
 	}
 }
 
-// WithErrorHandler adds a handler for every error about this message, called after the subscriber's own. Every
-// subscriber shares it, so it may be called concurrently and after Broadcast returns.
+// WithErrorHandler adds a handler for every error about this message, after the subscriber's own. Every subscriber
+// shares it, so it may run concurrently, and after Broadcast returns.
 func WithErrorHandler[T any](handler func(ctx context.Context, err error)) Option[T] {
 	return func(config *Config) {
 		config.ErrorHandler = handler
@@ -71,12 +69,30 @@ func WithErrorHandler[T any](handler func(ctx context.Context, err error)) Optio
 	}
 }
 
-// WithTimeout bounds how long Broadcast waits for each subscriber, counted from when Broadcast gets to it, whereas a ctx
-// deadline is shared by all of them. A subscriber that misses it gets a *subscriber.TimeoutError. 0 or less means
-// none, which overrides subscriber.WithTimeout.
+// WithTimeout bounds the wait for each subscriber, from when Broadcast gets to it, whereas a ctx deadline is shared.
+// A subscriber that misses it gets a *subscriber.TimeoutError. 0 or less means none, overriding subscriber.WithTimeout.
 func WithTimeout[T any](timeout time.Duration) Option[T] {
 	return func(config *Config) {
 		config.Timeout = timeout
 		config.set |= fieldTimeout
+	}
+}
+
+// WithSubscriberFilter hands the message only to the subscribers keep picks. Broadcast calls keep from its goroutine,
+// once per subscriber, before the subscriber's own filters (subscriber.WithFilter), so a skipped subscriber is neither
+// waited for, reported nor counted, and its filters never see the message. Several WithSubscriberFilter run in order
+// until one rejects. A nil keep is ignored, and so is keep in subscriber.WithDefaultMessageOptions.
+func WithSubscriberFilter[T any](keep func(id uuid.UUID) bool) Option[T] {
+	return func(config *Config) {
+		if keep == nil {
+			return
+		}
+		previous := config.SubscriberFilter
+		if previous == nil {
+			config.SubscriberFilter = keep
+
+			return
+		}
+		config.SubscriberFilter = func(id uuid.UUID) bool { return previous(id) && keep(id) }
 	}
 }

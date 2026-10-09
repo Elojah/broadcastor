@@ -1,7 +1,7 @@
-// One subscriber gets every message, in the order it was broadcast.
+// One subscriber gets every message, in broadcast order.
 //
-// handle runs in the subscriber's own goroutine, and Broadcast returns once the subscriber has taken the message, not
-// once it has handled it. So main waits for handle before it returns.
+// Broadcast returns once the subscriber has taken the message, not handled it, so main waits for handle before
+// returning.
 package main
 
 import (

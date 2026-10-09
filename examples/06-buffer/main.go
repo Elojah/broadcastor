@@ -1,4 +1,4 @@
-// With subscriber.WithBuffer, Broadcast only waits for a busy subscriber once its buffer is full.
+// With subscriber.WithBuffer, Broadcast waits for a busy subscriber only once its buffer is full.
 //
 // handle waits for release, standing in for slow work.
 package main
@@ -33,7 +33,7 @@ func main() {
 	}
 
 	// The subscriber takes 1 and waits in handle, while 2 and 3 wait in its buffer. Without the buffer, the second
-	// Broadcast would wait for handle, forever.
+	// Broadcast would wait forever.
 	for _, n := range []int{1, 2, 3} {
 		handled.Add(1)
 		b.Broadcast(ctx, n)

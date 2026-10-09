@@ -1,6 +1,6 @@
-// A watchdog reads Stats.Handling to find a subscriber whose handle hangs, such as on a serial read that never returns,
-// and unsubscribes it. Meanwhile subscriber.WithAsyncLimit bounds the async sends piling up behind it, each holding a
-// goroutine: past the limit, a message is dropped with a *subscriber.DroppedError. Stats.Sending shows how many wait.
+// A watchdog reads Stats.Handling to find a subscriber whose handle hangs, such as on a serial read, and unsubscribes
+// it. Meanwhile subscriber.WithAsyncLimit bounds the async sends piling up behind it: past the limit, a message is
+// dropped with a *subscriber.DroppedError. Stats.Sending shows how many wait.
 //
 // handle waits for release, standing in for a read that hangs.
 package main

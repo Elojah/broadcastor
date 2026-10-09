@@ -13,7 +13,7 @@ type Store[T any] interface {
 	Put(ctx context.Context, r Record[T]) error
 }
 
-// Record is a message, and Err, the error the subscriber's error handlers get about it if it was lost, else nil.
+// Record is a message, and Err, what the error handlers got about it if it was lost, else nil.
 type Record[T any] struct {
 	SubscriberID uuid.UUID
 	Message      T

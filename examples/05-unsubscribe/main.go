@@ -1,5 +1,5 @@
-// A subscriber can unsubscribe itself from handle, with the ID handle is given, since Unsubscribe never waits. Once it
-// has, Broadcast no longer hands it anything.
+// handle can unsubscribe its subscriber, with the ID it gets, since Unsubscribe never waits. Broadcast then hands it
+// nothing more.
 package main
 
 import (

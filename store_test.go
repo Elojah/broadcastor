@@ -26,13 +26,13 @@ var (
 	errSinkDown = errors.New("sink down")
 )
 
-// The store is given every message handle fails on, with the subscriber's ID and the error as handle returned it, right
-// before the error handler is given that error. Messages handled without error are not stored.
+// The store gets every message handle fails on, with the subscriber's ID and handle's error, right before the error
+// handler. Messages handled are not stored.
 func TestSubscriberWithDeadLetters(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		events := &recorder[string]{}
 		stored := &recordStore{}
 		id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
@@ -80,8 +80,8 @@ func TestSubscriberWithDeadLetters(t *testing.T) {
 	})
 }
 
-// Whatever the reason a subscriber loses a message, the store is given it, with the error the error handlers would be
-// given, even when the subscriber has no error handler.
+// The store gets every lost message, whatever the reason, with the error the error handlers would get, even without
+// one.
 func TestSubscriberWithDeadLetters_Lost(t *testing.T) {
 	t.Parallel()
 
@@ -162,7 +162,7 @@ func TestSubscriberWithDeadLetters_Lost(t *testing.T) {
 			t.Parallel()
 
 			synctest.Test(t, func(t *testing.T) {
-				b := broadcastor.NewBroadcastor[int]()
+				b := newBroadcastor[int](t)
 				stored := &recordStore{}
 				id := tt.lose(t, b, subscriber.WithDeadLetters[int](stored))
 				synctest.Wait()
@@ -185,7 +185,7 @@ func TestSubscriberWithDeadLetters_PutFails(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		stored := &recordStore{err: errPut}
 		failures := &recorder[int]{}
 		recordFailure := recordFailures(t, failures)
@@ -236,7 +236,7 @@ func TestSubscriberWithDeadLetters_Context(t *testing.T) {
 		type key struct{}
 		ctx, cancel := context.WithCancel(context.WithValue(subscribeCtx(t), key{}, "subscribe"))
 		messageCtx, cancelMessage := context.WithCancel(context.WithValue(t.Context(), key{}, "message"))
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		handled := &recorder[int]{hold: make(chan struct{})}
 		puts := &recorder[string]{}
 		_, err := b.Subscribe(ctx, handled.handle, subscriber.WithBuffer[int](2),
@@ -274,7 +274,7 @@ func TestSubscriberWithDeadLetters_ExactlyOnce(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		stored := &recordStore{}
 		options := []subscriber.Option[int]{
 			subscriber.WithBuffer[int](1),
@@ -357,13 +357,13 @@ func TestSubscriberWithDeadLetters_ExactlyOnce(t *testing.T) {
 	})
 }
 
-// A store.Ring can be read back while the subscriber runs: the reader gets every message the subscriber lost, in order,
-// with the subscriber's ID and the error about it.
+// A store.Ring can be read while the subscriber runs: the reader gets every lost message in order, with the
+// subscriber's ID and the error.
 func TestSubscriberWithDeadLetters_Ring(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		lost := store.NewRing[int](8)
 		id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
 			if msg%2 == 0 {
@@ -410,13 +410,13 @@ func TestSubscriberWithDeadLetters_Ring(t *testing.T) {
 	})
 }
 
-// With store.Enqueue as handle and store.Drain forwarding to a sink that is down, Broadcast never waits for the sink, and
-// once the sink is back up, it gets every message once, in order.
+// With store.Enqueue as handle and store.Drain forwarding to a sink that is down, Broadcast never waits for the sink,
+// which gets every message once, in order, once back up.
 func TestStoreAndForward(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		queue := store.NewRing[int](8)
 		id := subscribe(t, b, store.Enqueue[int](queue))
 

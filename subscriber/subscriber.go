@@ -1,9 +1,10 @@
-// Package subscriber holds the Subscriber a Broadcastor manages, the options passed to Subscribe, SubscribeSeq and
-// Unsubscribe, Handler and Middleware, and the errors about a subscriber's messages.
+// Package subscriber holds the subscriber options, Handler and Middleware, Store, Stats, the errors about messages, and
+// the Subscriber a Broadcastor manages.
 package subscriber
 
 import (
 	"context"
+	"errors"
 	"iter"
 	"sync/atomic"
 	"time"
@@ -13,7 +14,7 @@ import (
 	"github.com/elojah/broadcastor/message"
 )
 
-// Subscriber is one subscription of a Broadcastor. Consume reads its channel, for handle or for a single Seq loop.
+// Subscriber is one subscription of a Broadcastor. Only Consume reads its channel.
 type Subscriber[T any] struct {
 	id     uuid.UUID
 	ch     chan message.Message[T]
@@ -22,27 +23,26 @@ type Subscriber[T any] struct {
 	// created is what counters.handleStart counts from.
 	created time.Time
 
-	// ctx handles and reports every message that has no ctx of its own. Set by Attach.
+	// ctx is for every message without one of its own. Set by Attach.
 	ctx context.Context //nolint:containedctx // the subscription's, which outlives every call
 
-	// remove removes the subscriber from its Broadcastor, as Broadcastor.Unsubscribe does. Set by Attach.
+	// remove removes the subscriber from its Broadcastor, and reports whether this call did. Set by Attach.
 	remove func(options ...UnsubscribeOption) bool
+
+	// finished counts the subscriber out of its Broadcastor. Set by Attach.
+	finished func()
 
 	// done is closed by Unsubscribe, so that no send waits on a subscriber that is gone.
 	done chan struct{}
 
-	// discarding makes Consume report messages instead of processing them, and ends a Seq loop.
+	// discarding makes Consume report messages instead of handling them, and ends a Seq loop.
 	discarding atomic.Bool
 
 	// stopContextLifetime cancels the AfterFunc set by Attach. nil with WithDetachedContext.
 	stopContextLifetime func() bool
 
-	// refs counts the subscription plus each Broadcast sending on ch. Whoever drops it to 0 closes ch, so ch is never
-	// closed under a sender.
+	// refs counts the subscription plus each send on ch. Whoever drops it to 0 closes ch, so never under a sender.
 	refs atomic.Int64
-
-	// misses counts the messages lost in a row, for WithEvictAfter.
-	misses atomic.Int64
 
 	counters counters
 }
@@ -52,13 +52,23 @@ type config[T any] struct {
 	buffer              int
 	defaults            message.Config
 	unsubscribeDefaults unsubscription
-	errorHandler        func(ctx context.Context, err error)
+	detached            bool
 	store               Store[T]
 	middlewares         []Middleware[T]
-	detached            bool
-	evictAfter          int
 	asyncLimit          int
-	filter              func(msg T) bool
+	replay              iter.Seq[T]
+
+	errorHandler func(ctx context.Context, err error)
+	filter       func(msg T) bool
+	evict        func(err error) bool
+
+	done []ctxchan
+}
+
+// ctxchan is a WithDone channel, and the ctx that bounds the send on it.
+type ctxchan struct {
+	ctx context.Context //nolint:containedctx // bounds a send at the end of the subscription
+	ch  chan<- uuid.UUID
 }
 
 // New returns a subscriber holding the subscription's reference, which Unsubscribe drops.
@@ -80,12 +90,12 @@ func (s *Subscriber[T]) ID() uuid.UUID {
 	return s.id
 }
 
-// Attach ties the subscriber to its Broadcastor, which remove removes it from. The subscriber runs with ctx, and calls
-// remove once ctx is done, when a Seq loop ends, and to evict itself (WithEvictAfter). With WithDetachedContext, it
-// runs with context.WithoutCancel(ctx) instead, and ctx never removes it. It returns the ctx the subscriber runs with,
-// and must be called once, before anything else.
-func (s *Subscriber[T]) Attach(ctx context.Context, remove func(options ...UnsubscribeOption) bool) context.Context {
+// Attach sets the subscriber's ctx, and its Broadcastor's remove, called once ctx is done, when a Seq loop ends and to
+// evict, and finished, called once the subscriber is done, which must not block. It must be called once, first, and
+// returns the subscriber's ctx: context.WithoutCancel(ctx) with WithDetachedContext.
+func (s *Subscriber[T]) Attach(ctx context.Context, remove func(options ...UnsubscribeOption) bool, finished func()) context.Context {
 	s.remove = remove
+	s.finished = finished
 	if s.config.detached {
 		s.ctx = context.WithoutCancel(ctx)
 
@@ -97,10 +107,9 @@ func (s *Subscriber[T]) Attach(ctx context.Context, remove func(options ...Unsub
 	return ctx
 }
 
-// Deliver sends value to the subscriber, with config (message.NewConfig) laid over its defaults, and reports whether it
-// took it, or, for an async message, whether a send was started. A parallel message returns false and a channel that
-// yields the result instead. Failures are reported with the message's ctx, never ctx, which only bounds the wait.
-// A message the filter (WithFilter) rejects returns false, and nothing else happens.
+// Deliver sends value, with config laid over the subscriber's defaults, and reports whether it was taken, or for async,
+// whether a send started. A parallel send returns false and a channel yielding that instead. A value the filter
+// rejects returns false and does nothing else. ctx only bounds the wait.
 func (s *Subscriber[T]) Deliver(ctx context.Context, value T, config message.Config) (bool, <-chan bool) {
 	if s.config.filter != nil && !s.config.filter(value) {
 		return false, nil
@@ -108,16 +117,16 @@ func (s *Subscriber[T]) Deliver(ctx context.Context, value T, config message.Con
 	m := message.New(value, s.config.defaults, config)
 
 	if !s.acquire() {
-		s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: value}) //nolint:contextcheck // reported with the message's ctx, not the one bounding the wait
+		s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: value}) //nolint:contextcheck // reported with the message's ctx
 
 		return false, nil
 	}
 
 	if m.Config.Delivery == message.DeliveryAsync {
-		if !s.startSending() {
+		if !s.reserve() {
 			defer s.release()
 			s.counters.dropped.Add(1)
-			s.lose(m, &DroppedError[T]{SubscriberID: s.id, Message: value})
+			s.lose(m, &DroppedError[T]{SubscriberID: s.id, Message: value}) //nolint:contextcheck // reported with the message's ctx
 
 			return false, nil
 		}
@@ -141,7 +150,7 @@ func (s *Subscriber[T]) Deliver(ctx context.Context, value T, config message.Con
 }
 
 // Unsubscribe drops the subscription's reference, with the unsubscribe defaults then options. Only whoever removed the
-// subscriber from the Broadcastor calls it, once.
+// subscriber calls it, once.
 func (s *Subscriber[T]) Unsubscribe(options ...UnsubscribeOption) {
 	u := s.config.unsubscribeDefaults
 	for _, option := range options {
@@ -151,7 +160,7 @@ func (s *Subscriber[T]) Unsubscribe(options ...UnsubscribeOption) {
 	if u.discard {
 		s.discarding.Store(true)
 	}
-	// However the subscriber was removed, so nothing keeps waiting on a ctx that may never be done.
+	// However it was removed, so the AfterFunc does not outlive it.
 	if s.stopContextLifetime != nil {
 		s.stopContextLifetime()
 	}
@@ -161,30 +170,26 @@ func (s *Subscriber[T]) Unsubscribe(options ...UnsubscribeOption) {
 	s.release()
 }
 
-// Consume calls handle, wrapped in the middlewares, for every message until ch is closed, and reports its errors.
+// Consume calls handle, wrapped in the middlewares, for each replayed value then each message until ch closes, and
+// reports errors. It runs once, then sends its ID on each WithDone channel, then calls finished.
 func (s *Subscriber[T]) Consume(handle Handler[T]) {
+	defer s.finish()
 	handle = chain(handle, s.config.middlewares...)
+	if s.config.replay != nil {
+		s.replay(handle)
+	}
 	for m := range s.ch {
 		if s.discarding.Load() {
 			s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: m.Value})
 
 			continue
 		}
-		start := time.Now()
-		s.counters.handleStart.Store(int64(start.Sub(s.created)) + 1)
-		err := handle(s.context(m), s.id, m.Value)
-		s.counters.handleStart.Store(0)
-		s.counters.handle(time.Since(start), err)
-		// Reported outside the chain, so Recover never catches a panic in an error handler.
-		if err != nil {
-			s.report(m, err)
-		}
+		s.process(handle, m)
 	}
 }
 
-// Seq returns SubscribeSeq's iterator, which can be ranged over once. Ranging starts Consume, whose handle passes each
-// message to the loop, so the middlewares and error handlers apply as with Subscribe. When the loop ends, it removes
-// the subscriber, and Consume reports what is left on ch.
+// Seq returns SubscribeSeq's iterator, which ranges once. Ranging starts Consume, whose handle relays each message to
+// the loop, so the middlewares and error handlers apply as with Subscribe. Ending the loop removes the subscriber.
 func (s *Subscriber[T]) Seq() iter.Seq2[T, func(error)] {
 	var ranged atomic.Bool
 
@@ -199,8 +204,7 @@ func (s *Subscriber[T]) Seq() iter.Seq2[T, func(error)] {
 			close(r.messages)
 		}()
 		defer func() {
-			// Before stopped, through which handle learns that the loop ended: Consume then reports every later message
-			// itself, and only the one in handle goes through the middlewares.
+			// Before stopped, so that only the message in handle goes through the middlewares: Consume reports the rest.
 			s.discarding.Store(true)
 			close(r.stopped)
 			s.remove()
@@ -227,26 +231,67 @@ func (s *Subscriber[T]) Stats() Stats {
 	}
 }
 
+// finish sends the ID on each WithDone channel in turn, each waiting for a receiver until its ctx is done, then calls
+// finished, so that Shutdown returns after.
+func (s *Subscriber[T]) finish() {
+	for _, done := range s.config.done {
+		// Tried first, since select picks at random: a ready receiver gets the ID even once ctx is done.
+		select {
+		case done.ch <- s.id:
+			continue
+		default:
+		}
+		select {
+		case done.ch <- s.id:
+		case <-done.ctx.Done():
+		}
+	}
+	s.finished()
+}
+
+// replay processes each replayed value like a message, until the subscriber discards.
+func (s *Subscriber[T]) replay(handle Handler[T]) {
+	for value := range s.config.replay {
+		if s.discarding.Load() {
+			return
+		}
+		s.counters.delivered.Add(1)
+		s.process(handle, message.New(value, s.config.defaults, message.Config{}))
+	}
+}
+
+// process passes m to handle, counts it, and reports its error.
+func (s *Subscriber[T]) process(handle Handler[T], m message.Message[T]) {
+	start := time.Now()
+	s.counters.handleStart.Store(int64(start.Sub(s.created)) + 1)
+	err := handle(s.context(m), s.id, m.Value)
+	s.counters.handleStart.Store(0)
+	s.counters.handle(time.Since(start), err)
+	// Reported outside the chain, so Recover never catches a panic in an error handler or evict.
+	if err != nil {
+		s.lose(m, err)
+	}
+}
+
 // send hands m over and releases the caller's reference. It gives up once ctx is done, m's timeout runs out or the
 // subscriber is unsubscribed, or right away if m is non-blocking.
 func (s *Subscriber[T]) send(ctx context.Context, m message.Message[T]) bool {
 	defer s.release()
 
-	// Checked first, since select picks at random among ready cases: once unsubscribed, the subscriber takes no new
-	// message, but for a send racing Unsubscribe.
+	// Checked first, since select picks at random: once unsubscribed, only a send racing Unsubscribe gets through.
 	select {
 	case <-s.done:
-		s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: m.Value}) //nolint:contextcheck // reported with the message's ctx, not the one bounding the wait
+		s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: m.Value}) //nolint:contextcheck // reported with the message's ctx
 
 		return false
 	default:
 	}
 
-	// Before waiting, so that a subscriber ready for m costs neither a timer nor the locks of the select below, which
-	// takes every channel's. Even once ctx is done, it takes m.
+	// Tried first, so that a ready subscriber costs neither a timer nor the select's locks, and takes m even if ctx is
+	// done.
 	select {
 	case s.ch <- m:
-		s.taken()
+		s.counters.delivered.Add(1)
 
 		return true
 	default:
@@ -254,7 +299,7 @@ func (s *Subscriber[T]) send(ctx context.Context, m message.Message[T]) bool {
 
 	if m.Config.Delivery == message.DeliveryNonBlocking {
 		s.counters.dropped.Add(1)
-		s.lose(m, &DroppedError[T]{SubscriberID: s.id, Message: m.Value})
+		s.lose(m, &DroppedError[T]{SubscriberID: s.id, Message: m.Value}) //nolint:contextcheck // reported with the message's ctx
 
 		return false
 	}
@@ -268,41 +313,35 @@ func (s *Subscriber[T]) send(ctx context.Context, m message.Message[T]) bool {
 
 	select {
 	case s.ch <- m:
-		s.taken()
+		s.counters.delivered.Add(1)
 
 		return true
 	case <-s.done:
-		s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: m.Value}) //nolint:contextcheck // reported with the message's ctx, not the one bounding the wait
+		s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: m.Value}) //nolint:contextcheck // reported with the message's ctx
 
 		return false
 	case <-sendCtx.Done():
 		s.counters.timedOut.Add(1)
-		s.lose(m, &TimeoutError[T]{SubscriberID: s.id, Message: m.Value, Err: sendCtx.Err()})
+		s.lose(m, &TimeoutError[T]{SubscriberID: s.id, Message: m.Value, Err: sendCtx.Err()}) //nolint:contextcheck // reported with the message's ctx
 
 		return false
 	}
 }
 
-// taken counts a message the subscriber took, which ends a run of losses.
-func (s *Subscriber[T]) taken() {
-	s.counters.delivered.Add(1)
-	if s.config.evictAfter > 0 {
-		s.misses.Store(0)
-	}
-}
-
-// lose reports m, lost to err, and evicts the subscriber once it has lost evictAfter messages in a row (WithEvictAfter).
-// Only the loss whose remove deletes the subscriber is reported as an *EvictedError, once removed: so an eviction is
-// reported once, and never for a subscriber something else removed first.
+// lose reports m, lost or failed with err, and evicts the subscriber if evict picks err. Only the call whose remove
+// succeeds reports an *EvictedError, so a subscriber is evicted once, and never once removed. A *ClosedError never
+// reaches evict: an ended Seq loop's would race its own removal.
 func (s *Subscriber[T]) lose(m message.Message[T], err error) {
-	if s.config.evictAfter > 0 && s.misses.Add(1) >= int64(s.config.evictAfter) && s.remove(WithUnsubscribeDiscard()) {
-		err = &EvictedError[T]{SubscriberID: s.id, Message: m.Value, Err: err}
+	if s.config.evict == nil || errors.Is(err, ErrClosed) || !s.config.evict(err) || !s.remove(WithUnsubscribeDiscard()) {
+		s.report(m, err)
+
+		return
 	}
-	s.report(m, err)
+	s.report(m, &EvictedError[T]{SubscriberID: s.id, Message: m.Value, Err: err})
 }
 
-// startSending counts an async send under way, unless WithAsyncLimit's are already.
-func (s *Subscriber[T]) startSending() bool {
+// reserve counts an async send under way, unless WithAsyncLimit's are already.
+func (s *Subscriber[T]) reserve() bool {
 	limit := int64(s.config.asyncLimit)
 	if limit <= 0 {
 		s.counters.sending.Add(1)
@@ -367,8 +406,8 @@ func (s *Subscriber[T]) report(m message.Message[T], err error) {
 	}
 }
 
-// pull yields each message r's handle passes on, and sends back the error the loop body passed to fail, until yield
-// returns false, ctx is done, Consume has returned or the subscriber is discarding.
+// pull yields each relayed message and sends back the body's error, until the loop breaks, ctx is done, Consume
+// returns or the subscriber discards.
 func (s *Subscriber[T]) pull(r *relay[T], yield func(T, func(error)) bool) {
 	var err error
 	fail := func(e error) { err = e }
@@ -382,7 +421,7 @@ func (s *Subscriber[T]) pull(r *relay[T], yield func(T, func(error)) bool) {
 			err = nil
 			more := yield(msg, fail)
 			if !more {
-				// Before handle returns, so that Consume reports what is left instead of passing it on.
+				// Before handle returns, so that Consume reports what is left.
 				s.discarding.Store(true)
 			}
 			r.errs <- err

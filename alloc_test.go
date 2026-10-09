@@ -6,14 +6,12 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/message"
 	"github.com/elojah/broadcastor/subscriber"
 )
 
-// A Broadcast with no options allocates nothing in sync, buffered and non-blocking modes, and one with options
-// allocates once, however many subscribers there are. AllocsPerRun counts every goroutine's allocations, so the test
-// does not run in parallel.
+// A Broadcast allocates nothing without options in sync, buffered and non-blocking modes, and once with options,
+// whatever the number of subscribers. Not parallel: AllocsPerRun counts every goroutine's allocations.
 func TestBroadcast_Allocs(t *testing.T) { //nolint:paralleltest // AllocsPerRun counts every goroutine's allocations
 	const (
 		subscribers = 10
@@ -38,9 +36,15 @@ func TestBroadcast_Allocs(t *testing.T) { //nolint:paralleltest // AllocsPerRun 
 			broadcast: []message.Option[int]{message.WithNonBlocking[int]()},
 			want:      1,
 		},
+		{
+			name:      "subscriber filter",
+			subscribe: []subscriber.Option[int]{subscriber.WithBuffer[int](buffer)},
+			broadcast: []message.Option[int]{message.WithSubscriberFilter[int](func(uuid.UUID) bool { return true })},
+			want:      1,
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			b := broadcastor.NewBroadcastor[int]()
+			b := newBroadcastor[int](t)
 			for range subscribers {
 				subscribe(t, b, func(context.Context, uuid.UUID, int) error { return nil }, tt.subscribe...)
 			}
@@ -52,10 +56,6 @@ func TestBroadcast_Allocs(t *testing.T) { //nolint:paralleltest // AllocsPerRun 
 			})
 			if got > tt.want {
 				t.Errorf("Broadcast to %d subscribers allocates %v times, want at most %v", subscribers, got, tt.want)
-			}
-
-			if err := b.Close(); err != nil {
-				t.Fatalf("Close: %v", err)
 			}
 		})
 	}

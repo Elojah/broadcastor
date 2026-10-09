@@ -19,9 +19,8 @@ var benchSubscribers = []int{1, 10, 100, 1000}
 // benchBuffer is the buffer of every buffered subscriber in the benchmarks.
 const benchBuffer = 64
 
-// BenchmarkBroadcast measures the latency of one Broadcast until every subscriber has handled it, for each delivery
-// mode. That is mostly the wake-up of each subscriber's parked goroutine: BenchmarkBroadcast_Throughput measures
-// Broadcast itself. Waiting keeps async Broadcasts from piling up goroutines.
+// BenchmarkBroadcast measures one Broadcast until every subscriber has handled it, per delivery mode: mostly waking
+// each parked goroutine. Waiting keeps async Broadcasts from piling up goroutines.
 func BenchmarkBroadcast(b *testing.B) {
 	modes := []struct {
 		name      string
@@ -40,11 +39,10 @@ func BenchmarkBroadcast(b *testing.B) {
 	for _, subscribers := range benchSubscribers {
 		for _, mode := range modes {
 			b.Run(fmt.Sprintf("subscribers=%d/%s", subscribers, mode.name), func(b *testing.B) {
-				bc := broadcastor.NewBroadcastor[int]()
+				bc := newBroadcastor[int](b)
 				var handled sync.WaitGroup
 				for range subscribers {
-					// Not b.Context(), which is done before Cleanup runs, and would have unsubscribed them by then.
-					id, err := bc.Subscribe(context.WithoutCancel(b.Context()), func(context.Context, uuid.UUID, int) error {
+					_, err := bc.Subscribe(b.Context(), func(context.Context, uuid.UUID, int) error {
 						handled.Done()
 
 						return nil
@@ -52,11 +50,6 @@ func BenchmarkBroadcast(b *testing.B) {
 					if err != nil {
 						b.Fatalf("Subscribe: %v", err)
 					}
-					b.Cleanup(func() {
-						if err := bc.Unsubscribe(b.Context(), id); err != nil {
-							b.Errorf("Unsubscribe(%s): %v", id, err)
-						}
-					})
 				}
 
 				b.ReportAllocs()
@@ -71,8 +64,7 @@ func BenchmarkBroadcast(b *testing.B) {
 }
 
 // BenchmarkBroadcast_Throughput measures Broadcast itself, per message a subscriber gets: subscribers are buffered, and
-// the benchmark waits for them once, after the last Broadcast. It loops over b.N rather than b.Loop, which would stop
-// the timer before that wait.
+// waited for once, after the last Broadcast. It loops over b.N, since b.Loop would stop the timer before that wait.
 func BenchmarkBroadcast_Throughput(b *testing.B) {
 	modes := []struct {
 		name      string
@@ -86,7 +78,7 @@ func BenchmarkBroadcast_Throughput(b *testing.B) {
 	for _, subscribers := range benchSubscribers {
 		for _, mode := range modes {
 			b.Run(fmt.Sprintf("subscribers=%d/%s", subscribers, mode.name), func(b *testing.B) {
-				bc := broadcastor.NewBroadcastor[int]()
+				bc := newBroadcastor[int](b)
 				wait := subscribeCounting(b, bc, subscribers, b.N, subscriber.WithBuffer[int](benchBuffer))
 
 				b.ReportAllocs()
@@ -101,12 +93,12 @@ func BenchmarkBroadcast_Throughput(b *testing.B) {
 	}
 }
 
-// BenchmarkBroadcast_Concurrent is BenchmarkBroadcast_Throughput in sync mode from GOMAXPROCS goroutines at once, so
-// that they contend on each subscriber's reference count, counters and channel.
+// BenchmarkBroadcast_Concurrent is BenchmarkBroadcast_Throughput in sync mode from GOMAXPROCS goroutines, contending on
+// each subscriber's references, counters and channel.
 func BenchmarkBroadcast_Concurrent(b *testing.B) {
 	for _, subscribers := range benchSubscribers {
 		b.Run(fmt.Sprintf("subscribers=%d", subscribers), func(b *testing.B) {
-			bc := broadcastor.NewBroadcastor[int]()
+			bc := newBroadcastor[int](b)
 			// RunParallel shares the b.N Broadcasts out between its goroutines.
 			wait := subscribeCounting(b, bc, subscribers, b.N, subscriber.WithBuffer[int](benchBuffer))
 
@@ -124,12 +116,12 @@ func BenchmarkBroadcast_Concurrent(b *testing.B) {
 }
 
 // BenchmarkBroadcast_Churn is BenchmarkBroadcast_Throughput in sync mode while another goroutine subscribes and
-// unsubscribes, so that Broadcast ranges over a sync.Map that has writes. Only the steady subscribers count as
-// deliveries, and the allocations include the churn's.
+// unsubscribes, so Broadcast ranges over a sync.Map being written. Only the steady subscribers count as deliveries, and
+// the allocations include the churn's.
 func BenchmarkBroadcast_Churn(b *testing.B) {
 	for _, subscribers := range benchSubscribers {
 		b.Run(fmt.Sprintf("subscribers=%d", subscribers), func(b *testing.B) {
-			bc := broadcastor.NewBroadcastor[int]()
+			bc := newBroadcastor[int](b)
 			wait := subscribeCounting(b, bc, subscribers, b.N, subscriber.WithBuffer[int](benchBuffer))
 
 			stop := make(chan struct{})
@@ -167,7 +159,7 @@ func BenchmarkBroadcast_Churn(b *testing.B) {
 
 // BenchmarkSubscribeUnsubscribe measures a subscription that comes and goes without ever getting a message.
 func BenchmarkSubscribeUnsubscribe(b *testing.B) {
-	bc := broadcastor.NewBroadcastor[int]()
+	bc := newBroadcastor[int](b)
 	b.ReportAllocs()
 	for b.Loop() {
 		if err := subscribeUnsubscribe(b.Context(), bc); err != nil {
@@ -179,7 +171,7 @@ func BenchmarkSubscribeUnsubscribe(b *testing.B) {
 // BenchmarkSubscribeUnsubscribe_Parallel is BenchmarkSubscribeUnsubscribe from GOMAXPROCS goroutines at once, on the
 // same Broadcastor.
 func BenchmarkSubscribeUnsubscribe_Parallel(b *testing.B) {
-	bc := broadcastor.NewBroadcastor[int]()
+	bc := newBroadcastor[int](b)
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
@@ -204,9 +196,8 @@ func subscribeUnsubscribe(ctx context.Context, bc *broadcastor.Broadcastor[int],
 	return nil
 }
 
-// subscribeCounting subscribes subscribers that each expect messages, and returns a func that waits until every one
-// has handled them. Each counts on its own, so waiting adds no contention between them. They are unsubscribed once
-// b.Context() is done, after each run of the benchmark function.
+// subscribeCounting subscribes subscribers that each expect messages, and returns a func waiting until each has handled
+// them. Each counts on its own, so waiting adds no contention. b.Context() unsubscribes them after each run.
 func subscribeCounting(b *testing.B, bc *broadcastor.Broadcastor[int], subscribers, messages int, options ...subscriber.Option[int]) func() {
 	b.Helper()
 	done := make([]chan struct{}, subscribers)

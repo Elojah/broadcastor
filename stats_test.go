@@ -136,7 +136,7 @@ func TestStats(t *testing.T) {
 			t.Parallel()
 
 			synctest.Test(t, func(t *testing.T) {
-				b := broadcastor.NewBroadcastor[int]()
+				b := newBroadcastor[int](t)
 				id, release := tt.run(t, b)
 				synctest.Wait()
 				checkStats(t, b, id, tt.want)
@@ -158,7 +158,7 @@ func TestStats_SubscribeSeq(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		id, seq := subscribeSeq(t, b)
 		loopDone := make(chan struct{})
 		go func() {
@@ -185,7 +185,7 @@ func TestStats_Subscribers(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		checkIDs := func(want []uuid.UUID, when string) {
 			t.Helper()
 			stats := b.Stats()
@@ -217,13 +217,13 @@ func TestStats_Subscribers(t *testing.T) {
 	})
 }
 
-// However messages are sent, each one a Broadcast picks a subscriber up for is counted once, the losses are the errors
+// However sent, each message a Broadcast picks a subscriber up for is counted once, the losses match the errors
 // reported, and HandleTime is the time spent in handle.
 func TestStats_AddUp(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := broadcastor.NewBroadcastor[int]()
+		b := newBroadcastor[int](t)
 		var handleErrs, seqErrs atomic.Uint64
 		options := func(errs *atomic.Uint64) []subscriber.Option[int] {
 			return []subscriber.Option[int]{
