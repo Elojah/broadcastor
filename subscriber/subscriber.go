@@ -29,6 +29,9 @@ type Subscriber[T any] struct {
 	// remove removes the subscriber from its Broadcastor, and reports whether this call did. Set by Attach.
 	remove func(options ...UnsubscribeOption) bool
 
+	// finished is the channel its Broadcastor counts subscribers out on. Set by Attach.
+	finished chan<- uuid.UUID
+
 	// done is closed by Unsubscribe, so that no send waits on a subscriber that is gone.
 	done chan struct{}
 
@@ -88,10 +91,11 @@ func (s *Subscriber[T]) ID() uuid.UUID {
 }
 
 // Attach sets the subscriber's ctx, and its Broadcastor's remove, called once ctx is done, when a Seq loop ends and to
-// evict. It must be called once, first, and returns the subscriber's ctx: context.WithoutCancel(ctx) with
-// WithDetachedContext.
-func (s *Subscriber[T]) Attach(ctx context.Context, remove func(options ...UnsubscribeOption) bool) context.Context {
+// evict, and finished, which gets the ID once the subscriber is done and must always have a receiver. It must be called
+// once, first, and returns the subscriber's ctx: context.WithoutCancel(ctx) with WithDetachedContext.
+func (s *Subscriber[T]) Attach(ctx context.Context, remove func(options ...UnsubscribeOption) bool, finished chan<- uuid.UUID) context.Context {
 	s.remove = remove
+	s.finished = finished
 	if s.config.detached {
 		s.ctx = context.WithoutCancel(ctx)
 
@@ -167,7 +171,7 @@ func (s *Subscriber[T]) Unsubscribe(options ...UnsubscribeOption) {
 }
 
 // Consume calls handle, wrapped in the middlewares, for each replayed value then each message until ch closes, and
-// reports errors. It runs once, then sends its ID on each WithDone channel.
+// reports errors. It runs once, then sends its ID on each WithDone channel, then on finished.
 func (s *Subscriber[T]) Consume(handle Handler[T]) {
 	defer s.finish()
 	handle = chain(handle, s.config.middlewares...)
@@ -227,7 +231,8 @@ func (s *Subscriber[T]) Stats() Stats {
 	}
 }
 
-// finish sends the ID on each WithDone channel in turn, each waiting for a receiver until its ctx is done.
+// finish sends the ID on each WithDone channel in turn, each waiting for a receiver until its ctx is done, then on
+// finished, so that Shutdown returns after.
 func (s *Subscriber[T]) finish() {
 	for _, done := range s.config.done {
 		// Tried first, since select picks at random: a ready receiver gets the ID even once ctx is done.
@@ -241,6 +246,7 @@ func (s *Subscriber[T]) finish() {
 		case <-done.ctx.Done():
 		}
 	}
+	s.finished <- s.id
 }
 
 // replay processes each replayed value like a message, until the subscriber discards.

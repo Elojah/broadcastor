@@ -22,10 +22,8 @@ At `21d751b` (Intel Core Ultra 5 226V, GOMAXPROCS 8), per subscriber and per `Br
 
 ## Short-term: small, no new invariant
 
-- [ ] Win back `Subscribe`'s allocations: a pair now costs 16 and 1157 B, against 11 and 737 B above. Most of the five
-  extra come from `add` appending the Broadcastor's own `WithDone` (the option, a copy of the options, `WithoutCancel`,
-  the `ctxchan` slice). Passing its channel to `Attach` instead, sent on after the caller's, keeps the order `Shutdown`
-  relies on. Then refresh the baseline, which predates `Shutdown`, `WithFilter` and `WithDone`.
+- [ ] Refresh the baseline, which predates `Shutdown`, `WithFilter` and `WithDone`: a `Subscribe` and `Unsubscribe` pair
+  now costs 13 allocations and 1070 B, against 11 and 737 B above.
 - [ ] `Broadcastor.Send(ctx, id, msg, options...)`: hands msg to one subscriber through `Deliver`, so no new invariant,
   and returns whether it was taken, or a `*SubscriberNotFoundError`. For commands to one handler:
   `message.WithSubscriberFilter` reaches one too, but ranges over every subscriber.

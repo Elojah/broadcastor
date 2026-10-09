@@ -42,8 +42,7 @@ func BenchmarkBroadcast(b *testing.B) {
 				bc := newBroadcastor[int](b)
 				var handled sync.WaitGroup
 				for range subscribers {
-					// Not b.Context(), which is done before Cleanup runs, and would have unsubscribed them by then.
-					id, err := bc.Subscribe(context.WithoutCancel(b.Context()), func(context.Context, uuid.UUID, int) error {
+					_, err := bc.Subscribe(b.Context(), func(context.Context, uuid.UUID, int) error {
 						handled.Done()
 
 						return nil
@@ -51,11 +50,6 @@ func BenchmarkBroadcast(b *testing.B) {
 					if err != nil {
 						b.Fatalf("Subscribe: %v", err)
 					}
-					b.Cleanup(func() {
-						if err := bc.Unsubscribe(b.Context(), id); err != nil {
-							b.Errorf("Unsubscribe(%s): %v", id, err)
-						}
-					})
 				}
 
 				b.ReportAllocs()

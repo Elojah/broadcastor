@@ -57,10 +57,6 @@ func TestBroadcast_Allocs(t *testing.T) { //nolint:paralleltest // AllocsPerRun 
 			if got > tt.want {
 				t.Errorf("Broadcast to %d subscribers allocates %v times, want at most %v", subscribers, got, tt.want)
 			}
-
-			if err := b.Close(); err != nil {
-				t.Fatalf("Close: %v", err)
-			}
 		})
 	}
 }

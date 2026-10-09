@@ -23,8 +23,8 @@ type Broadcastor[T any] struct {
 	// gate makes Close wait for any add under way, so Close refuses or sees each subscriber.
 	gate gate.Gate
 
-	// done gets each subscriber's ID once it is done (subscriber.WithDone), and uuid.Nil from the first Close. Only
-	// drain receives on it.
+	// done gets each subscriber's ID once it is done (subscriber.Subscriber.Attach), and uuid.Nil from the first Close.
+	// Only drain receives on it.
 	done chan uuid.UUID
 
 	// running counts the subscribers not done yet, plus one until the first Close. Only add raises it, under gate, so
@@ -200,9 +200,7 @@ func (b *Broadcastor[T]) add(ctx context.Context, options []subscriber.Option[T]
 	if err != nil {
 		return nil, err
 	}
-	// Last, so that the caller's WithDone channels get the ID before Shutdown returns. Never done, since drain always
-	// receives, so that running misses no ID.
-	s := subscriber.New(id, append(slices.Clip(options), subscriber.WithDone[T](context.WithoutCancel(ctx), b.done))...)
+	s := subscriber.New(id, options...)
 
 	if !b.gate.Enter() {
 		return nil, ErrClosed
@@ -211,7 +209,7 @@ func (b *Broadcastor[T]) add(ctx context.Context, options []subscriber.Option[T]
 	b.running.Add(1)
 
 	// Before Store, so that whoever removes the subscriber stops its ctx watch.
-	ctx = s.Attach(ctx, func(options ...subscriber.UnsubscribeOption) bool { return b.remove(id, options...) })
+	ctx = s.Attach(ctx, func(options ...subscriber.UnsubscribeOption) bool { return b.remove(id, options...) }, b.done)
 	b.subscribers.Store(id, s)
 	// If ctx was already done, the watch may have run before Store and found nothing.
 	if ctx.Err() != nil {

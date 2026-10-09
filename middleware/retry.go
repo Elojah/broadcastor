@@ -12,7 +12,7 @@ import (
 	"github.com/elojah/broadcastor/subscriber"
 )
 
-// RetryPolicy sets how Retry retries. Its zero value never retries.
+// RetryPolicy sets how Retry and Do retry. Its zero value never retries.
 type RetryPolicy struct {
 	// Attempts is the maximum number of calls, the first included.
 	Attempts int
