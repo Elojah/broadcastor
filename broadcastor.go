@@ -23,21 +23,16 @@ type Broadcastor[T any] struct {
 	// gate makes Close wait for any add under way, so Close refuses or sees each subscriber.
 	gate gate.Gate
 
-	// done gets each subscriber's ID once it is done (subscriber.Subscriber.Attach), and uuid.Nil from the first Close.
-	// Only drain receives on it.
-	done chan uuid.UUID
-
 	// running counts the subscribers not done yet, plus one until the first Close. Only add raises it, under gate, so
-	// it reaches 0 once, after Close, and drain closes stopped then.
+	// it reaches 0 once, after Close, and countOut closes stopped then.
 	running atomic.Int64
 	stopped chan struct{}
 }
 
-// NewBroadcastor returns an empty Broadcastor. It runs a goroutine until it is closed and every subscriber is done.
+// NewBroadcastor returns an empty Broadcastor.
 func NewBroadcastor[T any]() *Broadcastor[T] {
-	b := &Broadcastor[T]{done: make(chan uuid.UUID), stopped: make(chan struct{})}
+	b := &Broadcastor[T]{stopped: make(chan struct{})}
 	b.running.Store(1)
-	go b.drain()
 
 	return b
 }
@@ -107,7 +102,7 @@ func (b *Broadcastor[T]) Close() error {
 		return ErrClosed
 	}
 	// Drops Close's one from running.
-	b.done <- uuid.Nil
+	b.countOut()
 
 	return nil
 }
@@ -209,7 +204,7 @@ func (b *Broadcastor[T]) add(ctx context.Context, options []subscriber.Option[T]
 	b.running.Add(1)
 
 	// Before Store, so that whoever removes the subscriber stops its ctx watch.
-	ctx = s.Attach(ctx, func(options ...subscriber.UnsubscribeOption) bool { return b.remove(id, options...) }, b.done)
+	ctx = s.Attach(ctx, func(options ...subscriber.UnsubscribeOption) bool { return b.remove(id, options...) }, b.countOut)
 	b.subscribers.Store(id, s)
 	// If ctx was already done, the watch may have run before Store and found nothing.
 	if ctx.Err() != nil {
@@ -232,13 +227,9 @@ func (b *Broadcastor[T]) remove(id uuid.UUID, options ...subscriber.UnsubscribeO
 	return true
 }
 
-// drain drops running by one for each ID on done, and closes stopped at 0.
-func (b *Broadcastor[T]) drain() {
-	for range b.done {
-		if b.running.Add(-1) == 0 {
-			close(b.stopped)
-
-			return
-		}
+// countOut drops running by one, and closes stopped at 0. Subscribers call it once done (subscriber.Subscriber.Attach).
+func (b *Broadcastor[T]) countOut() {
+	if b.running.Add(-1) == 0 {
+		close(b.stopped)
 	}
 }

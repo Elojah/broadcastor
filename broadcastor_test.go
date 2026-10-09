@@ -60,6 +60,19 @@ func TestBroadcast_NoSubscribers(t *testing.T) {
 	b.Broadcast(t.Context(), 1)
 }
 
+// A Broadcastor never closed leaves no goroutine once its subscribers are done, so it can be garbage collected.
+func TestNewBroadcastor_NotClosed(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := broadcastor.NewBroadcastor[int]()
+		id := subscribe(t, b, func(context.Context, uuid.UUID, int) error { return nil })
+		b.Broadcast(t.Context(), 1)
+		unsubscribe(t, b, id)
+		// synctest.Test fails if a goroutine is left.
+	})
+}
+
 // The error handler gets every error handle returns, as is and in order, and both get the Subscribe ctx.
 func TestWithErrorHandler(t *testing.T) {
 	t.Parallel()

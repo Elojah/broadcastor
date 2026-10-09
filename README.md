@@ -249,7 +249,7 @@ unsubscribed subscriber leaves the snapshot. A watchdog can unsubscribe a subscr
   release what `handle` used without a lock. The send waits for a receiver until ctx is done, and `Shutdown` waits for
   it: to receive after `Shutdown`, give `done` room for one per subscriber sharing it.
 - `Shutdown(ctx)` is `Close`, then waits until every subscriber is done, or ctx is. Call it on SIGTERM: exiting right
-  after `Close` cuts `handle` off. A `Broadcastor` runs a goroutine until it is closed and every subscriber is done.
+  after `Close` cuts `handle` off.
 
 ```go
 ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)

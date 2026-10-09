@@ -57,8 +57,8 @@ At `21d751b` (Intel Core Ultra 5 226V, GOMAXPROCS 8), per subscriber and per `Br
 - [ ] `store.DrainBatch(ctx, q, n, maxWait, handle)`: hands up to n entries at once, or fewer after maxWait, and acks
   them together, since cellular and LoRa uplinks pay per request. Measure it against `Drain` on `store.File`.
 - [ ] `Shutdown` names the subscribers it still waits for once ctx is done: after `Close` they have left `Stats`, so a
-  SIGTERM that times out says only `context.DeadlineExceeded`. `add` could keep each in a set that `drain` deletes it
-  from on its ID, and `Shutdown` return a `*ShutdownError` with what is left, matching `ctx.Err()`.
+  SIGTERM that times out says only `context.DeadlineExceeded`. `add` could keep each in a set that its `Attach` callback
+  deletes it from, and `Shutdown` return a `*ShutdownError` with what is left, matching `ctx.Err()`.
 - [ ] `NewBroadcastor(options...)` with `broadcastor.WithDefaultSubscriberOptions`, applied before each `Subscribe`'s
   own, so that one error handler, dead-letter store or `WithEvict` covers every subscriber. Package `filter`'s filters
   keep state, so it takes a func building the options per subscriber, or a shared filter mixes them up. Settle it
