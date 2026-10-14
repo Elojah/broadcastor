@@ -180,7 +180,7 @@ func (s *Subscriber[T]) Consume(handle Handler[T]) {
 		s.replay(handle)
 	}
 	if s.config.holder != nil {
-		s.consumeHeld(handle)
+		s.pace(handle)
 
 		return
 	}
@@ -257,9 +257,9 @@ func (s *Subscriber[T]) finish() {
 	s.finished()
 }
 
-// consumeHeld is Consume's loop with a holder: it holds each message taken, and processes each one released once due,
-// then everything still held once ch is closed. Only it calls the holder.
-func (s *Subscriber[T]) consumeHeld(handle Handler[T]) {
+// pace is Consume's loop with a holder: it holds each message taken, and processes each one released once due, then
+// everything still held once ch is closed. Only it calls the holder.
+func (s *Subscriber[T]) pace(handle Handler[T]) {
 	var timer *time.Timer
 	defer func() {
 		if timer != nil {
@@ -270,7 +270,7 @@ func (s *Subscriber[T]) consumeHeld(handle Handler[T]) {
 	for {
 		// A stale tick, from a timer that fired while a message came, only wakes the loop up once more.
 		var due <-chan time.Time
-		if wait := s.releaseHeld(handle, time.Now(), false); wait > 0 {
+		if wait := s.unhold(handle, time.Now(), false); wait > 0 {
 			if timer == nil {
 				timer = time.NewTimer(wait)
 			} else {
@@ -281,13 +281,13 @@ func (s *Subscriber[T]) consumeHeld(handle Handler[T]) {
 		select {
 		case m, ok := <-s.ch:
 			if !ok {
-				s.releaseHeld(handle, time.Now(), true)
+				s.unhold(handle, time.Now(), true)
 
 				return
 			}
 			// What came due while waiting goes first, so that the holder never gets a message for a window that ended.
 			now := time.Now()
-			s.releaseHeld(handle, now, false)
+			s.unhold(handle, now, false)
 			s.hold(m, now)
 		case <-due:
 		}
@@ -313,10 +313,9 @@ func (s *Subscriber[T]) hold(m message.Message[T], now time.Time) {
 	s.counters.held.Add(int64(1 - merged))
 }
 
-// releaseHeld processes each message the holder releases, every one if all, else those due at now, or reports them
-// once the subscriber discards. It returns how long until the next one is due, 0 if none will be until the next
-// message.
-func (s *Subscriber[T]) releaseHeld(handle Handler[T], now time.Time, all bool) time.Duration {
+// unhold processes each message the holder releases, every one if all, else those due at now, or reports them once the
+// subscriber discards. It returns how long until the next one is due, 0 if none will be until the next message.
+func (s *Subscriber[T]) unhold(handle Handler[T], now time.Time, all bool) time.Duration {
 	for {
 		m, wait, ok := s.config.holder.Release(now, all)
 		if !ok {
