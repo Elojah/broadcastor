@@ -16,6 +16,34 @@ type Option[T any] func(config *config[T])
 // UnsubscribeOption configures an Unsubscribe, or every one with WithUnsubscribeOptions.
 type UnsubscribeOption func(unsubscription *unsubscription)
 
+// config is what Options set.
+type config[T any] struct {
+	buffer              int
+	defaults            message.Config
+	unsubscribeDefaults unsubscription
+	detached            bool
+	store               Store[T]
+	middlewares         []Middleware[T]
+	asyncLimit          int
+	replay              iter.Seq[T]
+	holder              Holder[T]
+
+	// batchHandler is WithBatchHandler's handle, wrapped in its middlewares.
+	batchHandler Handler[message.Batch[T]]
+
+	errorHandler func(ctx context.Context, err error)
+	filter       func(msg T) bool
+	evict        func(err error) bool
+
+	done []ctxchan
+}
+
+// ctxchan is a WithDone channel, and the ctx that bounds the send on it.
+type ctxchan struct {
+	ctx context.Context //nolint:containedctx // bounds a send at the end of the subscription
+	ch  chan<- uuid.UUID
+}
+
 // unsubscription is what UnsubscribeOptions set.
 type unsubscription struct {
 	discard bool

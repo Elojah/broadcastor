@@ -5,8 +5,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-
-	"github.com/elojah/broadcastor/message"
 )
 
 // Stats is a snapshot of a subscriber's counters. Each message, each value of a batch, and each replayed value, is
@@ -44,7 +42,28 @@ type Stats struct {
 	Handling time.Duration
 }
 
-// counters are what Stats reads. Each is counted before the message is reported, so error handlers see theirs.
+// Stats returns a snapshot of the subscriber's counters.
+func (s *Subscriber[T]) Stats() Stats {
+	return Stats{
+		SubscriberID: s.id,
+		Queued:       max(len(s.inbox.ch)+int(s.counters.batched.Load()), 0),
+		Buffer:       cap(s.inbox.ch),
+		Sending:      int(s.counters.sending.Load()),
+		Held:         int(s.counters.held.Load()),
+		Delivered:    s.counters.delivered.Load(),
+		Handled:      s.counters.handled.Load(),
+		Failed:       s.counters.failed.Load(),
+		TimedOut:     s.counters.timedOut.Load(),
+		Dropped:      s.counters.dropped.Load(),
+		Merged:       s.counters.merged.Load(),
+		Batches:      s.counters.batches.Load(),
+		HandleTime:   time.Duration(s.counters.handleTime.Load()),
+		Handling:     s.counters.handling(),
+	}
+}
+
+// counters are what Stats reads, one method per event. They count values, n for a batch of n, each before the message
+// is reported, so error handlers see theirs.
 type counters struct {
 	delivered  atomic.Uint64
 	handled    atomic.Uint64
@@ -64,33 +83,106 @@ type counters struct {
 	// sending counts each async send from before its goroutine starts until send returns.
 	sending atomic.Int64
 
+	// created is what handleStart counts from, on the monotonic clock.
+	created time.Time
+
 	// handleStart is when handle started on the current message, in nanoseconds since created, plus one so that 0
 	// means idle even when no time has passed, as in a synctest bubble.
 	handleStart atomic.Int64
 }
 
+// sent counts n values taken, or replayed. A batch's values past its first are counted in Queued until took.
+func (c *counters) sent(n int) {
+	if n > 1 {
+		c.batched.Add(int64(n - 1))
+	}
+	c.delivered.Add(values(n))
+}
+
+// took uncounts from Queued the values past the first of n, just read from ch.
+func (c *counters) took(n int) {
+	if n > 1 {
+		c.batched.Add(-int64(n - 1))
+	}
+}
+
+// reserve counts an async send under way, unless limit are already. limit <= 0 means none.
+func (c *counters) reserve(limit int) bool {
+	if limit <= 0 {
+		c.sending.Add(1)
+
+		return true
+	}
+	for {
+		n := c.sending.Load()
+		if n >= int64(limit) {
+			return false
+		}
+		if c.sending.CompareAndSwap(n, n+1) {
+			return true
+		}
+	}
+}
+
+// unreserve uncounts an async send once done.
+func (c *counters) unreserve() {
+	c.sending.Add(-1)
+}
+
+// hold counts a message the holder took, merging away merged of those it held.
+func (c *counters) hold(merged int) {
+	merged = max(merged, 0)
+	c.merged.Add(uint64(merged))
+	c.held.Add(int64(1 - merged))
+}
+
+// unhold uncounts n values the holder released.
+func (c *counters) unhold(n int) {
+	c.held.Add(-int64(n))
+}
+
+// drop counts n values dropped.
+func (c *counters) drop(n int) {
+	c.dropped.Add(values(n))
+}
+
+// timeout counts n values timed out.
+func (c *counters) timeout(n int) {
+	c.timedOut.Add(values(n))
+}
+
+// start marks handle as running since now. It takes now, rather than reading the clock, so that it inlines, as stop does.
+func (c *counters) start(now time.Time) {
+	c.handleStart.Store(int64(now.Sub(c.created)) + 1)
+}
+
+// stop marks handle as idle, and counts n values it took d on, failed if err is not nil, as one call to the batch
+// handler if batch.
+func (c *counters) stop(d time.Duration, n int, batch bool, err error) {
+	c.handleStart.Store(0)
+	if batch {
+		c.batches.Add(1)
+	}
+	c.handleTime.Add(int64(d))
+	if err != nil {
+		c.failed.Add(values(n))
+
+		return
+	}
+	c.handled.Add(values(n))
+}
+
 // handling returns how long handle has been running on the current message, or 0 if idle.
-func (c *counters) handling(created time.Time) time.Duration {
+func (c *counters) handling() time.Duration {
 	start := c.handleStart.Load()
 	if start == 0 {
 		return 0
 	}
 
-	return time.Since(created) - time.Duration(start-1)
+	return time.Since(c.created) - time.Duration(start-1)
 }
 
-// handle counts n messages handle took d on, and failed on if err is not nil.
-func (c *counters) handle(d time.Duration, n uint64, err error) {
-	c.handleTime.Add(int64(d))
-	if err != nil {
-		c.failed.Add(n)
-
-		return
-	}
-	c.handled.Add(n)
-}
-
-// count returns how many messages m counts as: 1, or its batch's values.
-func count[T any](m message.Message[T]) uint64 {
-	return uint64(max(m.Len(), 0))
+// values converts a message's value count to a counter's.
+func values(n int) uint64 {
+	return uint64(max(n, 0))
 }
