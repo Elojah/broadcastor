@@ -1,6 +1,6 @@
 // subscriber.WithHolder holds each message the subscriber takes until its holder releases it to handle. Two sensors
 // send readings in bursts. The display shows only the latest reading of each burst, whichever the sensor
-// (holder.Latest), and the uplink sends the latest of each sensor, with how many readings it stands for
+// (holder.NewLatest), and the uplink sends the latest of each sensor, with how many readings it stands for
 // (holder.Reduce). Each window ends half a second after its first reading.
 //
 // Shutdown hands what is still held to handle at once, without waiting for its window to end.

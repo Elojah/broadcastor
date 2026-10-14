@@ -62,7 +62,7 @@ for msg, fail := range seq {
 | [`message`](https://pkg.go.dev/github.com/elojah/broadcastor/message) | Options for `Broadcast`. |
 | [`middleware`](https://pkg.go.dev/github.com/elojah/broadcastor/middleware) | `Recover`, `History`, `MaxAge`, `WrapError`, `Retry`, and `RetryPolicy.Do` for any func. |
 | [`store`](https://pkg.go.dev/github.com/elojah/broadcastor/store) | Queues for dead letters and history: `Ring`, `Drain`, `Enqueue`, `Filter`. |
-| [`holder`](https://pkg.go.dev/github.com/elojah/broadcastor/holder) | Holders for `subscriber.WithHolder`: `Latest`, `Reduce`. |
+| [`holder`](https://pkg.go.dev/github.com/elojah/broadcastor/holder) | Holders for `subscriber.WithHolder`: `Reduce`, `NewLatest`, `Reorder`, `Jitter`. |
 | [`filter`](https://pkg.go.dev/github.com/elojah/broadcastor/filter) | Filters for `subscriber.WithFilter`: `Changed`, `Every`. |
 
 ## Delivery
@@ -156,8 +156,8 @@ Middlewares run in the subscriber's goroutine, so `Retry` waiting holds it up li
 
 `subscriber.WithHolder` passes each message the subscriber takes to a `subscriber.Holder`, which releases it once due.
 What it releases goes to `handle` as any message would: through the middlewares, error handlers, dead letters and
-`Stats`. Package `holder` holds two, which hold the messages of a window, from the first one to `d` later, so that a
-burst reaches `handle` as fewer messages ([`27-holder`](examples/27-holder/main.go)):
+`Stats`. Package `holder` holds some, so that a burst reaches `handle` as fewer messages
+([`27-holder`](examples/27-holder/main.go)), or in order:
 
 ```go
 // Only the last reading of each window.
@@ -173,14 +173,23 @@ id, err = b.Subscribe(ctx, uplink, subscriber.WithHolder(holder.NewReduce(time.S
  }
  return append(held, next)
 })))
+
+// Every reading, oldest first, though the gateways relay them out of order.
+id, err = b.Subscribe(ctx, archive, subscriber.WithHolder(holder.NewJitterFunc(time.Second, func(a, b Reading) int {
+ return a.At.Compare(b.At)
+})))
 ```
 
 `holder.Reduce` calls its func as each message comes, with what it holds, so it can drop repeats, keep the latest of
-each key, or sum. A window starts when the subscriber takes its first message, which a busy `handle` delays, and ends
-`d` later: a message taken after that starts another. An unsubscribed subscriber handles what is held at once, so
-`Shutdown` waits for it. A holder of your own may have no room: the message is then lost as a
-`*subscriber.DroppedError`. Only the subscriber's goroutine calls a holder, so it needs no lock: give each subscriber
-its own.
+each key, or sum. `NewLatest` keeps the newest message only, and `holder.Reorder` sorts them. Each holds the messages of
+a window, which starts when the subscriber takes its first message, delayed by a busy `handle`, and ends `d` later: a
+message taken after that starts another, which `Reorder` does not sort with the one before. `holder.Jitter` has no
+windows: it holds each message for `d`, and once one is due, releases it after those it holds ordered before it, so a
+message late by less than `d` still reaches `handle` in order. Both sort stably, with `cmp.Compare` (`NewReorder`,
+`NewJitter`) or a func of your own (`NewReorderFunc`, `NewJitterFunc`), and each message keeps its own ctx and error
+handler. An unsubscribed subscriber handles what is held at once, so `Shutdown` waits for it. A holder of your own may
+have no room: the message is then lost as a `*subscriber.DroppedError`. Only the subscriber's goroutine calls a holder,
+so it needs no lock: give each subscriber its own.
 
 ## Dead letters
 
@@ -388,7 +397,7 @@ never fails, so give it a timeout. `Unsubscribe` does not end a `Retry` wait: th
 | [`24-mqtt`](examples/24-mqtt/main.go) | MQTT fanned out to a rule, a local store, and an uplink that stores and forwards. |
 | [`25-modbus`](examples/25-modbus/main.go) | A PLC polled over Modbus TCP, filtered, and a rule that retries and reconnects in place. |
 | [`26-reconnect`](examples/26-reconnect/main.go) | A subscriber reconnecting in place through middlewares of its own, its buffer keeping order. |
-| [`27-holder`](examples/27-holder/main.go) | `subscriber.WithHolder` with `holder.Latest` and `holder.Reduce`, for bursts of readings. |
+| [`27-holder`](examples/27-holder/main.go) | `subscriber.WithHolder` with `holder.NewLatest` and `holder.Reduce`, for bursts of readings. |
 
 `19-redis`, `24-mqtt` and `25-modbus` are modules of their own, to keep their dependencies out of the library's go.mod.
 `go run -C examples/19-redis .` needs Redis at `REDIS_ADDR` (`localhost:6379` by default), and `24-mqtt` an MQTT broker

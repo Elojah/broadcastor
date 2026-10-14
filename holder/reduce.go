@@ -56,7 +56,7 @@ func (r *Reduce[T]) Release(now time.Time, all bool) (message.Message[T], time.D
 	r.held[r.next] = zero
 	r.next++
 	if r.next == len(r.held) {
-		r.held, r.next = r.held[:0], 0
+		r.held, r.next, r.config = r.held[:0], 0, message.Config{}
 	}
 
 	return m, 0, true

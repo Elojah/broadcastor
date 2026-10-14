@@ -11,8 +11,9 @@ import (
 )
 
 var (
-	_ subscriber.Holder[int] = (*holder.Latest[int])(nil)
 	_ subscriber.Holder[int] = (*holder.Reduce[int])(nil)
+	_ subscriber.Holder[int] = (*holder.Reorder[int])(nil)
+	_ subscriber.Holder[int] = (*holder.Jitter[int])(nil)
 )
 
 const window = time.Second
