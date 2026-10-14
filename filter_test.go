@@ -7,8 +7,6 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor/message"
 	"github.com/elojah/broadcastor/subscriber"
 )
@@ -100,7 +98,7 @@ func TestMessageWithSubscriberFilter(t *testing.T) {
 				t.Errorf("error handler got %v, want none", err)
 			}))
 		picked, pickedID := record(t, b)
-		only := message.WithSubscriberFilter[int](func(id uuid.UUID) bool { return id == pickedID })
+		only := message.WithSubscriberFilter[int](func(id uint64) bool { return id == pickedID })
 
 		b.Broadcast(t.Context(), 0) // stuck holds on to 0
 		start := time.Now()
@@ -143,7 +141,7 @@ func TestMessageWithSubscriberFilter_BeforeSubscriberFilter(t *testing.T) {
 			return true
 		}))
 
-		if n := b.Broadcast(t.Context(), 1, message.WithSubscriberFilter[int](func(uuid.UUID) bool { return false })); n != 0 {
+		if n := b.Broadcast(t.Context(), 1, message.WithSubscriberFilter[int](func(uint64) bool { return false })); n != 0 {
 			t.Errorf("Broadcast picking no subscriber handed the message to %d, want 0", n)
 		}
 		b.Broadcast(t.Context(), 2)
@@ -170,12 +168,12 @@ func TestMessageWithSubscriberFilter_Several(t *testing.T) {
 		second, secondID := record(t, b)
 		third, thirdID := record(t, b)
 		// Only Broadcast's goroutine calls the filters.
-		var seen []uuid.UUID
+		var seen []uint64
 
 		n := b.Broadcast(t.Context(), 1,
-			message.WithSubscriberFilter[int](func(id uuid.UUID) bool { return id != firstID }),
+			message.WithSubscriberFilter[int](func(id uint64) bool { return id != firstID }),
 			message.WithSubscriberFilter[int](nil),
-			message.WithSubscriberFilter[int](func(id uuid.UUID) bool {
+			message.WithSubscriberFilter[int](func(id uint64) bool {
 				seen = append(seen, id)
 
 				return id != secondID
@@ -213,7 +211,7 @@ func TestSubscriberWithDefaultMessageOptions_SubscriberFilterIgnored(t *testing.
 		b := newBroadcastor[int](t)
 		r := &recorder[int]{}
 		id := subscribe(t, b, r.handle, subscriber.WithDefaultMessageOptions(
-			message.WithSubscriberFilter[int](func(uuid.UUID) bool { return false }),
+			message.WithSubscriberFilter[int](func(uint64) bool { return false }),
 		))
 
 		if n := b.Broadcast(t.Context(), 1); n != 1 {

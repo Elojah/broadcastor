@@ -13,8 +13,6 @@ import (
 	"log"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/middleware"
 	"github.com/elojah/broadcastor/subscriber"
@@ -32,7 +30,7 @@ func main() {
 	b := broadcastor.NewBroadcastor[reading]()
 
 	release, done := make(chan struct{}), make(chan struct{})
-	_, err := b.Subscribe(ctx, func(_ context.Context, _ uuid.UUID, r reading) error {
+	_, err := b.Subscribe(ctx, func(_ context.Context, _ uint64, r reading) error {
 		fmt.Println("handled", r.n)
 		switch r.n {
 		case 1:

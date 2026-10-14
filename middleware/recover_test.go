@@ -5,8 +5,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor/middleware"
 	"github.com/elojah/broadcastor/subscriber"
 )
@@ -16,7 +14,7 @@ import (
 func TestRecover(t *testing.T) {
 	t.Parallel()
 
-	id := uuid.New()
+	id := uint64(7)
 	handle := middleware.Recover[int]()(failOn)
 
 	err := handle(t.Context(), id, 1)
@@ -25,7 +23,7 @@ func TestRecover(t *testing.T) {
 		t.Fatalf("handler that panicked returned %v, want a *PanicError", err)
 	}
 	if panicErr.SubscriberID != id || panicErr.Message != 1 {
-		t.Errorf("error is for subscriber %s and message %d, want %s and 1", panicErr.SubscriberID, panicErr.Message, id)
+		t.Errorf("error is for subscriber %d and message %d, want %d and 1", panicErr.SubscriberID, panicErr.Message, id)
 	}
 	// errHandle is only reachable through Value, which the error unwraps to.
 	if !errors.Is(err, subscriber.ErrPanic) || !errors.Is(err, errHandle) {

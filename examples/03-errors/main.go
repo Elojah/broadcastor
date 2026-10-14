@@ -11,8 +11,6 @@ import (
 	"log"
 	"sync"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/middleware"
 	"github.com/elojah/broadcastor/subscriber"
@@ -26,7 +24,7 @@ func main() {
 
 	// Every message is either handled or reported.
 	var done sync.WaitGroup
-	id, err := b.Subscribe(ctx, func(_ context.Context, _ uuid.UUID, n int) error {
+	id, err := b.Subscribe(ctx, func(_ context.Context, _ uint64, n int) error {
 		if n < 0 {
 			return errNegative
 		}

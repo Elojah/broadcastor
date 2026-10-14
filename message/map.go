@@ -3,20 +3,22 @@ package message
 import (
 	"iter"
 	"maps"
-
-	"github.com/google/uuid"
+	"sync/atomic"
 )
 
-// Map is a Batch of the values in a map, each under a random UUID, so it has no order. The zero Map is empty and ready
-// to use.
-type Map[T any] map[uuid.UUID]T
+// mapKeys is the last key Map.Add put a value under, shared by every Map so that keys never collide.
+var mapKeys atomic.Uint64
 
-// Add puts msg under a new random UUID.
+// Map is a Batch of the values in a map, each under its own key, so it has no order. The zero Map is empty and ready
+// to use.
+type Map[T any] map[uint64]T
+
+// Add puts msg under a new key.
 func (m *Map[T]) Add(msg T) {
 	if *m == nil {
 		*m = make(Map[T])
 	}
-	(*m)[uuid.New()] = msg
+	(*m)[mapKeys.Add(1)] = msg
 }
 
 // All yields each value, in no particular order.

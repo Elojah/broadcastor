@@ -7,14 +7,13 @@ import (
 	"iter"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
-
-	"github.com/google/uuid"
 
 	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/message"
@@ -31,7 +30,7 @@ func TestBroadcast_DeliversAllMessagesInOrder(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		const subscribers = 3
 		b := newBroadcastor[int](t)
-		ids := make([]uuid.UUID, 0, subscribers)
+		ids := make([]uint64, 0, subscribers)
 		recorders := make([]*recorder[int], 0, subscribers)
 		for range subscribers {
 			r, id := record(t, b)
@@ -66,7 +65,7 @@ func TestNewBroadcastor_NotClosed(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		b := broadcastor.NewBroadcastor[int]()
-		id := subscribe(t, b, func(context.Context, uuid.UUID, int) error { return nil })
+		id := subscribe(t, b, func(context.Context, uint64, int) error { return nil })
 		b.Broadcast(t.Context(), 1)
 		unsubscribe(t, b, id)
 		// synctest.Test fails if a goroutine is left.
@@ -87,7 +86,7 @@ func TestWithErrorHandler(t *testing.T) {
 		}
 		b := newBroadcastor[int](t)
 		errs := &recorder[error]{}
-		id, err := b.Subscribe(ctx, func(ctx context.Context, _ uuid.UUID, msg int) error {
+		id, err := b.Subscribe(ctx, func(ctx context.Context, _ uint64, msg int) error {
 			checkCtx(ctx, "handle")
 			if msg%2 == 1 {
 				return handleError(msg)
@@ -121,7 +120,7 @@ func TestSubscribe_ErrorsWithoutHandler(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b := newBroadcastor[int](t)
 		r := &recorder[int]{}
-		id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
+		id := subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
 			r.record(msg)
 
 			return handleError(msg)
@@ -145,24 +144,53 @@ func TestSubscribe_ErrorsWithoutHandler(t *testing.T) {
 	})
 }
 
+// IDs count up from 1 in each Broadcastor, SubscribeSeq's included, and a subscription refused after Close gets 0.
+func TestSubscribe_IDs(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		handle := func(context.Context, uint64, int) error { return nil }
+		for range 2 {
+			b := newBroadcastor[int](t)
+			first := subscribe(t, b, handle)
+			second, seq := subscribeSeq(t, b)
+			third := subscribe(t, b, handle)
+			if got, want := []uint64{first, second, third}, []uint64{1, 2, 3}; !slices.Equal(got, want) {
+				t.Errorf("IDs %v, want %v", got, want)
+			}
+
+			if err := b.Close(); err != nil {
+				t.Fatalf("Close: %v", err)
+			}
+			for msg := range seq {
+				t.Errorf("loop got %d, want nothing", msg)
+			}
+			if id, err := b.Subscribe(subscribeCtx(t), handle); id != 0 || !errors.Is(err, broadcastor.ErrClosed) {
+				t.Errorf("Subscribe after Close = %d, %v, want 0, ErrClosed", id, err)
+			}
+		}
+		synctest.Wait()
+	})
+}
+
 func TestUnsubscribe_UnknownID(t *testing.T) {
 	t.Parallel()
 
 	b := newBroadcastor[int](t)
-	for _, id := range []uuid.UUID{uuid.Nil, uuid.New()} {
+	for _, id := range []uint64{0, 42} {
 		err := b.Unsubscribe(t.Context(), id)
 		var notFound *broadcastor.SubscriberNotFoundError
 		if !errors.As(err, &notFound) {
-			t.Fatalf("Unsubscribe(%s) = %v, want *SubscriberNotFoundError", id, err)
+			t.Fatalf("Unsubscribe(%d) = %v, want *SubscriberNotFoundError", id, err)
 		}
 		if notFound.SubscriberID != id {
-			t.Errorf("error is for subscriber %s, want %s", notFound.SubscriberID, id)
+			t.Errorf("error is for subscriber %d, want %d", notFound.SubscriberID, id)
 		}
 		if !errors.Is(err, broadcastor.ErrSubscriberNotFound) {
 			t.Errorf("error %v does not match ErrSubscriberNotFound", err)
 		}
-		if !strings.Contains(err.Error(), id.String()) {
-			t.Errorf("error %q does not mention the id %s", err, id)
+		if !strings.Contains(err.Error(), strconv.FormatUint(id, 10)) {
+			t.Errorf("error %q does not mention the id %d", err, id)
 		}
 	}
 }
@@ -264,19 +292,19 @@ func TestUnsubscribe_FreesBroadcast(t *testing.T) {
 
 	removals := []struct {
 		name   string
-		remove func(t *testing.T, b *broadcastor.Broadcastor[int], id uuid.UUID, cancel context.CancelFunc)
+		remove func(t *testing.T, b *broadcastor.Broadcastor[int], id uint64, cancel context.CancelFunc)
 	}{
-		{"Unsubscribe", func(t *testing.T, b *broadcastor.Broadcastor[int], id uuid.UUID, _ context.CancelFunc) {
+		{"Unsubscribe", func(t *testing.T, b *broadcastor.Broadcastor[int], id uint64, _ context.CancelFunc) {
 			t.Helper()
 			unsubscribe(t, b, id)
 		}},
-		{"Close", func(t *testing.T, b *broadcastor.Broadcastor[int], _ uuid.UUID, _ context.CancelFunc) {
+		{"Close", func(t *testing.T, b *broadcastor.Broadcastor[int], _ uint64, _ context.CancelFunc) {
 			t.Helper()
 			if err := b.Close(); err != nil {
 				t.Fatalf("Close: %v", err)
 			}
 		}},
-		{"ContextDone", func(t *testing.T, _ *broadcastor.Broadcastor[int], _ uuid.UUID, cancel context.CancelFunc) {
+		{"ContextDone", func(t *testing.T, _ *broadcastor.Broadcastor[int], _ uint64, cancel context.CancelFunc) {
 			t.Helper()
 			cancel()
 		}},
@@ -349,7 +377,7 @@ func TestUnsubscribe_SelfDuringBroadcast(t *testing.T) {
 
 		self := &recorder[int]{}
 		proceed := make(chan struct{})
-		subscribe(t, b, func(ctx context.Context, selfID uuid.UUID, msg int) error {
+		subscribe(t, b, func(ctx context.Context, selfID uint64, msg int) error {
 			self.record(msg)
 			if msg == 1 {
 				<-proceed
@@ -558,7 +586,7 @@ func TestMessageWithAsync_ContextDone(t *testing.T) {
 		var timeout *subscriber.TimeoutError[int]
 		if len(got) != 1 || !errors.As(got[0], &timeout) || timeout.SubscriberID != id || timeout.Message != 1 ||
 			!errors.Is(timeout, context.DeadlineExceeded) {
-			t.Errorf("error handler got %v, want a *TimeoutError for subscriber %s and message 1 wrapping %v",
+			t.Errorf("error handler got %v, want a *TimeoutError for subscriber %d and message 1 wrapping %v",
 				got, id, context.DeadlineExceeded)
 		}
 
@@ -626,7 +654,7 @@ func TestMessageWithErrorHandler(t *testing.T) {
 		ctx := context.WithValue(subscribeCtx(t), key{}, "subscribe")
 		b := newBroadcastor[int](t)
 		subscriberErrs := &recorder[int]{}
-		failingID, err := b.Subscribe(ctx, func(_ context.Context, _ uuid.UUID, msg int) error {
+		failingID, err := b.Subscribe(ctx, func(_ context.Context, _ uint64, msg int) error {
 			return handleError(msg)
 		}, subscriber.WithErrorHandler[int](recordFailures(t, subscriberErrs)))
 		if err != nil {
@@ -678,7 +706,7 @@ func TestMessageWithErrorHandler_ContextDone(t *testing.T) {
 		var timeout *subscriber.TimeoutError[int]
 		if len(got) != 1 || !errors.As(got[0], &timeout) || timeout.SubscriberID != id || timeout.Message != 1 ||
 			!errors.Is(timeout, context.DeadlineExceeded) {
-			t.Errorf("message error handler got %v, want a *TimeoutError for subscriber %s and message 1 wrapping %v",
+			t.Errorf("message error handler got %v, want a *TimeoutError for subscriber %d and message 1 wrapping %v",
 				got, id, context.DeadlineExceeded)
 		}
 
@@ -736,7 +764,7 @@ func TestSubscriberWithDefaultMessageOptions_ErrorHandlerOverridden(t *testing.T
 	synctest.Test(t, func(t *testing.T) {
 		b := newBroadcastor[int](t)
 		defaults, override := &recorder[int]{}, &recorder[int]{}
-		id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
+		id := subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
 			return handleError(msg)
 		}, subscriber.WithDefaultMessageOptions(
 			message.WithErrorHandler[int](recordFailures(t, defaults))))
@@ -854,7 +882,7 @@ func TestBroadcast_Concurrent(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx := t.Context()
 		b := newBroadcastor[msg](t)
-		ids := make([]uuid.UUID, subscribers)
+		ids := make([]uint64, subscribers)
 		recorders := make([]*recorder[msg], subscribers)
 		for i := range subscribers {
 			recorders[i], ids[i] = record(t, b)
@@ -953,7 +981,7 @@ func TestUnsubscribe_RacesBroadcastPickingUpChannel(t *testing.T) {
 			wg.Go(func() {
 				<-start
 				if err := b.Unsubscribe(ctx, id); err != nil {
-					t.Errorf("iteration %d: Unsubscribe(%s): %v", i, id, err)
+					t.Errorf("iteration %d: Unsubscribe(%d): %v", i, id, err)
 				}
 				if p := broadcast(ctx, b, 2); p != nil {
 					t.Errorf("iteration %d: Broadcast after Unsubscribe panicked: %v", i, p)
@@ -981,8 +1009,8 @@ func TestUnsubscribe_SeveralThenDrain(t *testing.T) {
 	proceed := make(chan struct{})
 	handleDone := make(chan struct{})
 	secondBroadcastDone := make(chan struct{})
-	var secondID uuid.UUID
-	subscribe(t, b, func(ctx context.Context, firstID uuid.UUID, msg int) error {
+	var secondID uint64
+	subscribe(t, b, func(ctx context.Context, firstID uint64, msg int) error {
 		if msg != 1 {
 			return nil
 		}
@@ -1072,7 +1100,7 @@ func TestUnsubscribe_ParallelDistinctIDs(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx := t.Context()
 		b := newBroadcastor[int](t)
-		ids := make([]uuid.UUID, subscribers)
+		ids := make([]uint64, subscribers)
 		recorders := make([]*recorder[int], subscribers)
 		for i := range subscribers {
 			recorders[i], ids[i] = record(t, b)
@@ -1082,7 +1110,7 @@ func TestUnsubscribe_ParallelDistinctIDs(t *testing.T) {
 		for _, id := range ids {
 			wg.Go(func() {
 				if err := b.Unsubscribe(ctx, id); err != nil {
-					t.Errorf("Unsubscribe(%s): %v", id, err)
+					t.Errorf("Unsubscribe(%d): %v", id, err)
 				}
 			})
 		}
@@ -1107,7 +1135,7 @@ func TestSubscribe_Parallel(t *testing.T) {
 		ctx := subscribeCtx(t)
 		b := newBroadcastor[int](t)
 		var mu sync.Mutex
-		recorders := make(map[uuid.UUID]*recorder[int], subscribers)
+		recorders := make(map[uint64]*recorder[int], subscribers)
 		var wg sync.WaitGroup
 		for range subscribers {
 			wg.Go(func() {
@@ -1122,7 +1150,7 @@ func TestSubscribe_Parallel(t *testing.T) {
 				mu.Lock()
 				defer mu.Unlock()
 				if _, dup := recorders[id]; dup {
-					t.Errorf("Subscribe returned id %s twice", id)
+					t.Errorf("Subscribe returned id %d twice", id)
 				}
 				recorders[id] = r
 			})
@@ -1134,7 +1162,7 @@ func TestSubscribe_Parallel(t *testing.T) {
 		synctest.Wait()
 		for id, r := range recorders {
 			if got, want := r.messages(), []int{1}; !slices.Equal(got, want) {
-				t.Errorf("subscriber %s received %v, want %v", id, got, want)
+				t.Errorf("subscriber %d received %v, want %v", id, got, want)
 			}
 		}
 	})
@@ -1170,7 +1198,7 @@ func TestSubscribeUnsubscribe_ChurnDuringBroadcasts(t *testing.T) {
 		}()
 
 		var mu sync.Mutex
-		recorders := make(map[uuid.UUID]*recorder[int], consumers*rounds)
+		recorders := make(map[uint64]*recorder[int], consumers*rounds)
 		var wg sync.WaitGroup
 		for range consumers {
 			wg.Go(func() {
@@ -1179,7 +1207,7 @@ func TestSubscribeUnsubscribe_ChurnDuringBroadcasts(t *testing.T) {
 					want := round % 3
 					r := &recorder[int]{}
 					reached := make(chan struct{})
-					id, err := b.Subscribe(ctx, func(_ context.Context, _ uuid.UUID, msg int) error {
+					id, err := b.Subscribe(ctx, func(_ context.Context, _ uint64, msg int) error {
 						if r.record(msg) == want {
 							close(reached)
 						}
@@ -1195,7 +1223,7 @@ func TestSubscribeUnsubscribe_ChurnDuringBroadcasts(t *testing.T) {
 						<-reached
 					}
 					if err := b.Unsubscribe(ctx, id); err != nil {
-						t.Errorf("Unsubscribe(%s): %v", id, err)
+						t.Errorf("Unsubscribe(%d): %v", id, err)
 
 						return
 					}
@@ -1213,7 +1241,7 @@ func TestSubscribeUnsubscribe_ChurnDuringBroadcasts(t *testing.T) {
 
 		for id, r := range recorders {
 			if err := checkConsecutive(r.messages()); err != nil {
-				t.Errorf("subscription %s: %v", id, err)
+				t.Errorf("subscription %d: %v", id, err)
 			}
 		}
 	})
@@ -1223,7 +1251,7 @@ func TestSubscribeUnsubscribe_ChurnDuringBroadcasts(t *testing.T) {
 func TestErrors_Is(t *testing.T) {
 	t.Parallel()
 
-	id := uuid.New()
+	id := uint64(7)
 	targets := []error{
 		broadcastor.ErrSubscriberNotFound, subscriber.ErrClosed, subscriber.ErrTimeout, subscriber.ErrDropped,
 		subscriber.ErrPanic, subscriber.ErrStore, subscriber.ErrEvicted, subscriber.ErrExpired, context.DeadlineExceeded,
@@ -1267,8 +1295,8 @@ func TestErrors_Is(t *testing.T) {
 				t.Errorf("errors.Is(%v, %v) = %t, want %t", tc.err, target, got, want)
 			}
 		}
-		if s := tc.err.Error(); !strings.Contains(s, id.String()) {
-			t.Errorf("error %q does not mention the subscriber %s", s, id)
+		if s := tc.err.Error(); !strings.Contains(s, strconv.FormatUint(id, 10)) {
+			t.Errorf("error %q does not mention the subscriber %d", s, id)
 		}
 	}
 }
@@ -1283,7 +1311,7 @@ func TestMessageWithSync(t *testing.T) {
 		defaults := []message.Option[int]{
 			message.WithParallel[int](), message.WithAsync[int](), message.WithNonBlocking[int](),
 		}
-		ids := make([]uuid.UUID, 0, len(defaults))
+		ids := make([]uint64, 0, len(defaults))
 		stuck := make([]*recorder[int], 0, len(defaults))
 		for _, delivery := range defaults {
 			r := &recorder[int]{hold: make(chan struct{})}
@@ -1387,7 +1415,7 @@ func TestMessageWithNonBlocking(t *testing.T) {
 		var dropped *subscriber.DroppedError[int]
 		if len(got) != 1 || !errors.As(got[0], &dropped) || dropped.SubscriberID != stuckID || dropped.Message != 1 ||
 			!errors.Is(got[0], subscriber.ErrDropped) {
-			t.Errorf("message error handler got %v, want a single *DroppedError for subscriber %s and message 1",
+			t.Errorf("message error handler got %v, want a single *DroppedError for subscriber %d and message 1",
 				got, stuckID)
 		}
 
@@ -1557,7 +1585,7 @@ func TestMessageWithParallel_ContextDone(t *testing.T) {
 		var timeout *subscriber.TimeoutError[int]
 		if len(got) != 1 || !errors.As(got[0], &timeout) || timeout.SubscriberID != stuckID || timeout.Message != 1 ||
 			!errors.Is(timeout, context.DeadlineExceeded) {
-			t.Errorf("error handler got %v by the time Broadcast returned, want a *TimeoutError for subscriber %s and message 1 wrapping %v",
+			t.Errorf("error handler got %v by the time Broadcast returned, want a *TimeoutError for subscriber %d and message 1 wrapping %v",
 				got, stuckID, context.DeadlineExceeded)
 		}
 
@@ -1581,11 +1609,11 @@ func TestMessageWithParallel_Order(t *testing.T) {
 		const messages = 50
 		b := newBroadcastor[int](t)
 		delays := []time.Duration{time.Millisecond, 3 * time.Millisecond}
-		ids := make([]uuid.UUID, 0, len(delays))
+		ids := make([]uint64, 0, len(delays))
 		recorders := make([]*recorder[int], 0, len(delays))
 		for _, delay := range delays {
 			r := &recorder[int]{}
-			ids = append(ids, subscribe(t, b, func(ctx context.Context, id uuid.UUID, msg int) error {
+			ids = append(ids, subscribe(t, b, func(ctx context.Context, id uint64, msg int) error {
 				time.Sleep(delay)
 
 				return r.handle(ctx, id, msg)
@@ -1982,9 +2010,9 @@ func TestClose(t *testing.T) {
 		if n := b.Broadcast(t.Context(), 4); n != 0 {
 			t.Errorf("Broadcast after Close handed the message to %d subscribers, want 0", n)
 		}
-		for _, id := range []uuid.UUID{bufferedID, unbufferedID, seqID} {
+		for _, id := range []uint64{bufferedID, unbufferedID, seqID} {
 			if err := b.Unsubscribe(t.Context(), id); !isNotFound(err) {
-				t.Errorf("Unsubscribe(%s) after Close = %v, want *SubscriberNotFoundError", id, err)
+				t.Errorf("Unsubscribe(%d) after Close = %v, want *SubscriberNotFoundError", id, err)
 			}
 		}
 		if _, err := b.Subscribe(t.Context(), unbuffered.handle); !errors.Is(err, broadcastor.ErrClosed) {
@@ -2010,7 +2038,7 @@ func TestClose_FromHandle(t *testing.T) {
 
 		self := &recorder[int]{}
 		proceed := make(chan struct{})
-		subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
+		subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
 			self.record(msg)
 			if msg == 1 {
 				<-proceed
@@ -2113,10 +2141,10 @@ func subscribeUntilClosed(t *testing.T, b *broadcastor.Broadcastor[int], kind in
 	var err error
 	switch kind {
 	case 0:
-		var id uuid.UUID
+		var id uint64
 		if id, err = b.Subscribe(subscribeCtx(t), (&recorder[int]{}).handle); err == nil {
 			if err := b.Unsubscribe(t.Context(), id); err != nil && !isNotFound(err) {
-				t.Errorf("Unsubscribe(%s) = %v, want nil or *SubscriberNotFoundError", id, err)
+				t.Errorf("Unsubscribe(%d) = %v, want nil or *SubscriberNotFoundError", id, err)
 			}
 		}
 	case 1:
@@ -2142,7 +2170,7 @@ type recorder[T any] struct {
 	got []T
 }
 
-func (r *recorder[T]) handle(_ context.Context, _ uuid.UUID, msg T) error {
+func (r *recorder[T]) handle(_ context.Context, _ uint64, msg T) error {
 	r.record(msg)
 	if r.hold != nil {
 		<-r.hold
@@ -2227,9 +2255,9 @@ func subscribeCtx(t *testing.T) context.Context {
 }
 
 func subscribe[T any](
-	t *testing.T, b *broadcastor.Broadcastor[T], handle func(context.Context, uuid.UUID, T) error,
+	t *testing.T, b *broadcastor.Broadcastor[T], handle func(context.Context, uint64, T) error,
 	options ...subscriber.Option[T],
-) uuid.UUID {
+) uint64 {
 	t.Helper()
 	id, err := b.Subscribe(subscribeCtx(t), handle, options...)
 	if err != nil {
@@ -2240,7 +2268,7 @@ func subscribe[T any](
 }
 
 // record subscribes a recorder.
-func record[T any](t *testing.T, b *broadcastor.Broadcastor[T]) (*recorder[T], uuid.UUID) {
+func record[T any](t *testing.T, b *broadcastor.Broadcastor[T]) (*recorder[T], uint64) {
 	t.Helper()
 	r := &recorder[T]{}
 	id := subscribe(t, b, r.handle)
@@ -2249,7 +2277,7 @@ func record[T any](t *testing.T, b *broadcastor.Broadcastor[T]) (*recorder[T], u
 }
 
 // hold subscribes a recorder that holds on to every message until it is released.
-func hold[T any](t *testing.T, b *broadcastor.Broadcastor[T]) (*recorder[T], uuid.UUID) {
+func hold[T any](t *testing.T, b *broadcastor.Broadcastor[T]) (*recorder[T], uint64) {
 	t.Helper()
 	r := &recorder[T]{hold: make(chan struct{})}
 	id := subscribe(t, b, r.handle)
@@ -2258,7 +2286,7 @@ func hold[T any](t *testing.T, b *broadcastor.Broadcastor[T]) (*recorder[T], uui
 }
 
 // subscribeSeq subscribes with SubscribeSeq, with subscribeCtx.
-func subscribeSeq[T any](t *testing.T, b *broadcastor.Broadcastor[T], options ...subscriber.Option[T]) (uuid.UUID, iter.Seq2[T, func(error)]) {
+func subscribeSeq[T any](t *testing.T, b *broadcastor.Broadcastor[T], options ...subscriber.Option[T]) (uint64, iter.Seq2[T, func(error)]) {
 	t.Helper()
 	id, seq, err := b.SubscribeSeq(subscribeCtx(t), options...)
 	if err != nil {
@@ -2268,14 +2296,14 @@ func subscribeSeq[T any](t *testing.T, b *broadcastor.Broadcastor[T], options ..
 	return id, seq
 }
 
-func unsubscribe[T any](t *testing.T, b *broadcastor.Broadcastor[T], id uuid.UUID) {
+func unsubscribe[T any](t *testing.T, b *broadcastor.Broadcastor[T], id uint64) {
 	t.Helper()
 	if err := b.Unsubscribe(t.Context(), id); err != nil {
-		t.Fatalf("Unsubscribe(%s): %v", id, err)
+		t.Fatalf("Unsubscribe(%d): %v", id, err)
 	}
 }
 
-func unsubscribeAll[T any](t *testing.T, b *broadcastor.Broadcastor[T], ids ...uuid.UUID) {
+func unsubscribeAll[T any](t *testing.T, b *broadcastor.Broadcastor[T], ids ...uint64) {
 	t.Helper()
 	for _, id := range ids {
 		unsubscribe(t, b, id)

@@ -3,8 +3,6 @@ package subscriber
 import (
 	"sync/atomic"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 // Stats is a snapshot of a subscriber's counters. Each message, each value of a batch, and each replayed value, is
@@ -13,7 +11,7 @@ import (
 // the rest of a batch handed to it one value at a time. The counters are read one at a time, so they may not add up
 // while messages are in flight. For SubscribeSeq, handle is the loop body.
 type Stats struct {
-	SubscriberID uuid.UUID
+	SubscriberID uint64
 
 	// Queued messages wait in a buffer of size Buffer (WithBuffer), a batch taking one place.
 	Queued int

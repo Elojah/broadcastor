@@ -9,8 +9,6 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor/middleware"
 	"github.com/elojah/broadcastor/subscriber"
 )
@@ -26,10 +24,10 @@ func TestSubscriberWithMiddleware(t *testing.T) {
 		ctx := context.WithValue(subscribeCtx(t), key{}, "subscribe")
 		b := newBroadcastor[int](t)
 		calls := &recorder[string]{}
-		ids := &recorder[uuid.UUID]{}
+		ids := &recorder[uint64]{}
 		trace := func(name string) subscriber.Middleware[int] {
 			return func(next subscriber.Handler[int]) subscriber.Handler[int] {
-				return func(ctx context.Context, id uuid.UUID, msg int) error {
+				return func(ctx context.Context, id uint64, msg int) error {
 					if v := ctx.Value(key{}); v != "subscribe" {
 						t.Errorf("middleware %s got a ctx with value %v, want the one passed to Subscribe", name, v)
 					}
@@ -42,7 +40,7 @@ func TestSubscriberWithMiddleware(t *testing.T) {
 				}
 			}
 		}
-		id, err := b.Subscribe(ctx, func(_ context.Context, id uuid.UUID, msg int) error {
+		id, err := b.Subscribe(ctx, func(_ context.Context, id uint64, msg int) error {
 			ids.record(id)
 			calls.record(fmt.Sprintf("handle %d", msg))
 
@@ -63,8 +61,8 @@ func TestSubscriberWithMiddleware(t *testing.T) {
 		if got := calls.messages(); !slices.Equal(got, want) {
 			t.Errorf("calls were %q, want %q", got, want)
 		}
-		if got, want := ids.messages(), slices.Repeat([]uuid.UUID{id}, 4); !slices.Equal(got, want) {
-			t.Errorf("middlewares and handle got IDs %v, want the subscriber's, %s", got, id)
+		if got, want := ids.messages(), slices.Repeat([]uint64{id}, 4); !slices.Equal(got, want) {
+			t.Errorf("middlewares and handle got IDs %v, want the subscriber's, %d", got, id)
 		}
 	})
 }
@@ -78,7 +76,7 @@ func TestSubscriberWithMiddleware_SkipsHandle(t *testing.T) {
 		handled := &recorder[int]{}
 		errs := &recorder[error]{}
 		evenOnly := func(next subscriber.Handler[int]) subscriber.Handler[int] {
-			return func(ctx context.Context, id uuid.UUID, msg int) error {
+			return func(ctx context.Context, id uint64, msg int) error {
 				if msg%2 == 1 {
 					return nil
 				}
@@ -115,7 +113,7 @@ func TestSubscriberWithMiddleware_Error(t *testing.T) {
 		b := newBroadcastor[int](t)
 		errs := &recorder[error]{}
 		wrap := func(next subscriber.Handler[int]) subscriber.Handler[int] {
-			return func(ctx context.Context, id uuid.UUID, msg int) error {
+			return func(ctx context.Context, id uint64, msg int) error {
 				err := next(ctx, id, msg)
 				if want := handleError(msg); !errors.Is(err, want) {
 					t.Errorf("middleware got %v, want the error handle returned, %v", err, want)
@@ -124,7 +122,7 @@ func TestSubscriberWithMiddleware_Error(t *testing.T) {
 				return fmt.Errorf("%w: %w", errMiddleware, err)
 			}
 		}
-		id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
+		id := subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
 			return handleError(msg)
 		}, subscriber.WithMiddleware(wrap), subscriber.WithErrorHandler[int](func(_ context.Context, err error) {
 			errs.record(err)
@@ -159,7 +157,7 @@ func TestSubscriberWithMiddleware_Recover(t *testing.T) {
 		handled := &recorder[int]{}
 		errs := &recorder[error]{}
 		panicOnOne := func(next subscriber.Handler[int]) subscriber.Handler[int] {
-			return func(ctx context.Context, id uuid.UUID, msg int) error {
+			return func(ctx context.Context, id uint64, msg int) error {
 				if msg == 1 {
 					panic(handleError(msg))
 				}
@@ -167,7 +165,7 @@ func TestSubscriberWithMiddleware_Recover(t *testing.T) {
 				return next(ctx, id, msg)
 			}
 		}
-		id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
+		id := subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
 			handled.record(msg)
 			if msg == 2 {
 				panic(handleError(msg))
@@ -203,7 +201,7 @@ func TestSubscriberWithMiddleware_Recover(t *testing.T) {
 				continue
 			}
 			if panicErr.SubscriberID != id || panicErr.Message != msg || panicErr.Value != handleError(msg) {
-				t.Errorf("error %d is for subscriber %s and message %d with value %v, want %s, %d and %v",
+				t.Errorf("error %d is for subscriber %d and message %d with value %v, want %d, %d and %v",
 					i, panicErr.SubscriberID, panicErr.Message, panicErr.Value, id, msg, handleError(msg))
 			}
 		}
@@ -219,7 +217,7 @@ func TestSubscriberWithMiddleware_Retry(t *testing.T) {
 		b := newBroadcastor[int](t)
 		handled := &recorder[int]{}
 		failures := &recorder[int]{}
-		id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
+		id := subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
 			// Message 1 fails its first two calls.
 			if n := handled.record(msg); msg == 1 && n <= 2 {
 				return handleError(msg)
@@ -259,7 +257,7 @@ func TestSubscriberWithMiddleware_RetryContextDone(t *testing.T) {
 		b := newBroadcastor[int](t)
 		handled := &recorder[int]{}
 		failures := &recorder[int]{}
-		_, err := b.Subscribe(ctx, func(_ context.Context, _ uuid.UUID, msg int) error {
+		_, err := b.Subscribe(ctx, func(_ context.Context, _ uint64, msg int) error {
 			handled.record(msg)
 
 			return handleError(msg)
@@ -301,7 +299,7 @@ func TestSubscriberWithMiddleware_History(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b := newBroadcastor[int](t)
 		history := &recordStore{}
-		id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
+		id := subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
 			switch msg {
 			case 2:
 				return handleError(msg)
@@ -329,7 +327,7 @@ func TestSubscriberWithMiddleware_History(t *testing.T) {
 		for i, want := range []error{nil, handleError(2), subscriber.ErrPanic, nil} {
 			msg := i + 1
 			if r := records[i]; r.SubscriberID != id || r.Message != msg || !errors.Is(r.Err, want) {
-				t.Errorf("record %d is for subscriber %s and message %d with error %v, want %s, %d and %v",
+				t.Errorf("record %d is for subscriber %d and message %d with error %v, want %d, %d and %v",
 					i, r.SubscriberID, r.Message, r.Err, id, msg, want)
 			}
 		}
@@ -348,7 +346,7 @@ func TestSubscriberWithMiddleware_MaxAge(t *testing.T) {
 		handled := &recorder[int]{}
 		errs := &recorder[error]{}
 		lost := &recordStore{}
-		id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
+		id := subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
 			handled.record(msg)
 			time.Sleep(2 * time.Second)
 
@@ -372,7 +370,7 @@ func TestSubscriberWithMiddleware_MaxAge(t *testing.T) {
 		var expired *subscriber.ExpiredError[int]
 		if len(got) != 1 || !errors.As(got[0], &expired) || expired.SubscriberID != id || expired.Message != 2 ||
 			expired.Age != 2*time.Second {
-			t.Errorf("error handler got %v, want a *subscriber.ExpiredError for subscriber %s and message 2, 2s old", got, id)
+			t.Errorf("error handler got %v, want a *subscriber.ExpiredError for subscriber %d and message 2, 2s old", got, id)
 		}
 		if records := lost.messages(); len(records) != 1 || records[0].Message != 2 || !errors.Is(records[0].Err, subscriber.ErrExpired) {
 			t.Errorf("dead letters got %v, want message 2 with a *subscriber.ExpiredError", records)
@@ -393,7 +391,7 @@ func TestSubscriberWithMiddleware_SubscribeSeq(t *testing.T) {
 		b := newBroadcastor[int](t)
 		results := &recorder[string]{}
 		spy := func(next subscriber.Handler[int]) subscriber.Handler[int] {
-			return func(ctx context.Context, id uuid.UUID, msg int) error {
+			return func(ctx context.Context, id uint64, msg int) error {
 				err := next(ctx, id, msg)
 				result := "ok"
 				switch {

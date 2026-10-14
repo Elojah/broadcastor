@@ -12,8 +12,6 @@ import (
 	"log"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/message"
 	"github.com/elojah/broadcastor/subscriber"
@@ -24,10 +22,10 @@ const stuckAfter = 10 * time.Millisecond
 func main() {
 	ctx := context.Background()
 	b := broadcastor.NewBroadcastor[int]()
-	names := map[uuid.UUID]string{}
+	names := map[uint64]string{}
 
 	release := make(chan struct{})
-	serial, err := b.Subscribe(ctx, func(context.Context, uuid.UUID, int) error {
+	serial, err := b.Subscribe(ctx, func(context.Context, uint64, int) error {
 		<-release
 
 		return nil
@@ -42,7 +40,7 @@ func main() {
 	}
 	names[serial] = "serial"
 
-	logger, err := b.Subscribe(ctx, func(context.Context, uuid.UUID, int) error {
+	logger, err := b.Subscribe(ctx, func(context.Context, uint64, int) error {
 		return nil
 	})
 	if err != nil {

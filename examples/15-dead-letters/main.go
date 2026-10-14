@@ -11,8 +11,6 @@ import (
 	"log"
 	"sync"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/subscriber"
 )
@@ -44,7 +42,7 @@ func main() {
 	var done sync.WaitGroup
 	lost := &deadLetters{done: &done}
 	release := make(chan struct{})
-	_, err := b.Subscribe(ctx, func(_ context.Context, _ uuid.UUID, n int) error {
+	_, err := b.Subscribe(ctx, func(_ context.Context, _ uint64, n int) error {
 		if n < 0 {
 			return errNegative
 		}

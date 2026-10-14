@@ -3,8 +3,6 @@ package middleware
 import (
 	"context"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor/subscriber"
 )
 
@@ -15,7 +13,7 @@ import (
 // dead letters get it although handle succeeded.
 func History[T any](s subscriber.Store[T]) subscriber.Middleware[T] {
 	return func(next subscriber.Handler[T]) subscriber.Handler[T] {
-		return func(ctx context.Context, id uuid.UUID, msg T) error {
+		return func(ctx context.Context, id uint64, msg T) error {
 			if err := next(ctx, id, msg); err != nil {
 				return err
 			}

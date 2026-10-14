@@ -9,8 +9,6 @@ import (
 	"log"
 	"sync"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/subscriber"
 )
@@ -21,7 +19,7 @@ func main() {
 
 	release := make(chan struct{})
 	var handled sync.WaitGroup
-	id, err := b.Subscribe(ctx, func(_ context.Context, _ uuid.UUID, n int) error {
+	id, err := b.Subscribe(ctx, func(_ context.Context, _ uint64, n int) error {
 		<-release
 		fmt.Println("got", n)
 		handled.Done()

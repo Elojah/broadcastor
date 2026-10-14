@@ -7,8 +7,6 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor/middleware"
 	"github.com/elojah/broadcastor/subscriber"
 )
@@ -21,10 +19,10 @@ func TestMaxAge(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		id := uuid.New()
+		id := uint64(7)
 		made := time.Now()
 		calls := 0
-		handle := middleware.MaxAge(time.Second, identity)(func(context.Context, uuid.UUID, time.Time) error {
+		handle := middleware.MaxAge(time.Second, identity)(func(context.Context, uint64, time.Time) error {
 			calls++
 
 			return nil
@@ -42,7 +40,7 @@ func TestMaxAge(t *testing.T) {
 			t.Fatalf("for a message older than d, MaxAge returned %v, want a *subscriber.ExpiredError", err)
 		}
 		if want := time.Second + time.Nanosecond; expired.SubscriberID != id || !expired.Message.Equal(made) || expired.Age != want {
-			t.Errorf("*ExpiredError is for subscriber %s and message %v, %v old, want %s, %v and %v",
+			t.Errorf("*ExpiredError is for subscriber %d and message %v, %v old, want %d, %v and %v",
 				expired.SubscriberID, expired.Message, expired.Age, id, made, want)
 		}
 		if calls != 1 {
@@ -57,12 +55,12 @@ func TestMaxAge_Zero(t *testing.T) {
 
 	for _, d := range []time.Duration{0, -time.Second} {
 		calls := 0
-		handle := middleware.MaxAge(d, identity)(func(context.Context, uuid.UUID, time.Time) error {
+		handle := middleware.MaxAge(d, identity)(func(context.Context, uint64, time.Time) error {
 			calls++
 
 			return nil
 		})
-		if err := handle(t.Context(), uuid.New(), time.Time{}); err != nil || calls != 1 {
+		if err := handle(t.Context(), 1, time.Time{}); err != nil || calls != 1 {
 			t.Errorf("MaxAge(%v) returned %v after %d calls, want nil after 1", d, err, calls)
 		}
 	}
@@ -76,14 +74,14 @@ func TestMaxAge_Retry(t *testing.T) {
 		made := time.Now()
 		calls := 0
 		retry := middleware.Retry[time.Time](middleware.RetryPolicy{Attempts: 3, Delay: time.Second})
-		handle := middleware.MaxAge(time.Second, identity)(retry(func(context.Context, uuid.UUID, time.Time) error {
+		handle := middleware.MaxAge(time.Second, identity)(retry(func(context.Context, uint64, time.Time) error {
 			calls++
 
 			return errHandle
 		}))
 
 		time.Sleep(2 * time.Second)
-		if err := handle(t.Context(), uuid.New(), made); !errors.Is(err, subscriber.ErrExpired) || calls != 0 {
+		if err := handle(t.Context(), 1, made); !errors.Is(err, subscriber.ErrExpired) || calls != 0 {
 			t.Errorf("MaxAge returned %v after %d calls, want a *subscriber.ExpiredError after none", err, calls)
 		}
 	})

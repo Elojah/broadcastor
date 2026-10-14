@@ -13,8 +13,8 @@ BENCH_FLAGS        = -run '^$$' -bench '$(BENCH)' -benchmem
 # How many times stress runs TestStress.
 STRESS_COUNT      ?= 50
 
-# The modules tidy, lint and test cover. Examples with dependencies of their own are modules, so go.mod lists only
-# uuid.
+# The modules tidy, lint and test cover. Examples with dependencies of their own are modules, so the library's go.mod
+# lists none.
 MODULES            = . examples/19-redis examples/24-mqtt examples/25-modbus
 
 # The examples tinygo-run and tinygo-build cover, modules excluded, and the board tinygo-build targets.

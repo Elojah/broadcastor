@@ -5,8 +5,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor/middleware"
 	"github.com/elojah/broadcastor/store"
 	"github.com/elojah/broadcastor/subscriber"
@@ -22,7 +20,7 @@ func TestHistory(t *testing.T) {
 	type key struct{}
 	ctx, cancel := context.WithCancel(context.WithValue(t.Context(), key{}, "handle"))
 	cancel()
-	id := uuid.New()
+	id := uint64(7)
 	var records []subscriber.Record[int]
 	history := store.PutFunc[int](func(ctx context.Context, r subscriber.Record[int]) error {
 		if v := ctx.Value(key{}); v != "handle" || ctx.Err() != nil {
@@ -48,7 +46,7 @@ func TestHistory(t *testing.T) {
 		t.Fatalf("store got %v, want a single record, for message 3", records)
 	}
 	if r := records[0]; r.SubscriberID != id || r.Message != 3 || r.Err != nil {
-		t.Errorf("record is for subscriber %s and message %d with error %v, want %s, 3 and nil", r.SubscriberID, r.Message, r.Err, id)
+		t.Errorf("record is for subscriber %d and message %d with error %v, want %d, 3 and nil", r.SubscriberID, r.Message, r.Err, id)
 	}
 }
 
@@ -58,13 +56,13 @@ func TestHistory_PutFails(t *testing.T) {
 
 	calls := 0
 	history := store.PutFunc[int](func(context.Context, subscriber.Record[int]) error { return errPut })
-	handle := middleware.History[int](history)(func(context.Context, uuid.UUID, int) error {
+	handle := middleware.History[int](history)(func(context.Context, uint64, int) error {
 		calls++
 
 		return nil
 	})
 
-	if err := handle(t.Context(), uuid.New(), 1); !errors.Is(err, errPut) {
+	if err := handle(t.Context(), 1, 1); !errors.Is(err, errPut) {
 		t.Errorf("History returned %v, want %v", err, errPut)
 	}
 	if calls != 1 {

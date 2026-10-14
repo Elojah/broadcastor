@@ -12,8 +12,6 @@ import (
 	"log"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/holder"
 	"github.com/elojah/broadcastor/subscriber"
@@ -53,13 +51,13 @@ func main() {
 	// Each handle sends on it once it has printed, since the two subscribers run concurrently.
 	shown := make(chan struct{}, 16)
 
-	subscribe(ctx, b, holder.NewLatest[reading](window), func(_ context.Context, _ uuid.UUID, r reading) error {
+	subscribe(ctx, b, holder.NewLatest[reading](window), func(_ context.Context, _ uint64, r reading) error {
 		fmt.Printf("display: %s at %.1f°C\n", r.Sensor, r.Celsius)
 		shown <- struct{}{}
 
 		return nil
 	})
-	subscribe(ctx, b, holder.NewReduce(window, latestBySensor), func(_ context.Context, _ uuid.UUID, r reading) error {
+	subscribe(ctx, b, holder.NewReduce(window, latestBySensor), func(_ context.Context, _ uint64, r reading) error {
 		fmt.Printf("uplink: %s at %.1f°C, latest of %d\n", r.Sensor, r.Celsius, r.Count)
 		shown <- struct{}{}
 

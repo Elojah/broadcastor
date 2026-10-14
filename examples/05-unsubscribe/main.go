@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor"
 )
 
@@ -17,7 +15,7 @@ func main() {
 	b := broadcastor.NewBroadcastor[string]()
 
 	stopped := make(chan struct{})
-	_, err := b.Subscribe(ctx, func(ctx context.Context, id uuid.UUID, msg string) error {
+	_, err := b.Subscribe(ctx, func(ctx context.Context, id uint64, msg string) error {
 		fmt.Println("got", msg)
 		if msg != "stop" {
 			return nil

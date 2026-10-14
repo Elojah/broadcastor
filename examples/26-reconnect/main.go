@@ -15,8 +15,6 @@ import (
 	"math"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/middleware"
 	"github.com/elojah/broadcastor/subscriber"
@@ -55,7 +53,7 @@ func subscribeForwarder(ctx context.Context, b *broadcastor.Broadcastor[int], n 
 	// Only the forwarder's goroutine uses it, in handle and redial, and the returned func once done has the ID, so it
 	// needs no lock.
 	l := n.dial()
-	handle := func(_ context.Context, _ uuid.UUID, msg int) error {
+	handle := func(_ context.Context, _ uint64, msg int) error {
 		return l.send(msg)
 	}
 	redial := func(context.Context) error {
@@ -66,7 +64,7 @@ func subscribeForwarder(ctx context.Context, b *broadcastor.Broadcastor[int], n 
 	}
 
 	// Room for the forwarder's ID, since Shutdown waits for the send.
-	done := make(chan uuid.UUID, 1)
+	done := make(chan uint64, 1)
 	_, err := b.Subscribe(ctx, handle,
 		subscriber.WithMiddleware(
 			middleware.Retry[int](middleware.RetryPolicy{Attempts: 5, Delay: time.Millisecond}),
@@ -96,7 +94,7 @@ func disconnect[T any](n int) subscriber.Middleware[T] {
 		// One count per subscriber, which handles one message at a time.
 		failures := 0
 
-		return func(ctx context.Context, id uuid.UUID, msg T) error {
+		return func(ctx context.Context, id uint64, msg T) error {
 			err := next(ctx, id, msg)
 			if err == nil {
 				failures = 0
@@ -116,7 +114,7 @@ func disconnect[T any](n int) subscriber.Middleware[T] {
 // reconnect calls redial once next returns errDisconnected, as policy retries it, then hands next the message again.
 func reconnect[T any](redial func(ctx context.Context) error, policy middleware.RetryPolicy) subscriber.Middleware[T] {
 	return func(next subscriber.Handler[T]) subscriber.Handler[T] {
-		return func(ctx context.Context, id uuid.UUID, msg T) error {
+		return func(ctx context.Context, id uint64, msg T) error {
 			if err := next(ctx, id, msg); !errors.Is(err, errDisconnected) {
 				return err
 			}

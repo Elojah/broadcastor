@@ -14,8 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/holder"
 	"github.com/elojah/broadcastor/message"
@@ -35,7 +33,7 @@ func main() {
 	ctx := context.Background()
 	b := broadcastor.NewBroadcastor[reading]()
 
-	if _, err := b.Subscribe(ctx, func(_ context.Context, _ uuid.UUID, r reading) error {
+	if _, err := b.Subscribe(ctx, func(_ context.Context, _ uint64, r reading) error {
 		fmt.Println("display:", r)
 
 		return nil
@@ -44,7 +42,7 @@ func main() {
 	}
 
 	// Each batch goes to send, so handle gets nothing.
-	send := func(_ context.Context, _ uuid.UUID, batch message.Batch[reading]) error {
+	send := func(_ context.Context, _ uint64, batch message.Batch[reading]) error {
 		readings := make([]string, 0, batch.Len())
 		for r := range batch.All() {
 			readings = append(readings, r.String())
@@ -53,7 +51,7 @@ func main() {
 
 		return nil
 	}
-	if _, err := b.Subscribe(ctx, func(_ context.Context, _ uuid.UUID, r reading) error {
+	if _, err := b.Subscribe(ctx, func(_ context.Context, _ uint64, r reading) error {
 		fmt.Println("uplink: alone", r)
 
 		return nil

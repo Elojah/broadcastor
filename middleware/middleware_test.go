@@ -5,8 +5,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor/middleware"
 	"github.com/elojah/broadcastor/subscriber"
 )
@@ -14,7 +12,7 @@ import (
 var errHandle = errors.New("handle failed")
 
 // failOn is a handler that panics with errHandle on message 1, returns it on message 2, and succeeds otherwise.
-func failOn(_ context.Context, _ uuid.UUID, msg int) error {
+func failOn(_ context.Context, _ uint64, msg int) error {
 	switch msg {
 	case 1:
 		panic(errHandle)
@@ -30,7 +28,7 @@ func failOn(_ context.Context, _ uuid.UUID, msg int) error {
 func TestRecover_WrapError(t *testing.T) {
 	t.Parallel()
 
-	id := uuid.New()
+	id := uint64(7)
 	handle := middleware.Recover[int]()(middleware.WrapError[int]()(failOn))
 
 	var panicErr *subscriber.PanicError[int]

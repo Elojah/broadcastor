@@ -6,13 +6,11 @@ import (
 	"context"
 	"sync/atomic"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 // Subscriber is one subscription of a Broadcastor. Only Consume reads its channel.
 type Subscriber[T any] struct {
-	id     uuid.UUID
+	id     uint64
 	config config[T]
 	inbox  inbox[T]
 
@@ -35,7 +33,7 @@ type Subscriber[T any] struct {
 }
 
 // New returns a subscriber holding the subscription's reference, which Unsubscribe drops.
-func New[T any](id uuid.UUID, options ...Option[T]) *Subscriber[T] {
+func New[T any](id uint64, options ...Option[T]) *Subscriber[T] {
 	var config config[T]
 	for _, option := range options {
 		option(&config)
@@ -47,7 +45,7 @@ func New[T any](id uuid.UUID, options ...Option[T]) *Subscriber[T] {
 }
 
 // ID returns the subscriber's ID.
-func (s *Subscriber[T]) ID() uuid.UUID {
+func (s *Subscriber[T]) ID() uint64 {
 	return s.id
 }
 

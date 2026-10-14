@@ -14,8 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/middleware"
 	"github.com/elojah/broadcastor/subscriber"
@@ -32,7 +30,7 @@ func logAttempts() subscriber.Middleware[string] {
 	attempts := map[string]int{}
 
 	return func(next subscriber.Handler[string]) subscriber.Handler[string] {
-		return func(ctx context.Context, id uuid.UUID, job string) error {
+		return func(ctx context.Context, id uint64, job string) error {
 			attempts[job]++
 			err := next(ctx, id, job)
 			if err != nil {
@@ -53,7 +51,7 @@ func main() {
 
 	// Every message is either handled or reported.
 	var done sync.WaitGroup
-	id, err := b.Subscribe(ctx, func(_ context.Context, _ uuid.UUID, job string) error {
+	id, err := b.Subscribe(ctx, func(_ context.Context, _ uint64, job string) error {
 		left, known := failures[job]
 		if !known {
 			return errUnknownJob

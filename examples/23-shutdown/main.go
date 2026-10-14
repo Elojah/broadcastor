@@ -12,8 +12,6 @@ import (
 	"log"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/store"
 	"github.com/elojah/broadcastor/subscriber"
@@ -26,7 +24,7 @@ func main() {
 	b := broadcastor.NewBroadcastor[int]()
 
 	busy, release := make(chan struct{}), make(chan struct{})
-	_, err := b.Subscribe(ctx, func(_ context.Context, _ uuid.UUID, n int) error {
+	_, err := b.Subscribe(ctx, func(_ context.Context, _ uint64, n int) error {
 		if n == 1 {
 			close(busy)
 			<-release // a slow write to flash
@@ -40,7 +38,7 @@ func main() {
 	}
 
 	queue := store.NewRing[int](16)
-	_, err = b.Subscribe(ctx, func(context.Context, uuid.UUID, int) error {
+	_, err = b.Subscribe(ctx, func(context.Context, uint64, int) error {
 		<-release // until the uplink times out
 
 		return errUplinkDown

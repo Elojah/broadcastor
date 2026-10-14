@@ -12,8 +12,6 @@ import (
 	"log"
 	"sync"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/message"
 	"github.com/elojah/broadcastor/subscriber"
@@ -27,7 +25,7 @@ func main() {
 	var finished sync.WaitGroup
 	finished.Add(2)
 
-	logID, err := b.Subscribe(ctx, func(_ context.Context, _ uuid.UUID, msg string) error {
+	logID, err := b.Subscribe(ctx, func(_ context.Context, _ uint64, msg string) error {
 		fmt.Println("log:", msg)
 		if msg == "done" {
 			finished.Done()
@@ -40,7 +38,7 @@ func main() {
 	}
 
 	release := make(chan struct{})
-	dashboardID, err := b.Subscribe(ctx, func(_ context.Context, _ uuid.UUID, msg string) error {
+	dashboardID, err := b.Subscribe(ctx, func(_ context.Context, _ uint64, msg string) error {
 		<-release
 		fmt.Println("dashboard:", msg)
 		if msg == "done" {
@@ -67,7 +65,7 @@ func main() {
 	b.Broadcast(ctx, "done", message.WithSync[string]()) // waits for the dashboard
 	finished.Wait()
 
-	for _, id := range []uuid.UUID{logID, dashboardID} {
+	for _, id := range []uint64{logID, dashboardID} {
 		if err := b.Unsubscribe(ctx, id); err != nil {
 			log.Fatal(err)
 		}

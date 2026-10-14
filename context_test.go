@@ -9,8 +9,6 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/message"
 	"github.com/elojah/broadcastor/subscriber"
@@ -149,13 +147,13 @@ func TestSubscribe_ContextNoLeak(t *testing.T) {
 
 	for _, tt := range []struct {
 		name  string
-		close func(t *testing.T, b *broadcastor.Broadcastor[int], id uuid.UUID)
+		close func(t *testing.T, b *broadcastor.Broadcastor[int], id uint64)
 	}{
-		{"Unsubscribe", func(t *testing.T, b *broadcastor.Broadcastor[int], id uuid.UUID) {
+		{"Unsubscribe", func(t *testing.T, b *broadcastor.Broadcastor[int], id uint64) {
 			t.Helper()
 			unsubscribe(t, b, id)
 		}},
-		{"Close", func(t *testing.T, b *broadcastor.Broadcastor[int], _ uuid.UUID) {
+		{"Close", func(t *testing.T, b *broadcastor.Broadcastor[int], _ uint64) {
 			t.Helper()
 			if err := b.Close(); err != nil {
 				t.Fatalf("Close: %v", err)
@@ -221,7 +219,7 @@ func TestSubscriberWithDetachedContext(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.WithValue(t.Context(), key{}, "subscribe"))
 		b := newBroadcastor[int](t)
 		handled := &recorder[int]{}
-		id, err := b.Subscribe(ctx, func(ctx context.Context, id uuid.UUID, msg int) error {
+		id, err := b.Subscribe(ctx, func(ctx context.Context, id uint64, msg int) error {
 			if err := ctx.Err(); err != nil {
 				t.Errorf("handle got a done ctx: %v", err)
 			}
@@ -294,9 +292,9 @@ func TestMessageWithContext(t *testing.T) {
 		messageCtx := context.WithValue(t.Context(), key{}, "message")
 		defaultCtx := context.WithValue(t.Context(), key{}, "default")
 		b := newBroadcastor[int](t)
-		subscribeRecording := func(options ...subscriber.Option[int]) (*recorder[string], uuid.UUID) {
+		subscribeRecording := func(options ...subscriber.Option[int]) (*recorder[string], uint64) {
 			values := &recorder[string]{}
-			id, err := b.Subscribe(ctx, func(ctx context.Context, _ uuid.UUID, _ int) error {
+			id, err := b.Subscribe(ctx, func(ctx context.Context, _ uint64, _ int) error {
 				v, _ := ctx.Value(key{}).(string)
 				values.record(v)
 
@@ -336,7 +334,7 @@ func TestMessageWithContext_Cancel(t *testing.T) {
 		b := newBroadcastor[int](t)
 		release := make(chan struct{})
 		errs := &recorder[error]{}
-		id, err := b.Subscribe(ctx, func(ctx context.Context, _ uuid.UUID, _ int) error {
+		id, err := b.Subscribe(ctx, func(ctx context.Context, _ uint64, _ int) error {
 			<-release
 			errs.record(ctx.Err())
 
@@ -379,7 +377,7 @@ func TestMessageWithContext_ErrorHandlers(t *testing.T) {
 	}{
 		{"handle", handleError(1), func(t *testing.T, b *broadcastor.Broadcastor[int], errorHandler subscriber.Option[int], options ...message.Option[int]) {
 			t.Helper()
-			id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
+			id := subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
 				return handleError(msg)
 			}, errorHandler)
 			b.Broadcast(t.Context(), 1, options...)

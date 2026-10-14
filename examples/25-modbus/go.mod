@@ -4,7 +4,6 @@ go 1.26.1
 
 require (
 	github.com/elojah/broadcastor v0.1.0
-	github.com/google/uuid v1.6.0
 	github.com/simonvetter/modbus v1.6.4
 )
 

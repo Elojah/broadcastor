@@ -8,8 +8,6 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor/holder"
 	"github.com/elojah/broadcastor/message"
 	"github.com/elojah/broadcastor/subscriber"
@@ -43,7 +41,7 @@ func TestSubscriberWithHolder(t *testing.T) {
 		wrapped := &recorder[int]{}
 		id := subscribe(t, b, r.handle, subscriber.WithHolder(byTens(holdFor)),
 			subscriber.WithMiddleware(func(next subscriber.Handler[int]) subscriber.Handler[int] {
-				return func(ctx context.Context, id uuid.UUID, msg int) error {
+				return func(ctx context.Context, id uint64, msg int) error {
 					wrapped.record(msg)
 
 					return next(ctx, id, msg)
@@ -102,7 +100,7 @@ func TestSubscriberWithHolder_Errors(t *testing.T) {
 		type key struct{}
 		var handledWith any
 		subscriberErrs, firstErrs, newestErrs := &recorder[int]{}, &recorder[int]{}, &recorder[int]{}
-		subscribe(t, b, func(ctx context.Context, _ uuid.UUID, msg int) error {
+		subscribe(t, b, func(ctx context.Context, _ uint64, msg int) error {
 			handledWith = ctx.Value(key{})
 
 			return handleError(msg)
@@ -140,7 +138,7 @@ func TestSubscriberWithHolder_Shutdown(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b := newBroadcastor[int](t)
 		r := &recorder[int]{}
-		done := make(chan uuid.UUID, 1)
+		done := make(chan uint64, 1)
 		id := subscribe(t, b, r.handle, subscriber.WithHolder(byTens(time.Hour)), subscriber.WithDone[int](t.Context(), done))
 		for _, msg := range []int{11, 21, 12} {
 			b.Broadcast(t.Context(), msg)
@@ -156,7 +154,7 @@ func TestSubscriberWithHolder_Shutdown(t *testing.T) {
 		if got, want := r.messages(), []int{12, 21}; !slices.Equal(got, want) {
 			t.Errorf("handle got %v once Shutdown returned, want %v", got, want)
 		}
-		if got := received(done); !slices.Equal(got, []uuid.UUID{id}) {
+		if got := received(done); !slices.Equal(got, []uint64{id}) {
 			t.Errorf("done got %v once Shutdown returned, want %v", got, id)
 		}
 	})

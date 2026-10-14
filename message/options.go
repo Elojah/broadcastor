@@ -3,8 +3,6 @@ package message
 import (
 	"context"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 // Option configures a message, when passed to Broadcast or to subscriber.WithDefaultMessageOptions.
@@ -82,7 +80,7 @@ func WithTimeout[T any](timeout time.Duration) Option[T] {
 // once per subscriber, before the subscriber's own filters (subscriber.WithFilter), so a skipped subscriber is neither
 // waited for, reported nor counted, and its filters never see the message. Several WithSubscriberFilter run in order
 // until one rejects. A nil keep is ignored, and so is keep in subscriber.WithDefaultMessageOptions.
-func WithSubscriberFilter[T any](keep func(id uuid.UUID) bool) Option[T] {
+func WithSubscriberFilter[T any](keep func(id uint64) bool) Option[T] {
 	return func(config *Config) {
 		if keep == nil {
 			return
@@ -93,6 +91,6 @@ func WithSubscriberFilter[T any](keep func(id uuid.UUID) bool) Option[T] {
 
 			return
 		}
-		config.SubscriberFilter = func(id uuid.UUID) bool { return previous(id) && keep(id) }
+		config.SubscriberFilter = func(id uint64) bool { return previous(id) && keep(id) }
 	}
 }

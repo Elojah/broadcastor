@@ -7,8 +7,6 @@ import (
 	"math/rand/v2"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor/subscriber"
 )
 
@@ -46,7 +44,7 @@ func Retry[T any](policy RetryPolicy) subscriber.Middleware[T] {
 	}
 
 	return func(next subscriber.Handler[T]) subscriber.Handler[T] {
-		return func(ctx context.Context, id uuid.UUID, msg T) error {
+		return func(ctx context.Context, id uint64, msg T) error {
 			return policy.Do(ctx, func(ctx context.Context) error { return next(ctx, id, msg) })
 		}
 	}

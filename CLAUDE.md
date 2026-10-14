@@ -4,7 +4,7 @@ Commands, fragile invariants and settled decisions. Behaviour is in godoc and th
 
 ## Overview
 
-`github.com/elojah/broadcastor`, a generic in-process fan-out. Go 1.26.1, one dependency: `github.com/google/uuid`.
+`github.com/elojah/broadcastor`, a generic in-process fan-out. Go 1.26.1, no dependency.
 
 Packages: `broadcastor` (`Broadcastor`), `subscriber` (`Subscriber`, its options, `Handler`/`Middleware`, `Store`/`Record`, `Holder`, `Stats`, errors), `message` (`Message`, `Config`, `Delivery`, `Batch`, `Slice`, `Map`, `Broadcast` options), `middleware`, `store`, `holder`, `filter`, `pkg/gate`, `examples/`. Imports go `broadcastor` → `subscriber` → `message`. `middleware` and `store` import `subscriber`, never `broadcastor`. `holder` imports only `message`, `filter` nothing from the library.
 
@@ -79,6 +79,7 @@ A change to channels, removal or error reporting must keep these, and pass `make
 - **`WithDone` waits for a receiver until its ctx is done**, with the ID, so subscribers can share one. `Shutdown` waits for the send.
 - **`remove` is `Attach`'s callback, not a channel**: it deletes from the map only the Broadcastor owns, and returns whether it did, which keeps eviction to once.
 - **Subscribers are counted out by `countOut`, a callback `Attach` takes, not a channel**, so a Broadcastor runs no goroutine of its own and one never closed is garbage collected (`TestNewBroadcastor_NotClosed`). A channel needed a reader outside `Shutdown`, since a send bounded by the subscriber's ctx would miss a subscriber removed by its ctx.
+- **IDs are a `uint64` from a per-Broadcastor atomic counter**, from 1, not UUIDs: no dependency, and `ErrClosed` the only error `Subscribe` returns. They are unique only within a Broadcastor, which works because cross-process transports are out of scope. `message.Map`'s keys come from a counter of their own, shared by every `Map`.
 - **`message.Config` has no `T`** (`message.Option[T]` keeps it only for the API), hence no message-level store.
 - **Holding is a hook, windows live in holders**: `Consume` only holds and releases through `Holder`, and wakes up on one timer, so a reorder, a delay or a batch can be a holder too. `holder.Reduce` (`NewLatest` too) and `holder.Reorder` keep one window at a time, `holder.Jitter` none. `Hold` returns how many it merged away, not whether, since `Reduce` may merge several at once. `Reduce` reduces as messages come, not at the window's end, so that what it holds stays bounded. Its func sees only values, so every message it releases carries the newest message's `Config`: `Reorder`, whose messages keep theirs, is not a `Reduce`, and sorts once the window ends, stable. `Jitter` releases, once its oldest message is due, every one ordered before it, so that none waits more than d: releasing the first in order once it is due would hold a stream ordered backwards forever. It keeps a heap, tied by arrival, and its arrivals since the oldest held, marking those released early.
 - **`store` detaches ctx** for `Enqueue`'s `Put`, and `Drain`'s dead-letter `Put` and `Ack`: a done ctx is often why a message is stored, and an entry handled must be acked (`TestDrain_AckOnceHandled`).

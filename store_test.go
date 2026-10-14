@@ -12,8 +12,6 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/message"
 	"github.com/elojah/broadcastor/middleware"
@@ -35,7 +33,7 @@ func TestSubscriberWithDeadLetters(t *testing.T) {
 		b := newBroadcastor[int](t)
 		events := &recorder[string]{}
 		stored := &recordStore{}
-		id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
+		id := subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
 			if msg%2 == 0 {
 				return handleError(msg)
 			}
@@ -73,7 +71,7 @@ func TestSubscriberWithDeadLetters(t *testing.T) {
 		for i, r := range records {
 			msg := 2 * (i + 1)
 			if r.SubscriberID != id || r.Message != msg || !errors.Is(r.Err, handleError(msg)) {
-				t.Errorf("record %d is for subscriber %s and message %d with error %v, want %s, %d and %v",
+				t.Errorf("record %d is for subscriber %d and message %d with error %v, want %d, %d and %v",
 					i, r.SubscriberID, r.Message, r.Err, id, msg, handleError(msg))
 			}
 		}
@@ -89,11 +87,11 @@ func TestSubscriberWithDeadLetters_Lost(t *testing.T) {
 		name string
 		want error
 		// lose makes a subscriber with the store option lose message 1, and returns its ID.
-		lose func(t *testing.T, b *broadcastor.Broadcastor[int], store subscriber.Option[int]) uuid.UUID
+		lose func(t *testing.T, b *broadcastor.Broadcastor[int], store subscriber.Option[int]) uint64
 	}{
-		{"handle", handleError(1), func(t *testing.T, b *broadcastor.Broadcastor[int], store subscriber.Option[int]) uuid.UUID {
+		{"handle", handleError(1), func(t *testing.T, b *broadcastor.Broadcastor[int], store subscriber.Option[int]) uint64 {
 			t.Helper()
-			id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
+			id := subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
 				return handleError(msg)
 			}, store)
 			b.Broadcast(t.Context(), 1)
@@ -101,9 +99,9 @@ func TestSubscriberWithDeadLetters_Lost(t *testing.T) {
 
 			return id
 		}},
-		{"Panic", subscriber.ErrPanic, func(t *testing.T, b *broadcastor.Broadcastor[int], store subscriber.Option[int]) uuid.UUID {
+		{"Panic", subscriber.ErrPanic, func(t *testing.T, b *broadcastor.Broadcastor[int], store subscriber.Option[int]) uint64 {
 			t.Helper()
-			id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
+			id := subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
 				panic(handleError(msg))
 			}, store, subscriber.WithMiddleware(middleware.Recover[int]()))
 			b.Broadcast(t.Context(), 1)
@@ -111,7 +109,7 @@ func TestSubscriberWithDeadLetters_Lost(t *testing.T) {
 
 			return id
 		}},
-		{"Timeout", subscriber.ErrTimeout, func(t *testing.T, b *broadcastor.Broadcastor[int], store subscriber.Option[int]) uuid.UUID {
+		{"Timeout", subscriber.ErrTimeout, func(t *testing.T, b *broadcastor.Broadcastor[int], store subscriber.Option[int]) uint64 {
 			t.Helper()
 			stuck := &recorder[int]{hold: make(chan struct{})}
 			id := subscribe(t, b, stuck.handle, store)
@@ -122,7 +120,7 @@ func TestSubscriberWithDeadLetters_Lost(t *testing.T) {
 
 			return id
 		}},
-		{"Dropped", subscriber.ErrDropped, func(t *testing.T, b *broadcastor.Broadcastor[int], store subscriber.Option[int]) uuid.UUID {
+		{"Dropped", subscriber.ErrDropped, func(t *testing.T, b *broadcastor.Broadcastor[int], store subscriber.Option[int]) uint64 {
 			t.Helper()
 			stuck := &recorder[int]{hold: make(chan struct{})}
 			id := subscribe(t, b, stuck.handle, store)
@@ -133,7 +131,7 @@ func TestSubscriberWithDeadLetters_Lost(t *testing.T) {
 
 			return id
 		}},
-		{"UnsubscribeDiscard", subscriber.ErrClosed, func(t *testing.T, b *broadcastor.Broadcastor[int], store subscriber.Option[int]) uuid.UUID {
+		{"UnsubscribeDiscard", subscriber.ErrClosed, func(t *testing.T, b *broadcastor.Broadcastor[int], store subscriber.Option[int]) uint64 {
 			t.Helper()
 			stuck := &recorder[int]{hold: make(chan struct{})}
 			id := subscribe(t, b, stuck.handle, store, subscriber.WithBuffer[int](1))
@@ -146,7 +144,7 @@ func TestSubscriberWithDeadLetters_Lost(t *testing.T) {
 
 			return id
 		}},
-		{"SubscribeSeq", subscriber.ErrClosed, func(t *testing.T, b *broadcastor.Broadcastor[int], store subscriber.Option[int]) uuid.UUID {
+		{"SubscribeSeq", subscriber.ErrClosed, func(t *testing.T, b *broadcastor.Broadcastor[int], store subscriber.Option[int]) uint64 {
 			t.Helper()
 			id, seq := subscribeSeq(t, b, subscriber.WithBuffer[int](2), store)
 			b.Broadcast(t.Context(), 0)
@@ -172,7 +170,7 @@ func TestSubscriberWithDeadLetters_Lost(t *testing.T) {
 					t.Fatalf("store got %v, want a single record for message 1", records)
 				}
 				if r := records[0]; r.SubscriberID != id || r.Message != 1 || !errors.Is(r.Err, tt.want) {
-					t.Errorf("store got a record for subscriber %s and message %d with error %v, want %s, 1 and %v",
+					t.Errorf("store got a record for subscriber %d and message %d with error %v, want %d, 1 and %v",
 						r.SubscriberID, r.Message, r.Err, id, tt.want)
 				}
 			})
@@ -190,7 +188,7 @@ func TestSubscriberWithDeadLetters_PutFails(t *testing.T) {
 		failures := &recorder[int]{}
 		recordFailure := recordFailures(t, failures)
 		errs := &recorder[error]{}
-		id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
+		id := subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
 			return handleError(msg)
 		},
 			subscriber.WithDeadLetters[int](stored),
@@ -221,7 +219,7 @@ func TestSubscriberWithDeadLetters_PutFails(t *testing.T) {
 			}
 			if storeErr.SubscriberID != id || storeErr.Message != msg || !errors.Is(storeErr.Err, errPut) ||
 				!errors.Is(storeErr.Cause, handleError(msg)) {
-				t.Errorf("error %d is for subscriber %s and message %d, failed with %v storing %v, want %s, %d, %v and %v",
+				t.Errorf("error %d is for subscriber %d and message %d, failed with %v storing %v, want %d, %d, %v and %v",
 					i, storeErr.SubscriberID, storeErr.Message, storeErr.Err, storeErr.Cause, id, msg, errPut, handleError(msg))
 			}
 		}
@@ -282,7 +280,7 @@ func TestSubscriberWithDeadLetters_ExactlyOnce(t *testing.T) {
 			subscriber.WithUnsubscribeOptions[int](subscriber.WithUnsubscribeDiscard()),
 		}
 		handled := &recorder[int]{}
-		handleID := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
+		handleID := subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
 			time.Sleep(time.Millisecond)
 			if msg%3 == 0 {
 				return handleError(msg)
@@ -328,7 +326,7 @@ func TestSubscriberWithDeadLetters_ExactlyOnce(t *testing.T) {
 			all[i] = i
 		}
 		records := stored.messages()
-		for id, got := range map[uuid.UUID][]int{handleID: handled.messages(), seqID: yielded.messages()} {
+		for id, got := range map[uint64][]int{handleID: handled.messages(), seqID: yielded.messages()} {
 			var lost []int
 			for _, r := range records {
 				if r.SubscriberID != id {
@@ -337,21 +335,21 @@ func TestSubscriberWithDeadLetters_ExactlyOnce(t *testing.T) {
 				lost = append(lost, r.Message)
 				if !errors.Is(r.Err, subscriber.ErrTimeout) && !errors.Is(r.Err, subscriber.ErrDropped) &&
 					!errors.Is(r.Err, subscriber.ErrClosed) && !errors.Is(r.Err, handleError(r.Message)) {
-					t.Errorf("subscriber %s: message %d stored with error %v, want a handleError, *TimeoutError, "+
+					t.Errorf("subscriber %d: message %d stored with error %v, want a handleError, *TimeoutError, "+
 						"*DroppedError or *ClosedError", id, r.Message, r.Err)
 				}
 			}
 			if len(got) == 0 || len(lost) == 0 {
-				t.Errorf("subscriber %s handled %d messages and lost %d, want some of each", id, len(got), len(lost))
+				t.Errorf("subscriber %d handled %d messages and lost %d, want some of each", id, len(got), len(lost))
 			}
 			if both := slices.Sorted(slices.Values(append(slices.Clone(got), lost...))); !slices.Equal(both, all) {
-				t.Errorf("subscriber %s: handled %v and stored %v, want every message from 0 to %d once",
+				t.Errorf("subscriber %d: handled %v and stored %v, want every message from 0 to %d once",
 					id, got, lost, len(all)-1)
 			}
 		}
 		for _, r := range records {
 			if r.SubscriberID != handleID && r.SubscriberID != seqID {
-				t.Errorf("store got a record for subscriber %s, want %s or %s", r.SubscriberID, handleID, seqID)
+				t.Errorf("store got a record for subscriber %d, want %d or %d", r.SubscriberID, handleID, seqID)
 			}
 		}
 	})
@@ -365,7 +363,7 @@ func TestSubscriberWithDeadLetters_Ring(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b := newBroadcastor[int](t)
 		lost := store.NewRing[int](8)
-		id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
+		id := subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
 			if msg%2 == 0 {
 				return handleError(msg)
 			}
@@ -384,7 +382,7 @@ func TestSubscriberWithDeadLetters_Ring(t *testing.T) {
 					return
 				}
 				if entry.SubscriberID != id || !errors.Is(entry.Err, handleError(entry.Message)) {
-					t.Errorf("read back %+v, want subscriber %s and a handleError for its message", entry, id)
+					t.Errorf("read back %+v, want subscriber %d and a handleError for its message", entry, id)
 				}
 				readBack.record(entry.Message)
 				if err := lost.Ack(ctx, entry.ID); err != nil {
@@ -423,7 +421,7 @@ func TestStoreAndForward(t *testing.T) {
 		var up atomic.Bool
 		sent := &recorder[int]{}
 		sink := middleware.Retry[int](middleware.RetryPolicy{Attempts: math.MaxInt, Delay: time.Second})(
-			func(_ context.Context, _ uuid.UUID, msg int) error {
+			func(_ context.Context, _ uint64, msg int) error {
 				if !up.Load() {
 					return errSinkDown
 				}

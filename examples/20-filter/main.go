@@ -13,8 +13,6 @@ import (
 	"math"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/filter"
 	"github.com/elojah/broadcastor/subscriber"
@@ -26,7 +24,7 @@ func main() {
 	// Each handle sends what it got, since the two subscribers run concurrently.
 	got := make(chan string, 16)
 
-	_, err := b.Subscribe(ctx, func(_ context.Context, _ uuid.UUID, celsius float64) error {
+	_, err := b.Subscribe(ctx, func(_ context.Context, _ uint64, celsius float64) error {
 		got <- fmt.Sprintf("display: %.1f degrees", celsius)
 
 		return nil
@@ -35,7 +33,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	_, err = b.Subscribe(ctx, func(_ context.Context, _ uuid.UUID, celsius float64) error {
+	_, err = b.Subscribe(ctx, func(_ context.Context, _ uint64, celsius float64) error {
 		got <- fmt.Sprintf("uplink: %.1f degrees", celsius)
 
 		return nil

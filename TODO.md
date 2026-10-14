@@ -24,9 +24,6 @@ At `21d751b` (Intel Core Ultra 5 226V, GOMAXPROCS 8), per subscriber and per `Br
 
 - [ ] Refresh the baseline, which predates `Shutdown`, `WithFilter` and `WithDone`: a `Subscribe` and `Unsubscribe` pair
   now costs 13 allocations and 1070 B, against 11 and 737 B above.
-- [ ] `Broadcastor.Send(ctx, id, msg, options...)`: hands msg to one subscriber through `Deliver`, so no new invariant,
-  and returns whether it was taken, or a `*SubscriberNotFoundError`. For commands to one handler:
-  `message.WithSubscriberFilter` reaches one too, but ranges over every subscriber.
 - [ ] Measure what a subscriber costs in memory, idle and with `WithBuffer(n)`, under Go and TinyGo, and give the
   figures in the README, which only says that fitting a goroutine per subscriber is up to the program.
 - [ ] Document in the README that `expvar.Publish("bus", expvar.Func(func() any { return b.Stats() }))` exposes
@@ -75,9 +72,6 @@ At `21d751b` (Intel Core Ultra 5 226V, GOMAXPROCS 8), per subscriber and per `Br
   included: at least once, since a power cut between `handle` and `Ack` hands the entry again. Then freeze the API and
   follow semver.
 - [ ] Settle before the freeze:
-  - IDs as an atomic `uint64` counter instead of UUIDv7: no dependency, a smaller binary, `ErrClosed` the only error
-    `Subscribe` returns, and a cheaper `Subscribe`. It breaks handle's signature, and only works because
-    cross-process transports are out of scope.
   - `Unsubscribe`'s unused ctx: drop it, or make it wait for that subscriber's goroutine, like `Shutdown`.
 - [ ] Run the examples on TinyGo's `cortex-m-qemu` target too, in `make tinygo-run`, so that they run on a
   microcontroller's runtime and heap rather than only build for one. CI then needs `qemu-system-arm`.
@@ -94,6 +88,3 @@ At `21d751b` (Intel Core Ultra 5 226V, GOMAXPROCS 8), per subscriber and per `Br
 - MQTT, Redis or NATS clients in the library: they go in example modules, each with its own go.mod.
 
 ## Manual personal notes
-
-- Clean Shutdown and OnDone functions
-- Explicit Suspend method ?

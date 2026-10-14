@@ -13,8 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/message"
 	"github.com/elojah/broadcastor/subscriber"
@@ -38,7 +36,7 @@ func main() {
 
 	release := make(chan struct{})
 	var handled sync.WaitGroup
-	id, err := b.Subscribe(ctx, func(ctx context.Context, _ uuid.UUID, msg string) error {
+	id, err := b.Subscribe(ctx, func(ctx context.Context, _ uint64, msg string) error {
 		<-release
 		fmt.Printf("got %s (request %s, ctx done: %t)\n", msg, requestID(ctx), ctx.Err() != nil)
 		if msg == "hello" {

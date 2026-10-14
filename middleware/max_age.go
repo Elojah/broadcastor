@@ -4,8 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor/subscriber"
 )
 
@@ -18,7 +16,7 @@ func MaxAge[T any](d time.Duration, at func(msg T) time.Time) subscriber.Middlew
 			return next
 		}
 
-		return func(ctx context.Context, id uuid.UUID, msg T) error {
+		return func(ctx context.Context, id uint64, msg T) error {
 			if age := time.Since(at(msg)); age > d {
 				return &subscriber.ExpiredError[T]{SubscriberID: id, Message: msg, Age: age}
 			}

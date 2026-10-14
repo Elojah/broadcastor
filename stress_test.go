@@ -11,13 +11,12 @@ import (
 	"runtime"
 	"runtime/pprof"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/google/uuid"
 
 	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/holder"
@@ -54,6 +53,9 @@ var (
 	errHeldDue       = errors.New("held while a message held was due")
 )
 
+// stressLabels is the last round's label, so that each round's differs, -count included.
+var stressLabels atomic.Uint64
+
 // TestStress interleaves every method at random from several goroutines, in real time so that timeouts race sends, over
 // rounds with a Broadcastor each. It checks that nothing panics, every goroutine returns once closed, no subscriber
 // gets a message twice, a subscriber gets every message broadcast while subscribed and none outside, batched or not,
@@ -76,7 +78,7 @@ func TestStress(t *testing.T) {
 // runStress runs one round, then checks it once every goroutine it started has returned.
 func runStress(t *testing.T, closeEarly, quiet bool) {
 	t.Helper()
-	s := &stress{b: newBroadcastor[int](t), closeEarly: closeEarly, quiet: quiet, label: uuid.NewString()}
+	s := &stress{b: newBroadcastor[int](t), closeEarly: closeEarly, quiet: quiet, label: strconv.FormatUint(stressLabels.Add(1), 10)}
 	// Every goroutine f starts carries the label, and so do theirs, the library's included.
 	pprof.Do(t.Context(), pprof.Labels(stressLabel, s.label), func(ctx context.Context) { s.run(ctx, t) })
 	s.waitGoroutines(t)
@@ -122,7 +124,7 @@ type stressBroadcast struct {
 
 // stressSub is a subscription, with everything its handle or loop body and its error handler got.
 type stressSub struct {
-	id     uuid.UUID
+	id     uint64
 	seq    bool
 	cancel context.CancelFunc
 	// evictOn says what its subscriber.WithEvict picks, "" for none.
@@ -140,7 +142,7 @@ type stressSub struct {
 	// notFound is set once an Unsubscribe found no subscriber before Close, which only an eviction explains.
 	notFound atomic.Bool
 	// done gets the ID once the subscriber is done (subscriber.WithDone). Room for two, so that a second send would show.
-	done chan uuid.UUID
+	done chan uint64
 	// doneAtShut is how many it held when Shutdown returned.
 	doneAtShut int
 
@@ -287,7 +289,7 @@ func (s *stress) subscribe(ctx context.Context, t *testing.T) *stressSub {
 	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	sub := &stressSub{
 		seq: randN(3) == 0, cancel: cancel, shut: &s.shut, got: map[int]stressOutcome{}, failed: map[int]bool{},
-		fails: map[int]bool{}, done: make(chan uuid.UUID, 2),
+		fails: map[int]bool{}, done: make(chan uint64, 2),
 	}
 	options := []subscriber.Option[int]{
 		subscriber.WithBuffer[int](randN(4)),
@@ -376,7 +378,7 @@ func (s *stress) end(ctx context.Context, t *testing.T, sub *stressSub) {
 		return
 	}
 	if err := s.unsubscribe(ctx, sub, sub.id, options...); err != nil {
-		t.Errorf("Unsubscribe(%s) = %v, want nil, or *SubscriberNotFoundError once closed", sub.id, err)
+		t.Errorf("Unsubscribe(%d) = %v, want nil, or *SubscriberNotFoundError once closed", sub.id, err)
 	}
 }
 
@@ -413,7 +415,7 @@ func (s *stress) shutdown(ctx context.Context, t *testing.T) error {
 }
 
 // unsubscribe unsubscribes sub, whose ID is id, and records the ticks around it. Once closed, sub may be gone already.
-func (s *stress) unsubscribe(ctx context.Context, sub *stressSub, id uuid.UUID, options ...subscriber.UnsubscribeOption) error {
+func (s *stress) unsubscribe(ctx context.Context, sub *stressSub, id uint64, options ...subscriber.UnsubscribeOption) error {
 	earliest(&sub.leaving, s.clock.Add(1))
 	err := s.b.Unsubscribe(ctx, id, options...)
 	switch {
@@ -435,8 +437,8 @@ func (s *stress) unsubscribe(ctx context.Context, sub *stressSub, id uuid.UUID, 
 
 // handle records each message, pauses now and then, unsubscribes itself once sub.leave is set, and fails on multiples
 // of stressFailEvery. It takes the ID as an argument, since sub.id is set only once Subscribe returns.
-func (s *stress) handle(sub *stressSub) func(context.Context, uuid.UUID, int) error {
-	return func(ctx context.Context, id uuid.UUID, n int) error {
+func (s *stress) handle(sub *stressSub) func(context.Context, uint64, int) error {
+	return func(ctx context.Context, id uint64, n int) error {
 		fails := n%stressFailEvery == 0
 		sub.handled(n, fails)
 		s.pauseOrLeave(ctx, sub, id)
@@ -450,7 +452,7 @@ func (s *stress) handle(sub *stressSub) func(context.Context, uuid.UUID, int) er
 
 // handleBatch is handle for a batch: it fails for every value of a batch holding a multiple of stressFailEvery.
 func (s *stress) handleBatch(sub *stressSub) subscriber.Handler[message.Batch[int]] {
-	return func(ctx context.Context, id uuid.UUID, batch message.Batch[int]) error {
+	return func(ctx context.Context, id uint64, batch message.Batch[int]) error {
 		numbers := slices.Collect(batch.All())
 		fails := slices.ContainsFunc(numbers, func(n int) bool { return n%stressFailEvery == 0 })
 		for _, n := range numbers {
@@ -469,7 +471,7 @@ func (s *stress) handleBatch(sub *stressSub) subscriber.Handler[message.Batch[in
 }
 
 // pauseOrLeave pauses now and then, and unsubscribes the subscriber once sub.leave is set.
-func (s *stress) pauseOrLeave(ctx context.Context, sub *stressSub, id uuid.UUID) {
+func (s *stress) pauseOrLeave(ctx context.Context, sub *stressSub, id uint64) {
 	stressPause()
 	if sub.leave.CompareAndSwap(true, false) {
 		var options []subscriber.UnsubscribeOption
@@ -503,7 +505,7 @@ func (s *stress) loop(sub *stressSub, seq iter.Seq2[int, func(error)]) {
 // deadlockTimeout.
 func (s *stress) checkStats(t *testing.T) {
 	t.Helper()
-	subs := make(map[uuid.UUID]*stressSub, len(s.subs))
+	subs := make(map[uint64]*stressSub, len(s.subs))
 	for _, sub := range s.subs {
 		subs[sub.id] = sub
 	}
@@ -541,7 +543,7 @@ func (s *stress) check(t *testing.T) {
 			continue
 		}
 		if failing++; failing <= reported {
-			t.Errorf("subscriber %d (%s, SubscribeSeq: %t, ticks: subscribing %d, subscribed %d, leaving %d, gone %d):\n%s",
+			t.Errorf("subscriber %d (%d, SubscribeSeq: %t, ticks: subscribing %d, subscribed %d, leaving %d, gone %d):\n%s",
 				i, sub.id, sub.seq, sub.subscribing, sub.subscribed, sub.leaving.Load(), sub.gone.Load(),
 				strings.Join(problems, "\n"))
 		}
@@ -865,11 +867,11 @@ func (sub *stressSub) optionProblems() []string {
 }
 
 // statsMismatch returns how the Stats of a subscriber differ from what it got, or "" if none do.
-func statsMismatch(stats []subscriber.Stats, subs map[uuid.UUID]*stressSub) string {
+func statsMismatch(stats []subscriber.Stats, subs map[uint64]*stressSub) string {
 	for _, got := range stats {
 		sub, ok := subs[got.SubscriberID]
 		if !ok {
-			return fmt.Sprintf("Stats for subscriber %s, which never subscribed", got.SubscriberID)
+			return fmt.Sprintf("Stats for subscriber %d, which never subscribed", got.SubscriberID)
 		}
 
 		sub.mu.Lock()

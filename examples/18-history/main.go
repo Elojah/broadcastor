@@ -11,8 +11,6 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/middleware"
 	"github.com/elojah/broadcastor/store"
@@ -28,7 +26,7 @@ func main() {
 	audit := store.NewRing[int](16)
 	// Only the subscriber's goroutine uses it.
 	balance := 100
-	id, err := b.Subscribe(ctx, func(_ context.Context, _ uuid.UUID, amount int) error {
+	id, err := b.Subscribe(ctx, func(_ context.Context, _ uint64, amount int) error {
 		if amount > balance {
 			return errInsufficientFunds
 		}

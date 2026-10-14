@@ -13,8 +13,6 @@ import (
 	"log"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/message"
 	"github.com/elojah/broadcastor/subscriber"
@@ -31,7 +29,7 @@ func failedInARow(n int) subscriber.Middleware[int] {
 	return func(next subscriber.Handler[int]) subscriber.Handler[int] {
 		failures := 0
 
-		return func(ctx context.Context, id uuid.UUID, reading int) error {
+		return func(ctx context.Context, id uint64, reading int) error {
 			err := next(ctx, id, reading)
 			if err == nil {
 				failures = 0
@@ -52,15 +50,15 @@ func main() {
 	b := broadcastor.NewBroadcastor[int]()
 
 	// Its buffer has room for every message, so Broadcast never waits for it.
-	_, err := b.Subscribe(ctx, func(context.Context, uuid.UUID, int) error {
+	_, err := b.Subscribe(ctx, func(context.Context, uint64, int) error {
 		return nil
 	}, subscriber.WithBuffer[int](8))
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	sensorDone := make(chan uuid.UUID, 1)
-	_, err = b.Subscribe(ctx, func(_ context.Context, _ uuid.UUID, reading int) error {
+	sensorDone := make(chan uint64, 1)
+	_, err = b.Subscribe(ctx, func(_ context.Context, _ uint64, reading int) error {
 		if reading > 2 {
 			return fmt.Errorf("reading %d: %w", reading, errUnplugged)
 		}
@@ -86,7 +84,7 @@ func main() {
 	<-sensorDone // evicted in its own goroutine
 
 	release := make(chan struct{})
-	_, err = b.Subscribe(ctx, func(context.Context, uuid.UUID, int) error {
+	_, err = b.Subscribe(ctx, func(context.Context, uint64, int) error {
 		<-release
 
 		return nil

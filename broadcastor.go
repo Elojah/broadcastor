@@ -1,14 +1,12 @@
 package broadcastor
 
 import (
-	"bytes"
+	"cmp"
 	"context"
 	"iter"
 	"slices"
 	"sync"
 	"sync/atomic"
-
-	"github.com/google/uuid"
 
 	"github.com/elojah/broadcastor/message"
 	"github.com/elojah/broadcastor/pkg/gate"
@@ -18,7 +16,7 @@ import (
 // Broadcastor hands each message to every subscriber. Create one with NewBroadcastor. It is safe for concurrent use,
 // from handle included.
 type Broadcastor[T any] struct {
-	subscribers sync.Map // [uuid.UUID]*subscriber.Subscriber[T]
+	subscribers sync.Map // [uint64]*subscriber.Subscriber[T]
 
 	// gate makes Close wait for any add under way, so Close refuses or sees each subscriber.
 	gate gate.Gate
@@ -27,6 +25,9 @@ type Broadcastor[T any] struct {
 	// it reaches 0 once, after Close, and countOut closes stopped then.
 	running atomic.Int64
 	stopped chan struct{}
+
+	// ids is the last ID given out.
+	ids atomic.Uint64
 }
 
 // NewBroadcastor returns an empty Broadcastor.
@@ -38,16 +39,17 @@ func NewBroadcastor[T any]() *Broadcastor[T] {
 }
 
 // Subscribe adds a subscriber and returns its ID. Its goroutine calls handle for each message, one at a time, with the
-// ID so that handle can unsubscribe itself. A Broadcast under way may or may not reach it.
+// ID so that handle can unsubscribe itself. A Broadcast under way may or may not reach it. IDs count up from 1 in each
+// Broadcastor, so 0 is never one.
 //
 // ctx is the subscription's lifetime, unless subscriber.WithDetachedContext: once it is done, the subscriber is
 // unsubscribed. handle gets ctx, unless the message has its own (message.WithContext).
 //
 // It returns ErrClosed after Close.
-func (b *Broadcastor[T]) Subscribe(ctx context.Context, handle func(ctx context.Context, id uuid.UUID, msg T) error, options ...subscriber.Option[T]) (uuid.UUID, error) {
+func (b *Broadcastor[T]) Subscribe(ctx context.Context, handle func(ctx context.Context, id uint64, msg T) error, options ...subscriber.Option[T]) (uint64, error) {
 	s, err := b.add(ctx, options)
 	if err != nil {
-		return uuid.Nil, err
+		return 0, err
 	}
 	go s.Consume(handle)
 
@@ -63,10 +65,10 @@ func (b *Broadcastor[T]) Subscribe(ctx context.Context, handle func(ctx context.
 // reports what was taken but not yielded as a *subscriber.ClosedError. seq can be ranged over once.
 //
 // It returns ErrClosed after Close.
-func (b *Broadcastor[T]) SubscribeSeq(ctx context.Context, options ...subscriber.Option[T]) (uuid.UUID, iter.Seq2[T, func(error)], error) {
+func (b *Broadcastor[T]) SubscribeSeq(ctx context.Context, options ...subscriber.Option[T]) (uint64, iter.Seq2[T, func(error)], error) {
 	s, err := b.add(ctx, options)
 	if err != nil {
-		return uuid.Nil, nil, err
+		return 0, nil, err
 	}
 	id := s.ID()
 
@@ -76,7 +78,7 @@ func (b *Broadcastor[T]) SubscribeSeq(ctx context.Context, options ...subscriber
 // Unsubscribe removes the subscriber, or returns a *SubscriberNotFoundError. It never waits, so handle can call it:
 // the subscriber may still handle what it took, and a Broadcast waiting on it gives up with a
 // *subscriber.ClosedError. options override subscriber.WithUnsubscribeOptions. ctx is unused.
-func (b *Broadcastor[T]) Unsubscribe(ctx context.Context, id uuid.UUID, options ...subscriber.UnsubscribeOption) error {
+func (b *Broadcastor[T]) Unsubscribe(ctx context.Context, id uint64, options ...subscriber.UnsubscribeOption) error {
 	if !b.remove(id, options...) {
 		return &SubscriberNotFoundError{SubscriberID: id}
 	}
@@ -174,9 +176,9 @@ func (b *Broadcastor[T]) Stats() []subscriber.Stats {
 
 		return true
 	})
-	// UUIDv7s sort in creation order.
+	// IDs go up in subscription order.
 	slices.SortFunc(stats, func(x, y subscriber.Stats) int {
-		return bytes.Compare(x.SubscriberID[:], y.SubscriberID[:])
+		return cmp.Compare(x.SubscriberID, y.SubscriberID)
 	})
 
 	return stats
@@ -184,10 +186,7 @@ func (b *Broadcastor[T]) Stats() []subscriber.Stats {
 
 // add creates and stores a subscriber, or returns ErrClosed. Nothing reads its channel yet.
 func (b *Broadcastor[T]) add(ctx context.Context, options []subscriber.Option[T]) (*subscriber.Subscriber[T], error) {
-	id, err := uuid.NewV7()
-	if err != nil {
-		return nil, err
-	}
+	id := b.ids.Add(1)
 	s := subscriber.New(id, options...)
 
 	if !b.gate.Enter() {
@@ -242,7 +241,7 @@ func (b *Broadcastor[T]) each(config message.Config, deliver func(s *subscriber.
 
 // remove deletes the subscriber and unsubscribes it, or returns false if there is none. Only the deleter unsubscribes,
 // so racing removals do it once.
-func (b *Broadcastor[T]) remove(id uuid.UUID, options ...subscriber.UnsubscribeOption) bool {
+func (b *Broadcastor[T]) remove(id uint64, options ...subscriber.UnsubscribeOption) bool {
 	v, _ := b.subscribers.LoadAndDelete(id)
 	s, ok := v.(*subscriber.Subscriber[T])
 	if !ok {

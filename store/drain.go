@@ -3,8 +3,6 @@ package store
 import (
 	"context"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor/subscriber"
 )
 
@@ -42,7 +40,7 @@ func Drain[T any](
 // Broadcast up, and the real handle gets every message in order, from one goroutine. Put gets a ctx never done, and its
 // error is handle's.
 func Enqueue[T any](q subscriber.Store[T]) subscriber.Handler[T] {
-	return func(ctx context.Context, id uuid.UUID, msg T) error {
+	return func(ctx context.Context, id uint64, msg T) error {
 		return q.Put(context.WithoutCancel(ctx), subscriber.Record[T]{SubscriberID: id, Message: msg})
 	}
 }

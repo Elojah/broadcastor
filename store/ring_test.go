@@ -9,8 +9,6 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor/store"
 	"github.com/elojah/broadcastor/subscriber"
 )
@@ -28,7 +26,7 @@ func TestRing(t *testing.T) {
 	t.Parallel()
 
 	r := store.NewRing[int](4)
-	id := uuid.New()
+	id := uint64(7)
 	for msg := 1; msg <= 3; msg++ {
 		put(t, r, subscriber.Record[int]{SubscriberID: id, Message: msg, Err: errLost})
 	}

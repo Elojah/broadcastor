@@ -7,8 +7,6 @@ import (
 	"testing"
 	"testing/synctest"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor/subscriber"
 )
 
@@ -71,7 +69,7 @@ func TestWithUnsubscribeDiscard_Self(t *testing.T) {
 		handled := &recorder[int]{}
 		closed := &recorder[int]{}
 		proceed := make(chan struct{})
-		subscribe(t, b, func(ctx context.Context, id uuid.UUID, msg int) error {
+		subscribe(t, b, func(ctx context.Context, id uint64, msg int) error {
 			handled.record(msg)
 			<-proceed
 			if err := b.Unsubscribe(ctx, id, subscriber.WithUnsubscribeDiscard()); err != nil {
@@ -107,7 +105,7 @@ func TestSubscriberWithUnsubscribeOptions(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		b := newBroadcastor[int](t)
-		subscribeHeld := func(closed *recorder[int]) (*recorder[int], uuid.UUID) {
+		subscribeHeld := func(closed *recorder[int]) (*recorder[int], uint64) {
 			handled := &recorder[int]{hold: make(chan struct{})}
 			id := subscribe(t, b, handled.handle, subscriber.WithBuffer[int](2),
 				subscriber.WithErrorHandler[int](recordClosed(t, closed)),

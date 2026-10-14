@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"iter"
 	"log"
+	"strconv"
 
-	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/elojah/broadcastor/store"
@@ -35,7 +35,7 @@ func (s *stream[T]) Put(ctx context.Context, r subscriber.Record[T]) error {
 	if err != nil {
 		return err
 	}
-	values := []any{"subscriber", r.SubscriberID.String(), "message", msg}
+	values := []any{"subscriber", strconv.FormatUint(r.SubscriberID, 10), "message", msg}
 	if r.Err != nil {
 		values = append(values, "error", r.Err.Error())
 	}
@@ -101,7 +101,7 @@ func (s *stream[T]) decode(x redis.XMessage) (store.Entry[T], error) {
 	id, _ := x.Values["subscriber"].(string)
 	msg, _ := x.Values["message"].(string)
 	var err error
-	if entry.SubscriberID, err = uuid.Parse(id); err != nil {
+	if entry.SubscriberID, err = strconv.ParseUint(id, 10, 64); err != nil {
 		return store.Entry[T]{}, fmt.Errorf("entry %s: %w", x.ID, err)
 	}
 	if err := json.Unmarshal([]byte(msg), &entry.Message); err != nil {

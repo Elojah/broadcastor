@@ -14,7 +14,6 @@ import (
 	"log"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/simonvetter/modbus"
 
 	"github.com/elojah/broadcastor"
@@ -110,7 +109,7 @@ func subscribeRule(ctx context.Context, b *broadcastor.Broadcastor[reading], add
 	if err != nil {
 		log.Fatal(err)
 	}
-	handle := func(_ context.Context, _ uuid.UUID, r reading) error {
+	handle := func(_ context.Context, _ uint64, r reading) error {
 		if client == nil {
 			fmt.Println("rule: reconnecting")
 			c, err := connect(addr)
@@ -141,7 +140,7 @@ func subscribeRule(ctx context.Context, b *broadcastor.Broadcastor[reading], add
 		},
 	})
 	// Room for the rule's ID, since Shutdown waits for the send.
-	done := make(chan uuid.UUID, 1)
+	done := make(chan uint64, 1)
 	_, err = b.Subscribe(ctx, handle,
 		// In parallel, so that the trend never waits for the rule.
 		subscriber.WithDefaultMessageOptions(message.WithParallel[reading](), message.WithTimeout[reading](pollEvery)),

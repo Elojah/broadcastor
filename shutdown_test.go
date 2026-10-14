@@ -8,8 +8,6 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/message"
 	"github.com/elojah/broadcastor/subscriber"
@@ -176,7 +174,7 @@ func TestShutdown_FromHandle(t *testing.T) {
 		self := &recorder[int]{}
 		proceed := make(chan struct{})
 		errs := make(chan error, 1)
-		subscribe(t, b, func(ctx context.Context, _ uuid.UUID, msg int) error {
+		subscribe(t, b, func(ctx context.Context, _ uint64, msg int) error {
 			self.record(msg)
 			if msg == 1 {
 				<-proceed

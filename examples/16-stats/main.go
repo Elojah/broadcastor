@@ -12,8 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/message"
 	"github.com/elojah/broadcastor/subscriber"
@@ -24,10 +22,10 @@ var errDown = errors.New("uplink down")
 func main() {
 	ctx := context.Background()
 	b := broadcastor.NewBroadcastor[int]()
-	names := map[uuid.UUID]string{}
+	names := map[uint64]string{}
 
 	release := make(chan struct{})
-	slow, err := b.Subscribe(ctx, func(context.Context, uuid.UUID, int) error {
+	slow, err := b.Subscribe(ctx, func(context.Context, uint64, int) error {
 		<-release
 
 		return nil
@@ -39,7 +37,7 @@ func main() {
 
 	// Failed is counted before the error handler is called.
 	var failed sync.WaitGroup
-	uplink, err := b.Subscribe(ctx, func(context.Context, uuid.UUID, int) error {
+	uplink, err := b.Subscribe(ctx, func(context.Context, uint64, int) error {
 		return errDown
 	}, subscriber.WithBuffer[int](8), subscriber.WithErrorHandler[int](func(context.Context, error) {
 		failed.Done()

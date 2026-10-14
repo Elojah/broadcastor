@@ -12,8 +12,6 @@ import (
 	"log"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/message"
 	"github.com/elojah/broadcastor/subscriber"
@@ -24,7 +22,7 @@ func main() {
 	b := broadcastor.NewBroadcastor[string]()
 
 	release := make(chan struct{})
-	id, err := b.Subscribe(ctx, func(context.Context, uuid.UUID, string) error {
+	id, err := b.Subscribe(ctx, func(context.Context, uint64, string) error {
 		<-release
 
 		return nil

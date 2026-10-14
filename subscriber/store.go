@@ -2,8 +2,6 @@ package subscriber
 
 import (
 	"context"
-
-	"github.com/google/uuid"
 )
 
 // Store is given every message a subscriber loses (see WithDeadLetters), and with middleware.History every one it
@@ -15,7 +13,7 @@ type Store[T any] interface {
 
 // Record is a message, and Err, what the error handlers got about it if it was lost, else nil.
 type Record[T any] struct {
-	SubscriberID uuid.UUID
+	SubscriberID uint64
 	Message      T
 	Err          error
 }

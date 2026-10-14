@@ -4,8 +4,6 @@ package message
 import (
 	"context"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 // Delivery is how Broadcast hands a message to a subscriber. The last option that sets it wins.
@@ -58,7 +56,7 @@ type Config struct {
 
 	// SubscriberFilter picks, by ID, the subscribers Broadcast hands the message to. nil means every one. Only a
 	// Broadcast's own is read.
-	SubscriberFilter func(id uuid.UUID) bool
+	SubscriberFilter func(id uint64) bool
 }
 
 // fields is a set of Config fields.

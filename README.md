@@ -14,7 +14,7 @@ its messages one at a time, in its own goroutine.
 - **Typed errors**: every missed message reaches the error handlers, and can go to a dead-letter store.
 - **Middleware**: recover, history, max age, error wrapping, retry with backoff, or your own.
 - **Operations**: eviction, per-subscriber stats, graceful shutdown.
-- One dependency: `github.com/google/uuid`.
+- No dependencies.
 
 ```sh
 go get github.com/elojah/broadcastor
@@ -25,7 +25,7 @@ go get github.com/elojah/broadcastor
 ```go
 b := broadcastor.NewBroadcastor[string]()
 
-id, err := b.Subscribe(ctx, func(ctx context.Context, id uuid.UUID, msg string) error {
+id, err := b.Subscribe(ctx, func(ctx context.Context, id uint64, msg string) error {
  fmt.Println(id, "got", msg)
  return nil
 }, subscriber.WithErrorHandler[string](func(ctx context.Context, err error) {
@@ -99,7 +99,7 @@ id, err = b.Subscribe(ctx, uplink, subscriber.WithFilter(filter.Every[float64](t
 filters see it:
 
 ```go
-b.Broadcast(ctx, alarm, message.WithSubscriberFilter[Alert](func(id uuid.UUID) bool { return onCall.Has(id) }))
+b.Broadcast(ctx, alarm, message.WithSubscriberFilter[Alert](func(id uint64) bool { return onCall.Has(id) }))
 ```
 
 ## Errors
@@ -128,7 +128,7 @@ message type, and wrappers match what they wrap.
 
 ```go
 logged := func(next subscriber.Handler[string]) subscriber.Handler[string] {
- return func(ctx context.Context, id uuid.UUID, msg string) error {
+ return func(ctx context.Context, id uint64, msg string) error {
   err := next(ctx, id, msg)
   log.Println(id, msg, err)
   return err
@@ -202,12 +202,12 @@ the batch whole, through middlewares of its own; one without gets each value alo
 b.BroadcastBatch(ctx, &message.Slice[Reading]{north, south, east})
 
 // The uplink, billed per request, sends each batch at once, retrying it whole.
-id, err := b.Subscribe(ctx, handle, subscriber.WithBatchHandler(func(ctx context.Context, _ uuid.UUID, batch message.Batch[Reading]) error {
+id, err := b.Subscribe(ctx, handle, subscriber.WithBatchHandler(func(ctx context.Context, _ uint64, batch message.Batch[Reading]) error {
  return uplink.Send(ctx, slices.Collect(batch.All()))
 }, middleware.Retry[message.Batch[Reading]](policy)))
 ```
 
-`message.Slice` is a `Batch` of a slice, and `message.Map` one of a map, each value under a random UUID, in no order. A
+`message.Slice` is a `Batch` of a slice, and `message.Map` one of a map, each value under its own key, in no order. A
 type of your own needs `Add`, `All`, `Len`, and `New`, an empty batch of the same type: a subscriber whose filter
 (`subscriber.WithFilter`) keeps part of a batch takes one from `New` holding what it keeps, and one keeping none misses
 it. Every subscriber reads the same batch, even after an async `BroadcastBatch` returns, so don't change it once passed.
@@ -359,7 +359,7 @@ call, so none of it needs a lock.
 
 ```go
 var conn *Conn // only handle uses it, until done gets the ID
-handle := func(ctx context.Context, _ uuid.UUID, msg Reading) error {
+handle := func(ctx context.Context, _ uint64, msg Reading) error {
  if conn == nil {
   c, err := dial(ctx)
   if err != nil {
@@ -374,7 +374,7 @@ handle := func(ctx context.Context, _ uuid.UUID, msg Reading) error {
  }
  return nil
 }
-done := make(chan uuid.UUID, 1)
+done := make(chan uint64, 1)
 id, err := b.Subscribe(ctx, handle,
  subscriber.WithMiddleware(middleware.Retry[Reading](middleware.RetryPolicy{
   Attempts: math.MaxInt, Delay: time.Second, Multiplier: 2, MaxDelay: time.Minute,

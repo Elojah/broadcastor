@@ -15,7 +15,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/elojah/broadcastor"
@@ -84,7 +83,7 @@ func runAlerts(ctx context.Context, client *redis.Client, pagerDown bool, readin
 	lost := newStream[reading](client, deadLettersKey, maxLen)
 	history := newStream[reading](client, historyKey, maxLen)
 
-	_, err := b.Subscribe(ctx, func(_ context.Context, _ uuid.UUID, r reading) error {
+	_, err := b.Subscribe(ctx, func(_ context.Context, _ uint64, r reading) error {
 		if r.Celsius <= 30 {
 			return nil
 		}

@@ -5,8 +5,6 @@ import (
 	"iter"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor/message"
 )
 
@@ -41,7 +39,7 @@ type config[T any] struct {
 // ctxchan is a WithDone channel, and the ctx that bounds the send on it.
 type ctxchan struct {
 	ctx context.Context //nolint:containedctx // bounds a send at the end of the subscription
-	ch  chan<- uuid.UUID
+	ch  chan<- uint64
 }
 
 // unsubscription is what UnsubscribeOptions set.
@@ -193,7 +191,7 @@ func WithHolder[T any](h Holder[T]) Option[T] {
 // after the last call to handle or the loop body. The send waits for a receiver until ctx is done, and Shutdown waits
 // for it, so subscribers can share done. It is never sent for a SubscribeSeq loop never ranged. Several are sent in
 // order, and a nil done is ignored.
-func WithDone[T any](ctx context.Context, done chan<- uuid.UUID) Option[T] {
+func WithDone[T any](ctx context.Context, done chan<- uint64) Option[T] {
 	return func(config *config[T]) {
 		if done != nil {
 			config.done = append(config.done, ctxchan{ctx: ctx, ch: done})

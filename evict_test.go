@@ -11,8 +11,6 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor/message"
 	"github.com/elojah/broadcastor/subscriber"
 )
@@ -35,7 +33,7 @@ func TestSubscriberWithEvict(t *testing.T) {
 		got := errs.messages()
 		var evicted *subscriber.EvictedError[int]
 		if len(got) != 1 || !errors.As(got[0], &evicted) || evicted.SubscriberID != id || describeLoss(t, got[0]) != "2 evicted, timed out" {
-			t.Errorf("error handler got %v, want 2's eviction of %s, on a timeout", got, id)
+			t.Errorf("error handler got %v, want 2's eviction of %d, on a timeout", got, id)
 		}
 
 		start := time.Now()
@@ -104,7 +102,7 @@ func TestSubscriberWithEvict_HandleError(t *testing.T) {
 		handled := &recorder[int]{}
 		losses := &recorder[string]{}
 		proceed := make(chan struct{})
-		id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
+		id := subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
 			<-proceed
 			handled.record(msg)
 
@@ -141,7 +139,7 @@ func TestSubscriberWithEvict_Middleware(t *testing.T) {
 		handled := &recorder[int]{}
 		losses := &recorder[string]{}
 		proceed := make(chan struct{})
-		id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
+		id := subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
 			<-proceed
 			handled.record(msg)
 			if msg == 2 {
@@ -410,7 +408,7 @@ func failedInARow(n int) subscriber.Middleware[int] {
 	return func(next subscriber.Handler[int]) subscriber.Handler[int] {
 		failures := 0
 
-		return func(ctx context.Context, id uuid.UUID, msg int) error {
+		return func(ctx context.Context, id uint64, msg int) error {
 			err := next(ctx, id, msg)
 			if err == nil {
 				failures = 0

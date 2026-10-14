@@ -10,8 +10,6 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/message"
 	"github.com/elojah/broadcastor/subscriber"
@@ -26,13 +24,13 @@ func TestSubscriberWithReplay(t *testing.T) {
 		b := newBroadcastor[int](t)
 		events := &recorder[string]{}
 		middleware := func(next subscriber.Handler[int]) subscriber.Handler[int] {
-			return func(ctx context.Context, id uuid.UUID, msg int) error {
+			return func(ctx context.Context, id uint64, msg int) error {
 				events.record(fmt.Sprintf("middleware %d", msg))
 
 				return next(ctx, id, msg)
 			}
 		}
-		id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
+		id := subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
 			if msg%2 == 0 {
 				return handleError(msg)
 			}
@@ -80,10 +78,10 @@ func TestSubscriberWithReplay_Unsubscribe(t *testing.T) {
 
 	for _, tt := range []struct {
 		name   string
-		remove func(t *testing.T, b *broadcastor.Broadcastor[int], id uuid.UUID) <-chan error
+		remove func(t *testing.T, b *broadcastor.Broadcastor[int], id uint64) <-chan error
 		want   []string
 	}{
-		{"Discard", func(t *testing.T, b *broadcastor.Broadcastor[int], id uuid.UUID) <-chan error {
+		{"Discard", func(t *testing.T, b *broadcastor.Broadcastor[int], id uint64) <-chan error {
 			t.Helper()
 			if err := b.Unsubscribe(t.Context(), id, subscriber.WithUnsubscribeDiscard()); err != nil {
 				t.Fatalf("Unsubscribe: %v", err)
@@ -91,7 +89,7 @@ func TestSubscriberWithReplay_Unsubscribe(t *testing.T) {
 
 			return nil
 		}, []string{"handled 1", "acked 1", "stopped at 2"}},
-		{"Shutdown", func(t *testing.T, b *broadcastor.Broadcastor[int], _ uuid.UUID) <-chan error {
+		{"Shutdown", func(t *testing.T, b *broadcastor.Broadcastor[int], _ uint64) <-chan error {
 			t.Helper()
 			errs := shutdown(t.Context(), b)
 			checkWaiting(t, errs, "the subscriber replays")
@@ -106,7 +104,7 @@ func TestSubscriberWithReplay_Unsubscribe(t *testing.T) {
 				b := newBroadcastor[int](t)
 				events := &recorder[string]{}
 				hold := make(chan struct{})
-				id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
+				id := subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
 					events.record(fmt.Sprintf("handled %d", msg))
 					<-hold
 
@@ -142,7 +140,7 @@ func TestSubscriberWithReplay_BroadcastWaits(t *testing.T) {
 		b := newBroadcastor[int](t)
 		events := &recorder[string]{}
 		hold := make(chan struct{})
-		subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
+		subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
 			events.record(fmt.Sprintf("handled %d", msg))
 			<-hold
 
@@ -177,7 +175,7 @@ func TestSubscriberWithReplay_Evicted(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b := newBroadcastor[int](t)
 		events := &recorder[string]{}
-		id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
+		id := subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
 			events.record(fmt.Sprintf("handled %d", msg))
 
 			return handleError(msg)

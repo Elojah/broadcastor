@@ -8,8 +8,6 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor/middleware"
 	"github.com/elojah/broadcastor/subscriber"
 )
@@ -24,12 +22,12 @@ func TestRetry(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		type key struct{}
 		ctx := context.WithValue(t.Context(), key{}, "subscribe")
-		id := uuid.New()
+		id := uint64(7)
 		f := &flaky{errs: []error{attemptError(1), attemptError(2)}}
 		handle := middleware.Retry[int](middleware.RetryPolicy{Attempts: 5, Delay: time.Second, Multiplier: 3})(
-			func(ctx context.Context, gotID uuid.UUID, msg int) error {
+			func(ctx context.Context, gotID uint64, msg int) error {
 				if v := ctx.Value(key{}); v != "subscribe" || gotID != id || msg != 7 {
-					t.Errorf("handler got ctx value %v, subscriber %s and message %d, want %q, %s and 7", v, gotID, msg, "subscribe", id)
+					t.Errorf("handler got ctx value %v, subscriber %d and message %d, want %q, %d and 7", v, gotID, msg, "subscribe", id)
 				}
 
 				return f.handle(ctx, gotID, msg)
@@ -91,7 +89,7 @@ func TestRetry_Backoff(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				f := &flaky{errs: []error{attemptError(1), attemptError(2), attemptError(3), attemptError(4)}}
 
-				err := middleware.Retry[int](tt.policy)(f.handle)(t.Context(), uuid.New(), 1)
+				err := middleware.Retry[int](tt.policy)(f.handle)(t.Context(), 1, 1)
 				if !asIs(err, attemptError(4)) {
 					t.Errorf("Retry returned %v, want the error of the last call as is, %v", err, attemptError(4))
 				}
@@ -115,7 +113,7 @@ func TestRetry_NotRetryable(t *testing.T) {
 		return !asIs(err, attemptError(2))
 	}})(f.handle)
 
-	if err := handle(t.Context(), uuid.New(), 1); !asIs(err, attemptError(2)) {
+	if err := handle(t.Context(), 1, 1); !asIs(err, attemptError(2)) {
 		t.Errorf("Retry returned %v, want the error IsRetryable rejected, %v", err, attemptError(2))
 	}
 	if got, want := checked, []error{attemptError(1), attemptError(2)}; !slices.Equal(got, want) {
@@ -130,11 +128,11 @@ func TestRetry_NotRetryable(t *testing.T) {
 func TestRetry_Closed(t *testing.T) {
 	t.Parallel()
 
-	closed := &subscriber.ClosedError[int]{SubscriberID: uuid.New(), Message: 1}
+	closed := &subscriber.ClosedError[int]{SubscriberID: 1, Message: 1}
 	f := &flaky{errs: []error{closed}}
 	handle := middleware.Retry[int](middleware.RetryPolicy{Attempts: 3})(f.handle)
 
-	if err := handle(t.Context(), uuid.New(), 1); !asIs(err, closed) {
+	if err := handle(t.Context(), 1, 1); !asIs(err, closed) {
 		t.Errorf("Retry returned %v, want %v", err, closed)
 	}
 	if len(f.calls) != 1 {
@@ -150,7 +148,7 @@ func TestRetry_NoRetry(t *testing.T) {
 		f := &flaky{errs: []error{attemptError(1), attemptError(2)}}
 		handle := middleware.Retry[int](middleware.RetryPolicy{Attempts: attempts})(f.handle)
 
-		if err := handle(t.Context(), uuid.New(), 1); !asIs(err, attemptError(1)) {
+		if err := handle(t.Context(), 1, 1); !asIs(err, attemptError(1)) {
 			t.Errorf("with Attempts %d, Retry returned %v, want %v", attempts, err, attemptError(1))
 		}
 		if len(f.calls) != 1 {
@@ -179,7 +177,7 @@ func TestRetry_Jitter(t *testing.T) {
 				f := &flaky{errs: slices.Repeat([]error{attemptError(1)}, attempts)}
 				policy := middleware.RetryPolicy{Attempts: attempts, Delay: time.Second, Jitter: tt.jitter}
 
-				_ = middleware.Retry[int](policy)(f.handle)(t.Context(), uuid.New(), 1)
+				_ = middleware.Retry[int](policy)(f.handle)(t.Context(), 1, 1)
 				gaps := f.gaps()
 				for _, gap := range gaps {
 					if gap < tt.min || gap > tt.max {
@@ -204,14 +202,14 @@ func TestRetry_ContextDone(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		f := &flaky{errs: []error{attemptError(1), attemptError(2)}}
 		handle := middleware.Retry[int](middleware.RetryPolicy{Attempts: 3, Delay: time.Hour})(
-			func(ctx context.Context, id uuid.UUID, msg int) error {
+			func(ctx context.Context, id uint64, msg int) error {
 				time.AfterFunc(time.Second, cancel)
 
 				return f.handle(ctx, id, msg)
 			})
 
 		start := time.Now()
-		if err := handle(ctx, uuid.New(), 1); !asIs(err, attemptError(1)) {
+		if err := handle(ctx, 1, 1); !asIs(err, attemptError(1)) {
 			t.Errorf("Retry returned %v, want the error of the last call, %v", err, attemptError(1))
 		}
 		if elapsed := time.Since(start); elapsed != time.Second {
@@ -227,7 +225,7 @@ func TestRetry_ContextDone(t *testing.T) {
 	handle := middleware.Retry[int](middleware.RetryPolicy{Attempts: 3})(f.handle)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if err := handle(ctx, uuid.New(), 1); !asIs(err, attemptError(1)) {
+	if err := handle(ctx, 1, 1); !asIs(err, attemptError(1)) {
 		t.Errorf("with ctx done and no delay, Retry returned %v, want %v", err, attemptError(1))
 	}
 	if len(f.calls) != 1 {
@@ -250,7 +248,7 @@ func TestRetryPolicy_Do(t *testing.T) {
 				t.Errorf("f got ctx value %v, want %q", v, "dial")
 			}
 
-			return f.handle(ctx, uuid.Nil, 0)
+			return f.handle(ctx, 0, 0)
 		})
 		if err != nil {
 			t.Errorf("Do returned %v, want nil once a call succeeds", err)
@@ -280,7 +278,7 @@ type flaky struct {
 	calls []time.Time
 }
 
-func (f *flaky) handle(context.Context, uuid.UUID, int) error {
+func (f *flaky) handle(context.Context, uint64, int) error {
 	f.calls = append(f.calls, time.Now())
 	if len(f.calls) > len(f.errs) {
 		return nil

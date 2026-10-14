@@ -9,8 +9,6 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/message"
 	"github.com/elojah/broadcastor/subscriber"
@@ -24,14 +22,14 @@ func TestStats(t *testing.T) {
 		name string
 		// run subscribes to b and broadcasts 1, 2 and 3. It returns the subscriber's ID, and what lets its handle return
 		// if it holds on to 1.
-		run  func(t *testing.T, b *broadcastor.Broadcastor[int]) (uuid.UUID, func())
+		run  func(t *testing.T, b *broadcastor.Broadcastor[int]) (uint64, func())
 		want subscriber.Stats
 		// released is what the Stats are once released, if run holds.
 		released subscriber.Stats
 	}{
-		{"Handled", func(t *testing.T, b *broadcastor.Broadcastor[int]) (uuid.UUID, func()) {
+		{"Handled", func(t *testing.T, b *broadcastor.Broadcastor[int]) (uint64, func()) {
 			t.Helper()
-			id := subscribe(t, b, func(context.Context, uuid.UUID, int) error {
+			id := subscribe(t, b, func(context.Context, uint64, int) error {
 				time.Sleep(time.Second)
 
 				return nil
@@ -43,11 +41,11 @@ func TestStats(t *testing.T) {
 
 			return id, nil
 		}, subscriber.Stats{Delivered: 3, Handled: 3, HandleTime: 3 * time.Second}, subscriber.Stats{}},
-		{"Failed", func(t *testing.T, b *broadcastor.Broadcastor[int]) (uuid.UUID, func()) {
+		{"Failed", func(t *testing.T, b *broadcastor.Broadcastor[int]) (uint64, func()) {
 			t.Helper()
 			failed := &recorder[uint64]{}
-			var id uuid.UUID
-			id = subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
+			var id uint64
+			id = subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
 				if msg%2 == 1 {
 					return handleError(msg)
 				}
@@ -67,7 +65,7 @@ func TestStats(t *testing.T) {
 
 			return id, nil
 		}, subscriber.Stats{Delivered: 3, Handled: 1, Failed: 2}, subscriber.Stats{}},
-		{"TimedOut", func(t *testing.T, b *broadcastor.Broadcastor[int]) (uuid.UUID, func()) {
+		{"TimedOut", func(t *testing.T, b *broadcastor.Broadcastor[int]) (uint64, func()) {
 			t.Helper()
 			stuck := &recorder[int]{hold: make(chan struct{})}
 			id := subscribe(t, b, stuck.handle, subscriber.WithTimeout[int](time.Second))
@@ -80,7 +78,7 @@ func TestStats(t *testing.T) {
 			subscriber.Stats{Delivered: 1, TimedOut: 2, Handling: 2 * time.Second},
 			subscriber.Stats{Delivered: 1, Handled: 1, TimedOut: 2, HandleTime: 2 * time.Second},
 		},
-		{"Dropped", func(t *testing.T, b *broadcastor.Broadcastor[int]) (uuid.UUID, func()) {
+		{"Dropped", func(t *testing.T, b *broadcastor.Broadcastor[int]) (uint64, func()) {
 			t.Helper()
 			stuck := &recorder[int]{hold: make(chan struct{})}
 			id := subscribe(t, b, stuck.handle)
@@ -93,7 +91,7 @@ func TestStats(t *testing.T) {
 			subscriber.Stats{Delivered: 1, Dropped: 2},
 			subscriber.Stats{Delivered: 1, Handled: 1, Dropped: 2},
 		},
-		{"Handling", func(t *testing.T, b *broadcastor.Broadcastor[int]) (uuid.UUID, func()) {
+		{"Handling", func(t *testing.T, b *broadcastor.Broadcastor[int]) (uint64, func()) {
 			t.Helper()
 			stuck := &recorder[int]{hold: make(chan struct{})}
 			id := subscribe(t, b, stuck.handle)
@@ -105,7 +103,7 @@ func TestStats(t *testing.T) {
 			subscriber.Stats{Delivered: 1, Handling: time.Second},
 			subscriber.Stats{Delivered: 1, Handled: 1, HandleTime: time.Second},
 		},
-		{"Sending", func(t *testing.T, b *broadcastor.Broadcastor[int]) (uuid.UUID, func()) {
+		{"Sending", func(t *testing.T, b *broadcastor.Broadcastor[int]) (uint64, func()) {
 			t.Helper()
 			stuck := &recorder[int]{hold: make(chan struct{})}
 			id := subscribe(t, b, stuck.handle)
@@ -118,7 +116,7 @@ func TestStats(t *testing.T) {
 			subscriber.Stats{Sending: 2, Delivered: 1},
 			subscriber.Stats{Delivered: 3, Handled: 3},
 		},
-		{"Queued", func(t *testing.T, b *broadcastor.Broadcastor[int]) (uuid.UUID, func()) {
+		{"Queued", func(t *testing.T, b *broadcastor.Broadcastor[int]) (uint64, func()) {
 			t.Helper()
 			stuck := &recorder[int]{hold: make(chan struct{})}
 			id := subscribe(t, b, stuck.handle, subscriber.WithBuffer[int](2))
@@ -186,10 +184,10 @@ func TestStats_Subscribers(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		b := newBroadcastor[int](t)
-		checkIDs := func(want []uuid.UUID, when string) {
+		checkIDs := func(want []uint64, when string) {
 			t.Helper()
 			stats := b.Stats()
-			got := make([]uuid.UUID, 0, len(stats))
+			got := make([]uint64, 0, len(stats))
 			for _, s := range stats {
 				got = append(got, s.SubscriberID)
 			}
@@ -199,7 +197,7 @@ func TestStats_Subscribers(t *testing.T) {
 		}
 		checkIDs(nil, "with no subscriber")
 
-		ids := make([]uuid.UUID, 0, 5)
+		ids := make([]uint64, 0, 5)
 		for range cap(ids) {
 			_, id := record(t, b)
 			ids = append(ids, id)
@@ -231,7 +229,7 @@ func TestStats_AddUp(t *testing.T) {
 				subscriber.WithErrorHandler[int](func(context.Context, error) { errs.Add(1) }),
 			}
 		}
-		handleID := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
+		handleID := subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
 			time.Sleep(time.Millisecond)
 			if msg%3 == 0 {
 				return handleError(msg)
@@ -273,24 +271,24 @@ func TestStats_AddUp(t *testing.T) {
 			t.Fatalf("Stats are for %d subscribers, want 2", len(stats))
 		}
 		for _, s := range stats {
-			errs := map[uuid.UUID]*atomic.Uint64{handleID: &handleErrs, seqID: &seqErrs}[s.SubscriberID]
+			errs := map[uint64]*atomic.Uint64{handleID: &handleErrs, seqID: &seqErrs}[s.SubscriberID]
 			if errs == nil {
-				t.Fatalf("Stats for subscriber %s, want %s or %s", s.SubscriberID, handleID, seqID)
+				t.Fatalf("Stats for subscriber %d, want %d or %d", s.SubscriberID, handleID, seqID)
 			}
 			if s.Queued != 0 || s.Sending != 0 || s.Handling != 0 || s.Delivered != s.Handled+s.Failed {
-				t.Errorf("subscriber %s: %+v, want Delivered = Handled + Failed, and nothing queued, sending or handling", s.SubscriberID, s)
+				t.Errorf("subscriber %d: %+v, want Delivered = Handled + Failed, and nothing queued, sending or handling", s.SubscriberID, s)
 			}
 			if got := s.Handled + s.Failed + s.TimedOut + s.Dropped; got != broadcasters*perBroadcaster {
-				t.Errorf("subscriber %s: %+v, counting %d messages, want %d", s.SubscriberID, s, got, broadcasters*perBroadcaster)
+				t.Errorf("subscriber %d: %+v, counting %d messages, want %d", s.SubscriberID, s, got, broadcasters*perBroadcaster)
 			}
 			if lost, reported := s.Failed+s.TimedOut+s.Dropped, errs.Load(); lost != reported {
-				t.Errorf("subscriber %s: %+v, counting %d losses, want the %d errors reported", s.SubscriberID, s, lost, reported)
+				t.Errorf("subscriber %d: %+v, counting %d losses, want the %d errors reported", s.SubscriberID, s, lost, reported)
 			}
 			if want := time.Duration(s.Handled+s.Failed) * time.Millisecond; s.HandleTime != want { //nolint:gosec // at most 200
-				t.Errorf("subscriber %s: HandleTime is %v, want %v", s.SubscriberID, s.HandleTime, want)
+				t.Errorf("subscriber %d: HandleTime is %v, want %v", s.SubscriberID, s.HandleTime, want)
 			}
 			if s.Handled == 0 || s.TimedOut+s.Dropped == 0 {
-				t.Errorf("subscriber %s: %+v, want some messages handled and some lost", s.SubscriberID, s)
+				t.Errorf("subscriber %d: %+v, want some messages handled and some lost", s.SubscriberID, s)
 			}
 		}
 
@@ -303,20 +301,20 @@ func TestStats_AddUp(t *testing.T) {
 }
 
 // statsOf returns the Stats of subscriber id. It may be called from any goroutine.
-func statsOf[T any](t *testing.T, b *broadcastor.Broadcastor[T], id uuid.UUID) subscriber.Stats {
+func statsOf[T any](t *testing.T, b *broadcastor.Broadcastor[T], id uint64) subscriber.Stats {
 	t.Helper()
 	for _, s := range b.Stats() {
 		if s.SubscriberID == id {
 			return s
 		}
 	}
-	t.Errorf("no Stats for subscriber %s", id)
+	t.Errorf("no Stats for subscriber %d", id)
 
 	return subscriber.Stats{}
 }
 
 // checkStats checks that subscriber id has the Stats want, but for its ID.
-func checkStats[T any](t *testing.T, b *broadcastor.Broadcastor[T], id uuid.UUID, want subscriber.Stats) {
+func checkStats[T any](t *testing.T, b *broadcastor.Broadcastor[T], id uint64, want subscriber.Stats) {
 	t.Helper()
 	want.SubscriberID = id
 	if got := statsOf(t, b, id); got != want {

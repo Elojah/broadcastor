@@ -4,8 +4,6 @@ import (
 	"context"
 	"iter"
 	"sync/atomic"
-
-	"github.com/google/uuid"
 )
 
 // relay passes each message from Consume's goroutine to a Seq loop, and the body's error back.
@@ -24,7 +22,7 @@ func newRelay[T any]() *relay[T] {
 
 // handle is Consume's handle for a Seq loop: it returns the error the body passed to fail, or a *ClosedError if the
 // loop ended, or panicked, without handling msg.
-func (r *relay[T]) handle(_ context.Context, id uuid.UUID, msg T) error {
+func (r *relay[T]) handle(_ context.Context, id uint64, msg T) error {
 	select {
 	case r.messages <- msg:
 	case <-r.stopped:

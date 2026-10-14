@@ -6,8 +6,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/message"
 	"github.com/elojah/broadcastor/subscriber"
@@ -42,7 +40,7 @@ func BenchmarkBroadcast(b *testing.B) {
 				bc := newBroadcastor[int](b)
 				var handled sync.WaitGroup
 				for range subscribers {
-					_, err := bc.Subscribe(b.Context(), func(context.Context, uuid.UUID, int) error {
+					_, err := bc.Subscribe(b.Context(), func(context.Context, uint64, int) error {
 						handled.Done()
 
 						return nil
@@ -214,12 +212,12 @@ func BenchmarkSubscribeUnsubscribe_Parallel(b *testing.B) {
 }
 
 func subscribeUnsubscribe(ctx context.Context, bc *broadcastor.Broadcastor[int], options ...subscriber.Option[int]) error {
-	id, err := bc.Subscribe(ctx, func(context.Context, uuid.UUID, int) error { return nil }, options...)
+	id, err := bc.Subscribe(ctx, func(context.Context, uint64, int) error { return nil }, options...)
 	if err != nil {
 		return fmt.Errorf("Subscribe: %w", err)
 	}
 	if err := bc.Unsubscribe(ctx, id); err != nil {
-		return fmt.Errorf("Unsubscribe(%s): %w", id, err)
+		return fmt.Errorf("Unsubscribe(%d): %w", id, err)
 	}
 
 	return nil
@@ -234,7 +232,7 @@ func subscribeCounting(b *testing.B, bc *broadcastor.Broadcastor[int], subscribe
 		handled := make(chan struct{})
 		done[i] = handled
 		remaining := messages // only handle touches it, in the subscriber's goroutine
-		_, err := bc.Subscribe(b.Context(), func(context.Context, uuid.UUID, int) error {
+		_, err := bc.Subscribe(b.Context(), func(context.Context, uint64, int) error {
 			remaining--
 			if remaining == 0 {
 				close(handled)
@@ -262,8 +260,8 @@ func subscribeCountingBatches(b *testing.B, bc *broadcastor.Broadcastor[int], su
 		handled := make(chan struct{})
 		done[i] = handled
 		remaining := batches // only the batch handler touches it, in the subscriber's goroutine
-		_, err := bc.Subscribe(b.Context(), func(context.Context, uuid.UUID, int) error { return nil },
-			append(options, subscriber.WithBatchHandler(func(context.Context, uuid.UUID, message.Batch[int]) error {
+		_, err := bc.Subscribe(b.Context(), func(context.Context, uint64, int) error { return nil },
+			append(options, subscriber.WithBatchHandler(func(context.Context, uint64, message.Batch[int]) error {
 				remaining--
 				if remaining == 0 {
 					close(handled)

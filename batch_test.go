@@ -13,8 +13,6 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor/holder"
 	"github.com/elojah/broadcastor/message"
 	"github.com/elojah/broadcastor/middleware"
@@ -34,7 +32,7 @@ func TestBroadcastBatch(t *testing.T) {
 		sent := batchOf(1, 2, 3)
 		var calls atomic.Int64
 		batchID := subscribe(t, b, singles.handle, subscriber.WithBatchHandler(
-			func(ctx context.Context, id uuid.UUID, batch message.Batch[int]) error {
+			func(ctx context.Context, id uint64, batch message.Batch[int]) error {
 				if batch != message.Batch[int](sent) {
 					t.Errorf("batch handler got %v, want the batch sent", batch)
 				}
@@ -42,7 +40,7 @@ func TestBroadcastBatch(t *testing.T) {
 				return batches.handle(ctx, id, batch)
 			},
 			func(next subscriber.Handler[message.Batch[int]]) subscriber.Handler[message.Batch[int]] {
-				return func(ctx context.Context, id uuid.UUID, batch message.Batch[int]) error {
+				return func(ctx context.Context, id uint64, batch message.Batch[int]) error {
 					calls.Add(1)
 
 					return next(ctx, id, batch)
@@ -179,7 +177,7 @@ func TestSubscriberWithBatchHandler_Errors(t *testing.T) {
 		var subscriberErrs, batchErrs []error
 		store := &recordStore{}
 		id := subscribe(t, b, (&recorder[int]{}).handle, subscriber.WithDeadLetters[int](store),
-			subscriber.WithBatchHandler(func(ctx context.Context, _ uuid.UUID, batch message.Batch[int]) error {
+			subscriber.WithBatchHandler(func(ctx context.Context, _ uint64, batch message.Batch[int]) error {
 				handledWith = ctx.Value(key{})
 
 				return handleError(batch.Len())
@@ -224,7 +222,7 @@ func TestSubscriberWithBatchHandler_Recover(t *testing.T) {
 		sent := batchOf(1, 2)
 		var errs []error
 		subscribe(t, b, (&recorder[int]{}).handle,
-			subscriber.WithBatchHandler(func(context.Context, uuid.UUID, message.Batch[int]) error {
+			subscriber.WithBatchHandler(func(context.Context, uint64, message.Batch[int]) error {
 				panic("batch handler")
 			}, middleware.Recover[message.Batch[int]]()),
 			subscriber.WithErrorHandler[int](func(_ context.Context, err error) { errs = append(errs, err) }))
@@ -248,7 +246,7 @@ func TestSubscriberWithBatchHandler_Evict(t *testing.T) {
 		var evicts atomic.Int64
 		var errs []string
 		id := subscribe(t, b, (&recorder[int]{}).handle,
-			subscriber.WithBatchHandler(func(_ context.Context, _ uuid.UUID, batch message.Batch[int]) error {
+			subscriber.WithBatchHandler(func(_ context.Context, _ uint64, batch message.Batch[int]) error {
 				return handleError(batch.Len())
 			}),
 			subscriber.WithEvict[int](func(error) bool { return evicts.Add(1) > 0 }),
@@ -277,7 +275,7 @@ func TestBroadcastBatch_Unrolled(t *testing.T) {
 		b := newBroadcastor[int](t)
 		failures := &recorder[int]{}
 		store := &recordStore{}
-		id := subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
+		id := subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
 			if msg == 2 {
 				return handleError(msg)
 			}
@@ -314,7 +312,7 @@ func TestBroadcastBatch_Filter(t *testing.T) {
 		})
 		var got []message.Batch[int]
 		batchID := subscribe(t, b, (&recorder[int]{}).handle, keepEven, subscriber.WithBatchHandler(
-			func(_ context.Context, _ uuid.UUID, batch message.Batch[int]) error {
+			func(_ context.Context, _ uint64, batch message.Batch[int]) error {
 				got = append(got, batch)
 
 				return nil
@@ -364,13 +362,13 @@ func TestBroadcastBatch_Map(t *testing.T) {
 		b := newBroadcastor[int](t)
 		var whole, part []message.Batch[int]
 		subscribe(t, b, (&recorder[int]{}).handle, subscriber.WithBatchHandler(
-			func(_ context.Context, _ uuid.UUID, batch message.Batch[int]) error {
+			func(_ context.Context, _ uint64, batch message.Batch[int]) error {
 				whole = append(whole, batch)
 
 				return nil
 			}))
 		subscribe(t, b, (&recorder[int]{}).handle, subscriber.WithFilter(func(msg int) bool { return msg%2 == 0 }),
-			subscriber.WithBatchHandler(func(_ context.Context, _ uuid.UUID, batch message.Batch[int]) error {
+			subscriber.WithBatchHandler(func(_ context.Context, _ uint64, batch message.Batch[int]) error {
 				part = append(part, batch)
 
 				return nil
@@ -445,7 +443,7 @@ func TestBroadcastBatch_Discard(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			b := newBroadcastor[int](t)
 			handled, closed := &recorder[int]{}, &recorder[int]{}
-			subscribe(t, b, func(ctx context.Context, id uuid.UUID, msg int) error {
+			subscribe(t, b, func(ctx context.Context, id uint64, msg int) error {
 				handled.record(msg)
 				if err := b.Unsubscribe(ctx, id, subscriber.WithUnsubscribeDiscard()); err != nil {
 					t.Errorf("Unsubscribe: %v", err)
@@ -548,8 +546,8 @@ func TestStats_AddUpBatches(t *testing.T) {
 				subscriber.WithErrorHandler[int](func(_ context.Context, err error) { reported[name].Add(valuesLost(t, err)) }),
 			}
 		}
-		ids := map[uuid.UUID]string{}
-		ids[subscribe(t, b, func(_ context.Context, _ uuid.UUID, msg int) error {
+		ids := map[uint64]string{}
+		ids[subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
 			time.Sleep(time.Millisecond)
 			if msg%3 == 0 {
 				return handleError(msg)
@@ -558,7 +556,7 @@ func TestStats_AddUpBatches(t *testing.T) {
 			return nil
 		}, options("unrolled")...)] = "unrolled"
 		ids[subscribe(t, b, (&recorder[int]{}).handle, append(options("batch"), subscriber.WithBatchHandler(
-			func(_ context.Context, _ uuid.UUID, batch message.Batch[int]) error {
+			func(_ context.Context, _ uint64, batch message.Batch[int]) error {
 				time.Sleep(time.Millisecond)
 				if first := slices.Collect(batch.All())[0]; first%3 == 0 {
 					return batchError{len: batch.Len()}
@@ -644,7 +642,7 @@ type batchRecorder struct {
 	batches [][]int
 }
 
-func (r *batchRecorder) handle(_ context.Context, _ uuid.UUID, batch message.Batch[int]) error {
+func (r *batchRecorder) handle(_ context.Context, _ uint64, batch message.Batch[int]) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.batches = append(r.batches, slices.Collect(batch.All()))
@@ -665,7 +663,7 @@ func checkBatches(t *testing.T, r *batchRecorder, want [][]int) {
 // recordMiddleware returns a middleware recording each message into r.
 func recordMiddleware(r *recorder[int]) subscriber.Middleware[int] {
 	return func(next subscriber.Handler[int]) subscriber.Handler[int] {
-		return func(ctx context.Context, id uuid.UUID, msg int) error {
+		return func(ctx context.Context, id uint64, msg int) error {
 			r.record(msg)
 
 			return next(ctx, id, msg)

@@ -2,7 +2,7 @@
 // handles its messages one at a time, in its own goroutine.
 //
 //	b := broadcastor.NewBroadcastor[string]()
-//	id, err := b.Subscribe(ctx, func(ctx context.Context, _ uuid.UUID, msg string) error {
+//	id, err := b.Subscribe(ctx, func(ctx context.Context, _ uint64, msg string) error {
 //		fmt.Println(msg)
 //		return nil
 //	})

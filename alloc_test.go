@@ -4,8 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor/message"
 	"github.com/elojah/broadcastor/subscriber"
 )
@@ -39,14 +37,14 @@ func TestBroadcast_Allocs(t *testing.T) { //nolint:paralleltest // AllocsPerRun 
 		{
 			name:      "subscriber filter",
 			subscribe: []subscriber.Option[int]{subscriber.WithBuffer[int](buffer)},
-			broadcast: []message.Option[int]{message.WithSubscriberFilter[int](func(uuid.UUID) bool { return true })},
+			broadcast: []message.Option[int]{message.WithSubscriberFilter[int](func(uint64) bool { return true })},
 			want:      1,
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			b := newBroadcastor[int](t)
 			for range subscribers {
-				subscribe(t, b, func(context.Context, uuid.UUID, int) error { return nil }, tt.subscribe...)
+				subscribe(t, b, func(context.Context, uint64, int) error { return nil }, tt.subscribe...)
 			}
 
 			got := testing.AllocsPerRun(runs, func() {

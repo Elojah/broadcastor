@@ -10,8 +10,6 @@ import (
 	"log"
 	"sync"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/message"
 )
@@ -22,7 +20,7 @@ func main() {
 
 	release := make(chan struct{})
 	var handled sync.WaitGroup
-	slowID, err := b.Subscribe(ctx, func(_ context.Context, _ uuid.UUID, msg string) error {
+	slowID, err := b.Subscribe(ctx, func(_ context.Context, _ uint64, msg string) error {
 		<-release
 		fmt.Println("slow got", msg)
 		handled.Done()
@@ -32,7 +30,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fastID, err := b.Subscribe(ctx, func(_ context.Context, _ uuid.UUID, msg string) error {
+	fastID, err := b.Subscribe(ctx, func(_ context.Context, _ uint64, msg string) error {
 		fmt.Println("fast got", msg)
 		if msg == "second" {
 			close(release)
@@ -53,7 +51,7 @@ func main() {
 	handled.Wait()
 	fmt.Println("second handed to", n, "subscribers")
 
-	for _, id := range []uuid.UUID{slowID, fastID} {
+	for _, id := range []uint64{slowID, fastID} {
 		if err := b.Unsubscribe(ctx, id); err != nil {
 			log.Fatal(err)
 		}

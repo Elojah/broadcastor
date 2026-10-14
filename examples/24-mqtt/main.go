@@ -20,7 +20,6 @@ import (
 	"time"
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"github.com/google/uuid"
 
 	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/message"
@@ -125,7 +124,7 @@ func subscribe(ctx context.Context, b *broadcastor.Broadcastor[reading], local, 
 		subscriber.WithErrorHandler[reading](func(_ context.Context, err error) { log.Println(err) }),
 	}
 	handlers := []subscriber.Handler[reading]{
-		func(_ context.Context, _ uuid.UUID, r reading) error {
+		func(_ context.Context, _ uint64, r reading) error {
 			if r.Celsius > 30 {
 				fmt.Println("rule: fan on,", r)
 			}
@@ -149,7 +148,7 @@ func subscribe(ctx context.Context, b *broadcastor.Broadcastor[reading], local, 
 // until it has sent n readings.
 func uplink(ctx context.Context, outbox *store.Ring[reading], up <-chan struct{}, n int) <-chan error {
 	sending, stop := context.WithCancel(ctx)
-	send := func(_ context.Context, _ uuid.UUID, r reading) error {
+	send := func(_ context.Context, _ uint64, r reading) error {
 		select {
 		case <-up:
 		default:

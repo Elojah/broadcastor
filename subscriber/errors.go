@@ -6,8 +6,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor/message"
 )
 
@@ -25,13 +23,13 @@ var (
 
 // HandleError is what middleware.WrapError makes of handle's errors.
 type HandleError[T any] struct {
-	SubscriberID uuid.UUID
+	SubscriberID uint64
 	Message      T
 	Err          error
 }
 
 func (e *HandleError[T]) Error() string {
-	return "subscriber " + e.SubscriberID.String() + ": " + e.Err.Error()
+	return "subscriber " + strconv.FormatUint(e.SubscriberID, 10) + ": " + e.Err.Error()
 }
 
 func (e *HandleError[T]) Unwrap() error {
@@ -41,14 +39,14 @@ func (e *HandleError[T]) Unwrap() error {
 // PanicError is what middleware.Recover makes of a panic. It matches ErrPanic, and unwraps to Value when that is an
 // error.
 type PanicError[T any] struct {
-	SubscriberID uuid.UUID
+	SubscriberID uint64
 	Message      T
 	Value        any
 	Stack        []byte
 }
 
 func (e *PanicError[T]) Error() string {
-	return fmt.Sprintf("subscriber %s: panic: %v", e.SubscriberID, e.Value)
+	return fmt.Sprintf("subscriber %d: panic: %v", e.SubscriberID, e.Value)
 }
 
 func (e *PanicError[T]) Unwrap() error {
@@ -63,13 +61,13 @@ func (e *PanicError[T]) Is(target error) bool {
 
 // ExpiredError is what middleware.MaxAge returns for a message Age old. It matches ErrExpired.
 type ExpiredError[T any] struct {
-	SubscriberID uuid.UUID
+	SubscriberID uint64
 	Message      T
 	Age          time.Duration
 }
 
 func (e *ExpiredError[T]) Error() string {
-	return "subscriber " + e.SubscriberID.String() + ": message expired, " + e.Age.String() + " old"
+	return "subscriber " + strconv.FormatUint(e.SubscriberID, 10) + ": message expired, " + e.Age.String() + " old"
 }
 
 func (e *ExpiredError[T]) Is(target error) bool {
@@ -79,14 +77,14 @@ func (e *ExpiredError[T]) Is(target error) bool {
 // TimeoutError is reported when Broadcast gives up on a subscriber: Err is the Broadcast ctx's error, or
 // context.DeadlineExceeded for the message's timeout. It matches ErrTimeout, and unwraps to Err.
 type TimeoutError[T any] struct {
-	SubscriberID uuid.UUID
+	SubscriberID uint64
 	Message      T
 	Batch        message.Batch[T]
 	Err          error
 }
 
 func (e *TimeoutError[T]) Error() string {
-	return "subscriber " + e.SubscriberID.String() + ": " + e.Err.Error()
+	return "subscriber " + strconv.FormatUint(e.SubscriberID, 10) + ": " + e.Err.Error()
 }
 
 func (e *TimeoutError[T]) Unwrap() error {
@@ -100,13 +98,13 @@ func (e *TimeoutError[T]) Is(target error) bool {
 // DroppedError is reported when a non-blocking Broadcast finds the subscriber busy, an async one hits WithAsyncLimit,
 // or the subscriber's holder has no room (WithHolder). It matches ErrDropped.
 type DroppedError[T any] struct {
-	SubscriberID uuid.UUID
+	SubscriberID uint64
 	Message      T
 	Batch        message.Batch[T]
 }
 
 func (e *DroppedError[T]) Error() string {
-	return "subscriber " + e.SubscriberID.String() + ": busy, " + describe(e.Batch) + " dropped"
+	return "subscriber " + strconv.FormatUint(e.SubscriberID, 10) + ": busy, " + describe(e.Batch) + " dropped"
 }
 
 func (e *DroppedError[T]) Is(target error) bool {
@@ -116,14 +114,14 @@ func (e *DroppedError[T]) Is(target error) bool {
 // EvictedError replaces the error that evicted the subscriber (WithEvict): Err is the *TimeoutError, the *DroppedError
 // or handle's error. It matches ErrEvicted, and unwraps to Err.
 type EvictedError[T any] struct {
-	SubscriberID uuid.UUID
+	SubscriberID uint64
 	Message      T
 	Batch        message.Batch[T]
 	Err          error
 }
 
 func (e *EvictedError[T]) Error() string {
-	return "subscriber " + e.SubscriberID.String() + ": evicted: " + e.Err.Error()
+	return "subscriber " + strconv.FormatUint(e.SubscriberID, 10) + ": evicted: " + e.Err.Error()
 }
 
 func (e *EvictedError[T]) Unwrap() error {
@@ -137,13 +135,13 @@ func (e *EvictedError[T]) Is(target error) bool {
 // ClosedError is reported for a message missed because the subscriber was unsubscribed: by a Broadcast under way, or
 // discarded (WithUnsubscribeDiscard, or a SubscribeSeq loop that ended). It matches ErrClosed.
 type ClosedError[T any] struct {
-	SubscriberID uuid.UUID
+	SubscriberID uint64
 	Message      T
 	Batch        message.Batch[T]
 }
 
 func (e *ClosedError[T]) Error() string {
-	return "subscriber " + e.SubscriberID.String() + ": unsubscribed, " + describe(e.Batch) + " dropped"
+	return "subscriber " + strconv.FormatUint(e.SubscriberID, 10) + ": unsubscribed, " + describe(e.Batch) + " dropped"
 }
 
 func (e *ClosedError[T]) Is(target error) bool {
@@ -153,7 +151,7 @@ func (e *ClosedError[T]) Is(target error) bool {
 // StoreError replaces the error about a lost message the Store failed to store: Err is Put's, Cause the original. It
 // matches ErrStore, and unwraps to both.
 type StoreError[T any] struct {
-	SubscriberID uuid.UUID
+	SubscriberID uint64
 	Message      T
 	Batch        message.Batch[T]
 	Err          error
@@ -161,7 +159,7 @@ type StoreError[T any] struct {
 }
 
 func (e *StoreError[T]) Error() string {
-	return "subscriber " + e.SubscriberID.String() + ": storing a lost " + describe(e.Batch) + ": " + e.Err.Error() + " (lost: " + e.Cause.Error() + ")"
+	return "subscriber " + strconv.FormatUint(e.SubscriberID, 10) + ": storing a lost " + describe(e.Batch) + ": " + e.Err.Error() + " (lost: " + e.Cause.Error() + ")"
 }
 
 func (e *StoreError[T]) Unwrap() []error {

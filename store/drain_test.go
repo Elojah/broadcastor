@@ -9,8 +9,6 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/elojah/broadcastor/middleware"
 	"github.com/elojah/broadcastor/store"
 	"github.com/elojah/broadcastor/subscriber"
@@ -28,15 +26,15 @@ func TestDrain(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		r := store.NewRing[int](4)
-		id := uuid.New()
+		id := uint64(7)
 		for msg := 1; msg <= 3; msg++ {
 			put(t, r, subscriber.Record[int]{SubscriberID: id, Message: msg, Err: errLost})
 		}
 		var handled []int
 		ctx, cancel := context.WithCancel(t.Context())
-		done := goDrain(ctx, r, func(_ context.Context, gotID uuid.UUID, msg int) error {
+		done := goDrain(ctx, r, func(_ context.Context, gotID uint64, msg int) error {
 			if gotID != id {
-				t.Errorf("handle got subscriber %s, want %s", gotID, id)
+				t.Errorf("handle got subscriber %d, want %d", gotID, id)
 			}
 			handled = append(handled, msg)
 
@@ -68,7 +66,7 @@ func TestDrain_DeadLetter(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			type key struct{}
 			r := store.NewRing[int](4)
-			id := uuid.New()
+			id := uint64(7)
 			for msg := 1; msg <= 4; msg++ {
 				put(t, r, subscriber.Record[int]{SubscriberID: id, Message: msg})
 			}
@@ -85,7 +83,7 @@ func TestDrain_DeadLetter(t *testing.T) {
 				})
 			}
 			ctx, cancel := context.WithCancel(context.WithValue(t.Context(), key{}, "drain"))
-			done := goDrain(ctx, r, func(_ context.Context, _ uuid.UUID, msg int) error {
+			done := goDrain(ctx, r, func(_ context.Context, _ uint64, msg int) error {
 				if msg%2 == 0 {
 					return errHandle
 				}
@@ -120,7 +118,7 @@ func TestDrain_ContextDone(t *testing.T) {
 		r := store.NewRing[int](2)
 		putMessages(t, r, 1, 2)
 		ctx, cancel := context.WithCancel(t.Context())
-		done := goDrain(ctx, r, func(ctx context.Context, _ uuid.UUID, _ int) error {
+		done := goDrain(ctx, r, func(ctx context.Context, _ uint64, _ int) error {
 			<-ctx.Done()
 
 			return ctx.Err()
@@ -149,7 +147,7 @@ func TestDrain_AckOnceHandled(t *testing.T) {
 		q := &strictQueue{Ring: store.NewRing[int](2)}
 		putMessages(t, q.Ring, 1, 2)
 		ctx, cancel := context.WithCancel(t.Context())
-		done := goDrain(ctx, q, func(context.Context, uuid.UUID, int) error {
+		done := goDrain(ctx, q, func(context.Context, uint64, int) error {
 			cancel()
 
 			return nil
@@ -171,7 +169,7 @@ func TestDrain_DeadLetterFails(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		r := store.NewRing[int](2)
 		putMessages(t, r, 1)
-		done := goDrain(t.Context(), r, func(context.Context, uuid.UUID, int) error {
+		done := goDrain(t.Context(), r, func(context.Context, uint64, int) error {
 			return errHandle
 		}, store.PutFunc[int](func(context.Context, subscriber.Record[int]) error {
 			return errPut
@@ -193,7 +191,7 @@ func TestDrain_AckFails(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		q := &strictQueue{Ring: store.NewRing[int](2), err: errPut}
 		putMessages(t, q.Ring, 1)
-		done := goDrain(t.Context(), q, func(context.Context, uuid.UUID, int) error { return nil }, nil)
+		done := goDrain(t.Context(), q, func(context.Context, uint64, int) error { return nil }, nil)
 
 		if err := receiveErr(t, done); !errors.Is(err, errPut) {
 			t.Errorf("Drain = %v, want %v", err, errPut)
@@ -214,7 +212,7 @@ func TestDrain_Retry(t *testing.T) {
 		var calls []int
 		failures := 2
 		handle := middleware.Retry[int](middleware.RetryPolicy{Attempts: 5, Delay: time.Second})(
-			func(_ context.Context, _ uuid.UUID, msg int) error {
+			func(_ context.Context, _ uint64, msg int) error {
 				calls = append(calls, msg)
 				if failures > 0 {
 					failures--
@@ -244,7 +242,7 @@ func TestEnqueue(t *testing.T) {
 	t.Parallel()
 
 	type key struct{}
-	id := uuid.New()
+	id := uint64(7)
 	var mu sync.Mutex
 	var got []subscriber.Record[int]
 	handle := store.Enqueue(store.PutFunc[int](func(ctx context.Context, r subscriber.Record[int]) error {
