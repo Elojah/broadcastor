@@ -6,7 +6,7 @@ Commands, fragile invariants and settled decisions. Behaviour is in godoc and th
 
 `github.com/elojah/broadcastor`, a generic in-process fan-out. Go 1.26.1, one dependency: `github.com/google/uuid`.
 
-Packages: `broadcastor` (`Broadcastor`), `subscriber` (`Subscriber`, its options, `Handler`/`Middleware`, `Store`/`Record`, `Holder`, `Stats`, errors), `message` (`Message`, `Config`, `Delivery`, `Batch`, `Slice`, `Broadcast` options), `middleware`, `store`, `holder`, `filter`, `pkg/gate`, `examples/`. Imports go `broadcastor` → `subscriber` → `message`. `middleware` and `store` import `subscriber`, never `broadcastor`. `holder` imports only `message`, `filter` nothing from the library.
+Packages: `broadcastor` (`Broadcastor`), `subscriber` (`Subscriber`, its options, `Handler`/`Middleware`, `Store`/`Record`, `Holder`, `Stats`, errors), `message` (`Message`, `Config`, `Delivery`, `Batch`, `Slice`, `Map`, `Broadcast` options), `middleware`, `store`, `holder`, `filter`, `pkg/gate`, `examples/`. Imports go `broadcastor` → `subscriber` → `message`. `middleware` and `store` import `subscriber`, never `broadcastor`. `holder` imports only `message`, `filter` nothing from the library.
 
 `examples/19-redis`, `24-mqtt` and `25-modbus` are modules of their own (`replace ../..`), so their dependencies stay out of go.mod. `go test ./...` skips them, `make` covers `MODULES`, and `go test -C examples/19-redis ./...` tests one.
 
@@ -60,7 +60,7 @@ A change to channels, removal or error reporting must keep these, and pass `make
 - **`WithAsyncLimit` is unlimited by default until v1.0**: a limit drops silently without an error handler, whereas `Stats.Sending` shows a pile-up.
 - **`Broadcast` applies its options once** (`message.NewConfig`), and `message.New` lays the fields they set over each subscriber's defaults by value, so a `Broadcast` without options allocates nothing in sync, buffered and non-blocking modes (`TestBroadcast_Allocs`).
 - **Batches travel in `Message.Batch`**, not a channel or a type of their own, so every invariant on `ch` holds as is. A batch has one Config, from its `BroadcastBatch`'s options, or the newest message's for a holder's: that is what keeps the batch handler and the error handlers to one call per batch.
-- **`message.Batch` has `Add`, `All`, `Len` and `New`**: `Len` because a batch is counted on every send, loss and handle, and `New` so that a filter keeping part of a batch hands on the producer's type. `keep` calls the filter once per value, since filters keep state.
+- **`message.Batch` has `Add`, `All`, `Len` and `New`**: `Len` because a batch is counted on every send, loss and handle, and `New` so that a filter keeping part of a batch hands on the producer's type. `keep` calls the filter once per value, since filters keep state, in one pass, since `All` owes no order (`Map` has none).
 - **Dead letters get a batch one value at a time**, so stores, `Drain` and the planned `store.File` stay per message.
 - **`unroll` and `hold` call `All()` rather than range over it**: ranging allocates the loop's state too.
 - **`message.WithContext` replaces the ctx, without merging.** nil means none, overriding a default (SA1012 is silenced in its test).

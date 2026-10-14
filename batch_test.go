@@ -355,6 +355,56 @@ func TestBroadcastBatch_Filter(t *testing.T) {
 	})
 }
 
+// A Map holds each value Add gives it under a key of its own. A batch handler gets it whole, or, of one its filter keeps
+// part of, a new Map holding what it keeps, and a subscriber without one gets each value, in no particular order.
+func TestBroadcastBatch_Map(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := newBroadcastor[int](t)
+		var whole, part []message.Batch[int]
+		subscribe(t, b, (&recorder[int]{}).handle, subscriber.WithBatchHandler(
+			func(_ context.Context, _ uuid.UUID, batch message.Batch[int]) error {
+				whole = append(whole, batch)
+
+				return nil
+			}))
+		subscribe(t, b, (&recorder[int]{}).handle, subscriber.WithFilter(func(msg int) bool { return msg%2 == 0 }),
+			subscriber.WithBatchHandler(func(_ context.Context, _ uuid.UUID, batch message.Batch[int]) error {
+				part = append(part, batch)
+
+				return nil
+			}))
+		unrolled := &recorder[int]{}
+		subscribe(t, b, unrolled.handle)
+
+		sent := new(message.Map[int])
+		for msg := range 4 {
+			sent.Add(msg + 1)
+		}
+		if n := sent.Len(); n != 4 {
+			t.Fatalf("Map holds %d values after 4 Adds, want 4", n)
+		}
+		if n := b.BroadcastBatch(t.Context(), sent); n != 3 {
+			t.Errorf("BroadcastBatch handed the Map to %d subscribers, want 3", n)
+		}
+		synctest.Wait()
+
+		if len(whole) != 1 || whole[0] != message.Batch[int](sent) {
+			t.Errorf("batch handler got %v, want the Map sent", whole)
+		}
+		if len(part) != 1 {
+			t.Fatalf("filtered batch handler got %d batches, want 1", len(part))
+		}
+		if kept, ok := part[0].(*message.Map[int]); !ok || kept == sent || !slices.Equal(slices.Sorted(kept.All()), []int{2, 4}) {
+			t.Errorf("filtered batch handler got %#v, want a new *Map holding [2 4]", part[0])
+		}
+		if got, want := slices.Sorted(slices.Values(unrolled.messages())), []int{1, 2, 3, 4}; !slices.Equal(got, want) {
+			t.Errorf("handle without a batch handler got %v, want %v in any order", got, want)
+		}
+	})
+}
+
 // A batch the subscriber discards while it waits in the buffer is reported whole, once. Once handed to handle one
 // value at a time, what is left is reported a value at a time.
 func TestBroadcastBatch_Discard(t *testing.T) {

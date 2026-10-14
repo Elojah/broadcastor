@@ -59,7 +59,7 @@ for msg, fail := range seq {
 | --- | --- |
 | [`broadcastor`](https://pkg.go.dev/github.com/elojah/broadcastor) | `Broadcastor`. |
 | [`subscriber`](https://pkg.go.dev/github.com/elojah/broadcastor/subscriber) | Options for `Subscribe`, `SubscribeSeq` and `Unsubscribe`, error types, `Stats`, `Holder`. |
-| [`message`](https://pkg.go.dev/github.com/elojah/broadcastor/message) | Options for `Broadcast`, and `Batch` for `BroadcastBatch`, with `Slice`. |
+| [`message`](https://pkg.go.dev/github.com/elojah/broadcastor/message) | Options for `Broadcast`, and `Batch` for `BroadcastBatch`, with `Slice` and `Map`. |
 | [`middleware`](https://pkg.go.dev/github.com/elojah/broadcastor/middleware) | `Recover`, `History`, `MaxAge`, `WrapError`, `Retry`, and `RetryPolicy.Do` for any func. |
 | [`store`](https://pkg.go.dev/github.com/elojah/broadcastor/store) | Queues for dead letters and history: `Ring`, `Drain`, `Enqueue`, `Filter`. |
 | [`holder`](https://pkg.go.dev/github.com/elojah/broadcastor/holder) | Holders for `subscriber.WithHolder`: `Reduce`, `NewLatest`, `Reorder`, `Jitter`, `Batch`. |
@@ -207,10 +207,10 @@ id, err := b.Subscribe(ctx, handle, subscriber.WithBatchHandler(func(ctx context
 }, middleware.Retry[message.Batch[Reading]](policy)))
 ```
 
-`message.Slice` is a `Batch` of a slice. A type of your own needs `Add`, `All`, `Len`, and `New`, an empty batch of
-the same type: a subscriber whose filter (`subscriber.WithFilter`) keeps part of a batch takes one from `New` holding
-what it keeps, and one keeping none misses it. Every subscriber reads the same batch, even after an async
-`BroadcastBatch` returns, so don't change it once passed.
+`message.Slice` is a `Batch` of a slice, and `message.Map` one of a map, each value under a random UUID, in no order. A
+type of your own needs `Add`, `All`, `Len`, and `New`, an empty batch of the same type: a subscriber whose filter
+(`subscriber.WithFilter`) keeps part of a batch takes one from `New` holding what it keeps, and one keeping none misses
+it. Every subscriber reads the same batch, even after an async `BroadcastBatch` returns, so don't change it once passed.
 
 `holder.NewBatch(d, n)` gathers what a subscriber takes, single messages and batches' values alike, into batches of `n`
 at most, each released `d` after its first message at the latest, for the batch handler

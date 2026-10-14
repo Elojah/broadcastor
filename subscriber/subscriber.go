@@ -610,33 +610,17 @@ func (s *Subscriber[T]) closed(m message.Message[T]) *ClosedError[T] {
 // keep returns what of batch the filter keeps: batch itself if every value, nil if none, else a batch from batch.New.
 // The filter sees each value once, since it may keep state.
 func (s *Subscriber[T]) keep(batch message.Batch[T]) message.Batch[T] {
-	var (
-		kept message.Batch[T]
-		// seen counts the values before the current one, all kept while kept is nil.
-		seen int
-	)
+	kept := batch.New()
 	for value := range batch.All() {
-		switch {
-		case s.config.filter(value):
-			if kept != nil {
-				kept.Add(value)
-			}
-		case kept == nil:
-			kept = batch.New()
-			for v := range batch.All() {
-				if kept.Len() == seen {
-					break
-				}
-				kept.Add(v)
-			}
+		if s.config.filter(value) {
+			kept.Add(value)
 		}
-		seen++
 	}
-	switch {
-	case kept == nil:
-		return batch
-	case kept.Len() == 0:
+	switch kept.Len() {
+	case 0:
 		return nil
+	case batch.Len():
+		return batch
 	default:
 		return kept
 	}
