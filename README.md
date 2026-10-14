@@ -61,7 +61,7 @@ for msg, fail := range seq {
 | [`subscriber`](https://pkg.go.dev/github.com/elojah/broadcastor/subscriber) | Options for `Subscribe`, `SubscribeSeq` and `Unsubscribe`, error types, `Stats`, `Holder`. |
 | [`message`](https://pkg.go.dev/github.com/elojah/broadcastor/message) | Options for `Broadcast`, and `Batch` for `BroadcastBatch`, with `Slice` and `Map`. |
 | [`middleware`](https://pkg.go.dev/github.com/elojah/broadcastor/middleware) | `Recover`, `History`, `MaxAge`, `WrapError`, `Retry`, and `RetryPolicy.Do` for any func. |
-| [`store`](https://pkg.go.dev/github.com/elojah/broadcastor/store) | Queues for dead letters and history: `Ring`, `Drain`, `Enqueue`, `Filter`. |
+| [`store`](https://pkg.go.dev/github.com/elojah/broadcastor/store) | Queues for dead letters and history: `Ring`, `File` on disk, `Drain`, `Enqueue`, `Filter`. |
 | [`holder`](https://pkg.go.dev/github.com/elojah/broadcastor/holder) | Holders for `subscriber.WithHolder`: `Reduce`, `NewLatest`, `Reorder`, `Jitter`, `Batch`. |
 | [`filter`](https://pkg.go.dev/github.com/elojah/broadcastor/filter) | Filters for `subscriber.WithFilter`: `Changed`, `Every`. |
 
@@ -282,6 +282,22 @@ func (s *stream[T]) Replay(ctx context.Context) iter.Seq[T] {
 id, err := b.Subscribe(ctx, page, subscriber.WithReplay(lost.Replay(ctx)), subscriber.WithDeadLetters[Alert](lost))
 ```
 
+`store.File` is a `Queue` on local disk, with a `Replay` of its own, and no service
+([`29-file`](examples/29-file/main.go)). It appends records to segment files, each with a checksum, so that one a power
+cut tore is dropped on reopen, and keeps where the oldest entry not acked is: delivery is at least once. It syncs after
+each write, or less often with `store.WithSyncEvery` or `store.WithSyncInterval`, since flash wears with each sync. Once
+`store.WithMaxSize` is reached, `Put` drops the oldest segment. The caller gives the encoding, and an error read back
+keeps its text and the `subscriber` sentinels it matched:
+
+```go
+lost, err := store.OpenFile(dir, encode, decode, store.WithSyncInterval(time.Second), store.WithMaxSize(64<<20))
+...
+id, err := b.Subscribe(ctx, page, subscriber.WithReplay(lost.Replay(ctx)), subscriber.WithDeadLetters[Alert](lost))
+...
+b.Shutdown(ctx)
+lost.Close() // syncs what is left
+```
+
 ## Stats
 
 `Stats` returns a snapshot of each subscriber's counters, in subscription order. It never waits, so `handle` can call
@@ -391,7 +407,8 @@ if conn != nil {
 }
 ```
 
-For an outage longer than a buffer holds, store and forward with `store.Enqueue` and `store.Drain`. A call that hangs
+For an outage longer than a buffer holds, store and forward with `store.Enqueue` and `store.Drain`, through a
+`store.File` to outlast a reboot. A call that hangs
 never fails, so give it a timeout. `Unsubscribe` does not end a `Retry` wait: the subscription's ctx does.
 [`25-modbus`](examples/25-modbus/main.go) reconnects that way. [`26-reconnect`](examples/26-reconnect/main.go) keeps
 `handle` to the send: middlewares of its own find the link down after a few failed sends in a row, then dial again with
@@ -431,6 +448,7 @@ never fails, so give it a timeout. `Unsubscribe` does not end a `Retry` wait: th
 | [`26-reconnect`](examples/26-reconnect/main.go) | A subscriber reconnecting in place through middlewares of its own, its buffer keeping order. |
 | [`27-holder`](examples/27-holder/main.go) | `subscriber.WithHolder` with `holder.NewLatest` and `holder.Reduce`, for bursts of readings. |
 | [`28-batch`](examples/28-batch/main.go) | `BroadcastBatch`, `subscriber.WithBatchHandler` and `holder.NewBatch`, for an uplink billed per request. |
+| [`29-file`](examples/29-file/main.go) | Dead letters on disk with `store.File`, replayed after a restart with `subscriber.WithReplay`. |
 
 `19-redis`, `24-mqtt` and `25-modbus` are modules of their own, to keep their dependencies out of the library's go.mod.
 `go run -C examples/19-redis .` needs Redis at `REDIS_ADDR` (`localhost:6379` by default), and `24-mqtt` an MQTT broker

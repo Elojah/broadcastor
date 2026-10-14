@@ -214,13 +214,19 @@ func TestRing_Concurrent(t *testing.T) {
 	}
 }
 
+// queue is what the helpers below need of a Ring or a File.
+type queue interface {
+	store.Queue[int]
+	Len() int
+}
+
 type nextResult struct {
 	entry store.Entry[int]
 	err   error
 }
 
 // goNext calls r.Next from a goroutine of its own, and returns a channel that yields what it returns.
-func goNext(ctx context.Context, r *store.Ring[int]) <-chan nextResult {
+func goNext(ctx context.Context, r queue) <-chan nextResult {
 	got := make(chan nextResult, 1)
 	go func() {
 		entry, err := r.Next(ctx)
@@ -242,14 +248,14 @@ func receive(t *testing.T, got <-chan nextResult) nextResult {
 	}
 }
 
-func put(t *testing.T, r *store.Ring[int], record subscriber.Record[int]) {
+func put(t *testing.T, r queue, record subscriber.Record[int]) {
 	t.Helper()
 	if err := r.Put(t.Context(), record); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 }
 
-func putMessages(t *testing.T, r *store.Ring[int], msgs ...int) {
+func putMessages(t *testing.T, r queue, msgs ...int) {
 	t.Helper()
 	for _, msg := range msgs {
 		put(t, r, subscriber.Record[int]{Message: msg})
@@ -257,7 +263,7 @@ func putMessages(t *testing.T, r *store.Ring[int], msgs ...int) {
 }
 
 // next returns what r.Next returns, which must not wait.
-func next(t *testing.T, r *store.Ring[int]) store.Entry[int] {
+func next(t *testing.T, r queue) store.Entry[int] {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(t.Context(), deadlockTimeout)
 	defer cancel()
@@ -269,7 +275,7 @@ func next(t *testing.T, r *store.Ring[int]) store.Entry[int] {
 	return entry
 }
 
-func ack(t *testing.T, r *store.Ring[int], id string) {
+func ack(t *testing.T, r queue, id string) {
 	t.Helper()
 	if err := r.Ack(t.Context(), id); err != nil {
 		t.Fatalf("Ack(%q): %v", id, err)
@@ -277,7 +283,7 @@ func ack(t *testing.T, r *store.Ring[int], id string) {
 }
 
 // readAll reads back and acks every entry r holds, and returns their messages, oldest first.
-func readAll(t *testing.T, r *store.Ring[int]) []int {
+func readAll(t *testing.T, r queue) []int {
 	t.Helper()
 	var msgs []int
 	for r.Len() > 0 {

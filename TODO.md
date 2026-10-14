@@ -43,17 +43,6 @@ At `21d751b` (Intel Core Ultra 5 226V, GOMAXPROCS 8), per subscriber and per `Br
   does it only within a window, before `handle`, not for a backlog.
 - [ ] Holders measuring windows from a time the message carries (`at func(T) time.Time`, like `middleware.MaxAge`),
   rather than from when the subscriber takes it, which a busy `handle` delays.
-- [ ] `store.File`: a durable `store.Queue` on local disk, standard library only, for store and forward across reboots
-  without Redis.
-  - Append-only segments, a checksum per record so that a write torn by a power cut is dropped on reopen, and a file
-    holding the ack offset. Fuzz reopening a truncated or corrupted segment.
-  - Batched fsync, every n records or every interval, since flash wears with each write.
-  - A size cap. Decide whether, once full, it drops the oldest segment or `Put` fails (a `StoreError`).
-  - The caller gives the encoding (`func(T) ([]byte, error)` and its inverse), so it imports no codec.
-  - `File.Replay(ctx) iter.Seq[T]`, like `19-redis`'s stream, so that `subscriber.WithReplay` hands a subscriber its
-    dead letters from before a reboot.
-  - [ ] A durable store keeps only `Record.Err`'s text, so `errors.Is(entry.Err, subscriber.ErrTimeout)` fails once
-    read back. Decide whether `Record` carries the sentinel its error matches, before `store.File` sets its format.
 - [ ] `store.DrainBatch(ctx, q, n, maxWait, handle)`: hands up to n entries at once, or fewer after maxWait, and acks
   them together, since cellular and LoRa uplinks pay per request. Measure it against `Drain` on `store.File`. handle
   is a `subscriber.Handler[message.Batch[T]]`, like a batch handler's, so one uplink serves both: a batch lost goes to
