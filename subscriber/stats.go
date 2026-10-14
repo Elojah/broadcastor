@@ -8,8 +8,9 @@ import (
 )
 
 // Stats is a snapshot of a subscriber's counters. Each message, and each replayed value, is counted once in Handled,
-// Failed, TimedOut or Dropped. Delivered is Handled + Failed + Queued, plus one while handle runs, but the counters are
-// read one at a time, so they may not add up while messages are in flight. For SubscribeSeq, handle is the loop body.
+// Failed, TimedOut, Dropped or Merged. Delivered is Handled + Failed + Merged + Held + Queued, plus one while handle
+// runs and the messages a holder had no room for, but the counters are read one at a time, so they may not add up
+// while messages are in flight. For SubscribeSeq, handle is the loop body.
 type Stats struct {
 	SubscriberID uuid.UUID
 
@@ -18,6 +19,8 @@ type Stats struct {
 	Buffer int
 	// Sending counts the async sends under way (WithAsyncLimit).
 	Sending int
+	// Held messages wait in the subscriber's holder (WithHolder).
+	Held int
 
 	// Delivered counts the messages taken and the values replayed.
 	Delivered uint64
@@ -27,6 +30,8 @@ type Stats struct {
 	// TimedOut and Dropped count the messages lost as a *TimeoutError or a *DroppedError.
 	TimedOut uint64
 	Dropped  uint64
+	// Merged counts the messages a holder merged away.
+	Merged uint64
 
 	// HandleTime is the time spent in handle and its middlewares, middleware.Retry's waits included.
 	HandleTime time.Duration
@@ -41,7 +46,11 @@ type counters struct {
 	failed     atomic.Uint64
 	timedOut   atomic.Uint64
 	dropped    atomic.Uint64
+	merged     atomic.Uint64
 	handleTime atomic.Int64
+
+	// held counts the messages in the holder.
+	held atomic.Int64
 
 	// sending counts each async send from before its goroutine starts until send returns.
 	sending atomic.Int64

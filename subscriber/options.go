@@ -86,8 +86,8 @@ func WithTimeout[T any](timeout time.Duration) Option[T] {
 }
 
 // WithEvict unsubscribes the subscriber, with WithUnsubscribeDiscard, on the first error evict returns true for: a
-// *TimeoutError or *DroppedError, from Broadcast's goroutine, or handle's error past every middleware, from the
-// subscriber's. evict may run concurrently, and never gets a *ClosedError. A nil evict never evicts. The error handlers
+// *TimeoutError or *DroppedError, from Broadcast's goroutine, or a holder's *DroppedError or handle's error past every
+// middleware, from the subscriber's. evict may run concurrently, and never gets a *ClosedError. A nil evict never evicts. The error handlers
 // get the evicting error as an *EvictedError.
 func WithEvict[T any](evict func(err error) bool) Option[T] {
 	return func(config *config[T]) {
@@ -131,6 +131,18 @@ func WithAsyncLimit[T any](n int) Option[T] {
 func WithReplay[T any](replay iter.Seq[T]) Option[T] {
 	return func(config *config[T]) {
 		config.replay = replay
+	}
+}
+
+// WithHolder passes each message the subscriber takes to h, and each one h releases, once due, to handle and its
+// middlewares, or to the loop body. Once unsubscribed, the subscriber handles everything h still holds, or reports it
+// with WithUnsubscribeDiscard, so Shutdown waits for it. A message h has no room for is lost as a *DroppedError.
+// Replayed values skip h. Give each subscriber its own. A nil h is ignored.
+func WithHolder[T any](h Holder[T]) Option[T] {
+	return func(config *config[T]) {
+		if h != nil {
+			config.holder = h
+		}
 	}
 }
 

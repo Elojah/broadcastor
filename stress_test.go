@@ -48,6 +48,7 @@ var (
 	errAfterDone     = errors.New("handled once done had the ID")
 	errReplayLate    = errors.New("replayed after a broadcast message")
 	errEvictClosed   = errors.New("evict got a *subscriber.ClosedError")
+	errHeldDue       = errors.New("held while a message held was due")
 )
 
 // TestStress interleaves every method at random from several goroutines, in real time so that timeouts race sends, over
@@ -287,6 +288,11 @@ func (s *stress) subscribe(ctx context.Context, t *testing.T) *stressSub {
 	}
 	if randN(2) == 0 {
 		options = append(options, subscriber.WithEvict[int](sub.evicter()))
+	}
+	if randN(3) == 0 {
+		options = append(options, subscriber.WithHolder[int](&stressHolder{
+			capped: capped{n: math.MaxInt, d: time.Duration(randN(int(stressTimeout)))}, sub: sub,
+		}))
 	}
 
 	var (
@@ -808,6 +814,23 @@ func statsMismatch(stats []subscriber.Stats, subs map[uuid.UUID]*stressSub) stri
 	}
 
 	return ""
+}
+
+// stressHolder delays each message, merging none, so that the subscriber gets every one, and releases what it holds
+// once the subscriber is unsubscribed. It records a Hold while a message held is due, which the subscriber must
+// release first.
+type stressHolder struct {
+	capped
+
+	sub *stressSub
+}
+
+func (h *stressHolder) Hold(m message.Message[int], now time.Time) (int, bool) {
+	if len(h.due) != 0 && !h.due[0].After(now) {
+		h.sub.unexpect(fmt.Errorf("%w: %d", errHeldDue, m.Value))
+	}
+
+	return h.capped.Hold(m, now)
 }
 
 // stressMessage returns ctx and options for a Broadcast: a random delivery, and a timeout on the message, on ctx, or

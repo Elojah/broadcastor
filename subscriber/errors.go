@@ -92,8 +92,8 @@ func (e *TimeoutError[T]) Is(target error) bool {
 	return target == ErrTimeout
 }
 
-// DroppedError is reported when a non-blocking Broadcast finds the subscriber busy, or an async one hits WithAsyncLimit.
-// It matches ErrDropped.
+// DroppedError is reported when a non-blocking Broadcast finds the subscriber busy, an async one hits WithAsyncLimit,
+// or the subscriber's holder has no room (WithHolder). It matches ErrDropped.
 type DroppedError[T any] struct {
 	SubscriberID uuid.UUID
 	Message      T

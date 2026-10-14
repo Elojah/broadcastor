@@ -57,6 +57,7 @@ type config[T any] struct {
 	middlewares         []Middleware[T]
 	asyncLimit          int
 	replay              iter.Seq[T]
+	holder              Holder[T]
 
 	errorHandler func(ctx context.Context, err error)
 	filter       func(msg T) bool
@@ -178,6 +179,11 @@ func (s *Subscriber[T]) Consume(handle Handler[T]) {
 	if s.config.replay != nil {
 		s.replay(handle)
 	}
+	if s.config.holder != nil {
+		s.consumeHeld(handle)
+
+		return
+	}
 	for m := range s.ch {
 		if s.discarding.Load() {
 			s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: m.Value})
@@ -221,11 +227,13 @@ func (s *Subscriber[T]) Stats() Stats {
 		Queued:       len(s.ch),
 		Buffer:       cap(s.ch),
 		Sending:      int(s.counters.sending.Load()),
+		Held:         int(s.counters.held.Load()),
 		Delivered:    s.counters.delivered.Load(),
 		Handled:      s.counters.handled.Load(),
 		Failed:       s.counters.failed.Load(),
 		TimedOut:     s.counters.timedOut.Load(),
 		Dropped:      s.counters.dropped.Load(),
+		Merged:       s.counters.merged.Load(),
 		HandleTime:   time.Duration(s.counters.handleTime.Load()),
 		Handling:     s.counters.handling(s.created),
 	}
@@ -247,6 +255,80 @@ func (s *Subscriber[T]) finish() {
 		}
 	}
 	s.finished()
+}
+
+// consumeHeld is Consume's loop with a holder: it holds each message taken, and processes each one released once due,
+// then everything still held once ch is closed. Only it calls the holder.
+func (s *Subscriber[T]) consumeHeld(handle Handler[T]) {
+	var timer *time.Timer
+	defer func() {
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
+
+	for {
+		// A stale tick, from a timer that fired while a message came, only wakes the loop up once more.
+		var due <-chan time.Time
+		if wait := s.releaseHeld(handle, time.Now(), false); wait > 0 {
+			if timer == nil {
+				timer = time.NewTimer(wait)
+			} else {
+				timer.Reset(wait)
+			}
+			due = timer.C
+		}
+		select {
+		case m, ok := <-s.ch:
+			if !ok {
+				s.releaseHeld(handle, time.Now(), true)
+
+				return
+			}
+			// What came due while waiting goes first, so that the holder never gets a message for a window that ended.
+			now := time.Now()
+			s.releaseHeld(handle, now, false)
+			s.hold(m, now)
+		case <-due:
+		}
+	}
+}
+
+// hold passes m to the holder at now, or reports it once the subscriber discards.
+func (s *Subscriber[T]) hold(m message.Message[T], now time.Time) {
+	if s.discarding.Load() {
+		s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: m.Value})
+
+		return
+	}
+	merged, ok := s.config.holder.Hold(m, now)
+	if !ok {
+		s.counters.dropped.Add(1)
+		s.lose(m, &DroppedError[T]{SubscriberID: s.id, Message: m.Value})
+
+		return
+	}
+	merged = max(merged, 0)
+	s.counters.merged.Add(uint64(merged))
+	s.counters.held.Add(int64(1 - merged))
+}
+
+// releaseHeld processes each message the holder releases, every one if all, else those due at now, or reports them
+// once the subscriber discards. It returns how long until the next one is due, 0 if none is held.
+func (s *Subscriber[T]) releaseHeld(handle Handler[T], now time.Time, all bool) time.Duration {
+	for {
+		m, wait, ok := s.config.holder.Release(now, all)
+		if !ok {
+			return wait
+		}
+		s.counters.held.Add(-1)
+		if s.discarding.Load() {
+			s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: m.Value})
+
+			continue
+		}
+		s.process(handle, m)
+	}
 }
 
 // replay processes each replayed value like a message, until the subscriber discards.

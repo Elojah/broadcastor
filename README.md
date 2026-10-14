@@ -58,10 +58,11 @@ for msg, fail := range seq {
 | Package | Holds |
 | --- | --- |
 | [`broadcastor`](https://pkg.go.dev/github.com/elojah/broadcastor) | `Broadcastor`. |
-| [`subscriber`](https://pkg.go.dev/github.com/elojah/broadcastor/subscriber) | Options for `Subscribe`, `SubscribeSeq` and `Unsubscribe`, error types, `Stats`. |
+| [`subscriber`](https://pkg.go.dev/github.com/elojah/broadcastor/subscriber) | Options for `Subscribe`, `SubscribeSeq` and `Unsubscribe`, error types, `Stats`, `Holder`. |
 | [`message`](https://pkg.go.dev/github.com/elojah/broadcastor/message) | Options for `Broadcast`. |
 | [`middleware`](https://pkg.go.dev/github.com/elojah/broadcastor/middleware) | `Recover`, `History`, `MaxAge`, `WrapError`, `Retry`, and `RetryPolicy.Do` for any func. |
 | [`store`](https://pkg.go.dev/github.com/elojah/broadcastor/store) | Queues for dead letters and history: `Ring`, `Drain`, `Enqueue`, `Filter`. |
+| [`holder`](https://pkg.go.dev/github.com/elojah/broadcastor/holder) | Holders for `subscriber.WithHolder`: `Latest`, `Reduce`. |
 | [`filter`](https://pkg.go.dev/github.com/elojah/broadcastor/filter) | Filters for `subscriber.WithFilter`: `Changed`, `Every`. |
 
 ## Delivery
@@ -113,7 +114,7 @@ ctx the message is handled with. Without either, they are discarded.
 | `*subscriber.PanicError` | `middleware.Recover` recovered a panic. Without it, the program crashes. |
 | `*subscriber.ExpiredError` | `middleware.MaxAge` found the message too old. |
 | `*subscriber.TimeoutError` | `Broadcast` gave up waiting. |
-| `*subscriber.DroppedError` | A non-blocking `Broadcast` found the subscriber busy, or an async one hit `subscriber.WithAsyncLimit`. |
+| `*subscriber.DroppedError` | A non-blocking `Broadcast` found the subscriber busy, an async one hit `subscriber.WithAsyncLimit`, or a holder had no room. |
 | `*subscriber.ClosedError` | The subscriber was unsubscribed before handling the message. |
 | `*subscriber.EvictedError` | Wraps the error that evicted the subscriber (`subscriber.WithEvict`). |
 | `*subscriber.StoreError` | Wraps a loss the dead-letter store failed to keep. |
@@ -150,6 +151,36 @@ last.
 
 Middlewares run in the subscriber's goroutine, so `Retry` waiting holds it up like a slow `handle`. With
 `SubscribeSeq` they wrap the loop body, but `Recover` cannot catch a panic in it.
+
+## Holding messages
+
+`subscriber.WithHolder` passes each message the subscriber takes to a `subscriber.Holder`, which releases it once due.
+What it releases goes to `handle` as any message would: through the middlewares, error handlers, dead letters and
+`Stats`. Package `holder` holds two, which hold the messages of a window, from the first one to `d` later, so that a
+burst reaches `handle` as fewer messages ([`27-holder`](examples/27-holder/main.go)):
+
+```go
+// Only the last reading of each window.
+id, err := b.Subscribe(ctx, display, subscriber.WithHolder(holder.NewLatest[Reading](time.Second)))
+
+// The last reading of each sensor, in the order of their first reading.
+id, err = b.Subscribe(ctx, uplink, subscriber.WithHolder(holder.NewReduce(time.Second, func(held []Reading, next Reading) []Reading {
+ for i, r := range held {
+  if r.Sensor == next.Sensor {
+   held[i] = next
+   return held
+  }
+ }
+ return append(held, next)
+})))
+```
+
+`holder.Reduce` calls its func as each message comes, with what it holds, so it can drop repeats, keep the latest of
+each key, or sum. A window starts when the subscriber takes its first message, which a busy `handle` delays, and ends
+`d` later, never earlier: a message after it starts another. An unsubscribed subscriber handles what is held at once,
+so `Shutdown` waits for it. A holder of your own may have no room: the message is then lost as a
+`*subscriber.DroppedError`. Only the subscriber's goroutine calls a holder, so it needs no lock: give each subscriber
+its own.
 
 ## Dead letters
 
@@ -231,8 +262,9 @@ for _, s := range b.Stats() {
 | `TimedOut`, `Dropped` | Messages lost as a `TimeoutError` or a `DroppedError`. |
 | `HandleTime` | Time spent in `handle` and its middlewares. |
 | `Handling` | How long `handle` has been running on the current message, 0 when idle. |
+| `Held`, `Merged` | Messages waiting in a holder, and merged into another one by it. |
 
-Each message is counted once, in `Handled`, `Failed`, `TimedOut` or `Dropped`, before the error handlers run. An
+Each message is counted once, in `Handled`, `Failed`, `TimedOut`, `Dropped` or `Merged`, before the error handlers run. An
 unsubscribed subscriber leaves the snapshot. A watchdog can unsubscribe a subscriber whose `handle` hangs, from
 `Handling` ([`22-watchdog`](examples/22-watchdog/main.go)).
 
@@ -356,6 +388,7 @@ never fails, so give it a timeout. `Unsubscribe` does not end a `Retry` wait: th
 | [`24-mqtt`](examples/24-mqtt/main.go) | MQTT fanned out to a rule, a local store, and an uplink that stores and forwards. |
 | [`25-modbus`](examples/25-modbus/main.go) | A PLC polled over Modbus TCP, filtered, and a rule that retries and reconnects in place. |
 | [`26-reconnect`](examples/26-reconnect/main.go) | A subscriber reconnecting in place through middlewares of its own, its buffer keeping order. |
+| [`27-holder`](examples/27-holder/main.go) | `subscriber.WithHolder` with `holder.Latest` and `holder.Reduce`, for bursts of readings. |
 
 `19-redis`, `24-mqtt` and `25-modbus` are modules of their own, to keep their dependencies out of the library's go.mod.
 `go run -C examples/19-redis .` needs Redis at `REDIS_ADDR` (`localhost:6379` by default), and `24-mqtt` an MQTT broker

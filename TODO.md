@@ -42,7 +42,10 @@ At `21d751b` (Intel Core Ultra 5 226V, GOMAXPROCS 8), per subscriber and per `Br
   `Delivered`.
 - [ ] `store.Latest(size, key func(T) K)`: a `Queue` whose `Put` replaces the entry with the same key, in its place,
   unless `Next` has handed it out. After an outage, `Drain` then sends each sensor's latest reading rather than every
-  one. `WithDropOldest` conflates one stream in a buffer, this conflates per key, outside the core.
+  one. `WithDropOldest` conflates one stream in a buffer, this conflates per key, outside the core. `holder.Reduce`
+  does it only within a window, before `handle`, not for a backlog.
+- [ ] Holders measuring windows from a time the message carries (`at func(T) time.Time`, like `middleware.MaxAge`),
+  rather than from when the subscriber takes it, which a busy `handle` delays.
 - [ ] `store.File`: a durable `store.Queue` on local disk, standard library only, for store and forward across reboots
   without Redis.
   - Append-only segments, a checksum per record so that a write torn by a power cut is dropped on reopen, and a file
