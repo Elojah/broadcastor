@@ -196,6 +196,25 @@ keeps what comes meanwhile in order ([`10-reconnect`](examples/10-reconnect/main
 `go run -C examples/11-mqtt .` needs an MQTT broker at `MQTT_ADDR` (`localhost:1883` by default). `12-modbus` simulates
 its PLC in process.
 
+## Performance
+
+Time per message per subscriber, the median of 6 runs of `make bench` at `e28de1e` (Go 1.26.1, Intel Core Ultra 5
+226V, 8 cores). Subscribers are buffered and waited for once, after the last `Broadcast`, unless "until handled".
+
+| Benchmark | 1 subscriber | 10 | 100 | 1000 |
+| --- | --- | --- | --- | --- |
+| Sync | 223 ns | 152 ns | 220 ns | 341 ns |
+| Sync, until handled | 652 ns | 697 ns | 685 ns | 482 ns |
+| Sync, from 8 goroutines | 431 ns | 126 ns | 68 ns | 59 ns |
+| Parallel | 1.44 µs | 1.46 µs | 858 ns | 722 ns |
+| Async | 2.13 µs | 445 ns | 431 ns | 471 ns |
+| Batch of 16, value by value | 94 ns | 34 ns | 19 ns | 19 ns |
+| Batch of 16, to a batch handler | 15 ns | 10 ns | 15 ns | 22 ns |
+
+A `Broadcast` without options allocates nothing in sync, buffered and non-blocking modes. Async allocates once per
+subscriber (110 B), parallel twice (270 B). A `Subscribe` and `Unsubscribe` pair takes 1.2 µs and 12 allocations
+(1.1 KiB).
+
 ## Development
 
 ```sh
