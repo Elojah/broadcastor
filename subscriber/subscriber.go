@@ -314,7 +314,8 @@ func (s *Subscriber[T]) hold(m message.Message[T], now time.Time) {
 }
 
 // releaseHeld processes each message the holder releases, every one if all, else those due at now, or reports them
-// once the subscriber discards. It returns how long until the next one is due, 0 if none is held.
+// once the subscriber discards. It returns how long until the next one is due, 0 if none will be until the next
+// message.
 func (s *Subscriber[T]) releaseHeld(handle Handler[T], now time.Time, all bool) time.Duration {
 	for {
 		m, wait, ok := s.config.holder.Release(now, all)

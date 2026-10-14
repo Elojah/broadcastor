@@ -3,7 +3,7 @@
 //
 //	id, err := b.Subscribe(ctx, handle, subscriber.WithHolder(holder.NewLatest[float64](time.Second)))
 //
-// Latest keeps only the newest message of a window, Reduce reduces those of a window to fewer. A window starts with
-// the first message held, when the subscriber takes it, and ends d later, never earlier but once the subscriber is
-// unsubscribed. Each holder keeps state, so give each subscriber its own.
+// Latest keeps only the newest message of a window, Reduce reduces those of a window to fewer. A window starts when
+// the subscriber takes its first message, and ends d later, or as soon as the subscriber is unsubscribed. Each holder
+// keeps state, so give each subscriber its own.
 package holder

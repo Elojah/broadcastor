@@ -3,7 +3,7 @@
 // (holder.Latest), and the uplink sends the latest of each sensor, with how many readings it stands for
 // (holder.Reduce). Each window ends half a second after its first reading.
 //
-// Shutdown releases what is still held at once: no reading can come any more, so none misses its window.
+// Shutdown hands what is still held to handle at once, without waiting for its window to end.
 package main
 
 import (

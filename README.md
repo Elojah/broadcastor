@@ -177,8 +177,8 @@ id, err = b.Subscribe(ctx, uplink, subscriber.WithHolder(holder.NewReduce(time.S
 
 `holder.Reduce` calls its func as each message comes, with what it holds, so it can drop repeats, keep the latest of
 each key, or sum. A window starts when the subscriber takes its first message, which a busy `handle` delays, and ends
-`d` later, never earlier: a message after it starts another. An unsubscribed subscriber handles what is held at once,
-so `Shutdown` waits for it. A holder of your own may have no room: the message is then lost as a
+`d` later: a message taken after that starts another. An unsubscribed subscriber handles what is held at once, so
+`Shutdown` waits for it. A holder of your own may have no room: the message is then lost as a
 `*subscriber.DroppedError`. Only the subscriber's goroutine calls a holder, so it needs no lock: give each subscriber
 its own.
 
@@ -264,8 +264,8 @@ for _, s := range b.Stats() {
 | `Handling` | How long `handle` has been running on the current message, 0 when idle. |
 | `Held`, `Merged` | Messages waiting in a holder, and merged into another one by it. |
 
-Each message is counted once, in `Handled`, `Failed`, `TimedOut`, `Dropped` or `Merged`, before the error handlers run. An
-unsubscribed subscriber leaves the snapshot. A watchdog can unsubscribe a subscriber whose `handle` hangs, from
+Each message is counted once, in `Handled`, `Failed`, `TimedOut`, `Dropped` or `Merged`, before the error handlers
+run. An unsubscribed subscriber leaves the snapshot. A watchdog can unsubscribe a subscriber whose `handle` hangs, from
 `Handling` ([`22-watchdog`](examples/22-watchdog/main.go)).
 
 ## Lifecycle and contexts

@@ -87,8 +87,8 @@ func WithTimeout[T any](timeout time.Duration) Option[T] {
 
 // WithEvict unsubscribes the subscriber, with WithUnsubscribeDiscard, on the first error evict returns true for: a
 // *TimeoutError or *DroppedError, from Broadcast's goroutine, or a holder's *DroppedError or handle's error past every
-// middleware, from the subscriber's. evict may run concurrently, and never gets a *ClosedError. A nil evict never evicts. The error handlers
-// get the evicting error as an *EvictedError.
+// middleware, from the subscriber's. evict may run concurrently, and never gets a *ClosedError. A nil evict never
+// evicts. The error handlers get the evicting error as an *EvictedError.
 func WithEvict[T any](evict func(err error) bool) Option[T] {
 	return func(config *config[T]) {
 		config.evict = evict

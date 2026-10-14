@@ -7,14 +7,18 @@ import (
 )
 
 // Reduce is a subscriber.Holder that reduces the messages of a window as they come, then releases what is left, in
-// order, once the window ends, d after its first message. Create one with NewReduce.
+// order, once the window ends, d after its first message. Every message it releases carries the newest message's
+// Config, so its ctx and error handler. Create one with NewReduce.
 type Reduce[T any] struct {
 	d      time.Duration
 	reduce func(held []T, next T) []T
 
 	held []T
+	// next is the index of the next message to release. A window is released whole before Hold comes again, so Hold
+	// sees it 0.
+	next int
 	due  time.Time
-	// config is the newest message's, which every message released carries.
+	// config is the newest message's.
 	config message.Config
 }
 
@@ -26,8 +30,7 @@ func NewReduce[T any](d time.Duration, reduce func(held []T, next T) []T) *Reduc
 	return &Reduce[T]{d: d, reduce: reduce}
 }
 
-// Hold reduces m into the messages held, starting a window if none is, and returns how many reduce merged away. Every
-// message released carries the ctx and error handler of the newest message held.
+// Hold reduces m into the messages held, starting a window if none is, and returns how many reduce merged away.
 func (r *Reduce[T]) Hold(m message.Message[T], now time.Time) (int, bool) {
 	if len(r.held) == 0 {
 		r.due = now.Add(r.d)
@@ -47,11 +50,14 @@ func (r *Reduce[T]) Release(now time.Time, all bool) (message.Message[T], time.D
 	if wait := r.due.Sub(now); wait > 0 && !all {
 		return message.Message[T]{}, wait, false
 	}
-	m := message.Message[T]{Value: r.held[0], Config: r.config}
-	// Zeroed for the GC, since the next window appends after it.
+	m := message.Message[T]{Value: r.held[r.next], Config: r.config}
+	// Zeroed for the GC, since held keeps its capacity for the next window.
 	var zero T
-	r.held[0] = zero
-	r.held = r.held[1:]
+	r.held[r.next] = zero
+	r.next++
+	if r.next == len(r.held) {
+		r.held, r.next = r.held[:0], 0
+	}
 
 	return m, 0, true
 }
