@@ -1,4 +1,4 @@
-module github.com/elojah/broadcastor/examples/25-modbus
+module github.com/elojah/broadcastor/examples/12-modbus
 
 go 1.26.1
 

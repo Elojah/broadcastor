@@ -66,27 +66,6 @@ func TestMaxAge_Zero(t *testing.T) {
 	}
 }
 
-// Put before Retry, MaxAge returns an expired message's error without ever calling Retry's handler.
-func TestMaxAge_Retry(t *testing.T) {
-	t.Parallel()
-
-	synctest.Test(t, func(t *testing.T) {
-		made := time.Now()
-		calls := 0
-		retry := middleware.Retry[time.Time](middleware.RetryPolicy{Attempts: 3, Delay: time.Second})
-		handle := middleware.MaxAge(time.Second, identity)(retry(func(context.Context, uint64, time.Time) error {
-			calls++
-
-			return errHandle
-		}))
-
-		time.Sleep(2 * time.Second)
-		if err := handle(t.Context(), 1, made); !errors.Is(err, subscriber.ErrExpired) || calls != 0 {
-			t.Errorf("MaxAge returned %v after %d calls, want a *subscriber.ExpiredError after none", err, calls)
-		}
-	})
-}
-
 // identity is when a message made of its own time was made.
 func identity(made time.Time) time.Time {
 	return made

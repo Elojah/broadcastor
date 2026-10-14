@@ -2,7 +2,7 @@
 // must not block, so it broadcasts with message.WithNonBlocking, to buffered subscribers. The uplink only queues each
 // reading in an outbox (store.Enqueue), and store.Drain sends them in order once the link is back.
 //
-// It is a module of its own, to keep paho out of the library's go.mod: `go run -C examples/24-mqtt .` uses the broker
+// It is a module of its own, to keep paho out of the library's go.mod: `go run -C examples/11-mqtt .` uses the broker
 // at MQTT_ADDR, localhost:1883 by default (`docker run --rm -p 1883:1883 eclipse-mosquitto mosquitto -c
 // /mosquitto-no-auth.conf`). Its test uses mochi-mqtt, in process.
 package main

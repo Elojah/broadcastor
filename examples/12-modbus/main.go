@@ -3,7 +3,7 @@
 // retries a busy PLC or a timed-out request. When the PLC stops answering, the rule reconnects in place, while the next
 // reading waits in its buffer.
 //
-// It is a module of its own, to keep simonvetter/modbus out of the library's go.mod: `go run -C examples/25-modbus .`.
+// It is a module of its own, to keep simonvetter/modbus out of the library's go.mod: `go run -C examples/12-modbus .`.
 // plc.go simulates the PLC, in process.
 package main
 

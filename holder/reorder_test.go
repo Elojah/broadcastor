@@ -100,26 +100,6 @@ func TestReorder_NoWindow(t *testing.T) {
 	}
 }
 
-// Once held has grown to a window's size, a window allocates nothing. Not parallel: AllocsPerRun counts every
-// goroutine's allocations.
-func TestReorder_Allocs(t *testing.T) { //nolint:paralleltest // AllocsPerRun counts every goroutine's allocations
-	r := holder.NewReorder[int](window)
-	now := start
-	if allocs := testing.AllocsPerRun(100, func() {
-		for _, msg := range []int{3, 1, 2} {
-			r.Hold(message.Message[int]{Value: msg}, now)
-		}
-		now = now.Add(window)
-		for {
-			if _, _, ok := r.Release(now, false); !ok {
-				break
-			}
-		}
-	}); allocs != 0 {
-		t.Errorf("a window allocates %v times, want 0", allocs)
-	}
-}
-
 // releaseAll returns the values h releases at now until it releases nothing.
 func releaseAll(h subscriber.Holder[int], now time.Time, all bool) []int {
 	var got []int

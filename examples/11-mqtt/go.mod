@@ -1,4 +1,4 @@
-module github.com/elojah/broadcastor/examples/24-mqtt
+module github.com/elojah/broadcastor/examples/11-mqtt
 
 go 1.26.1
 

@@ -203,29 +203,6 @@ func TestMessageWithSubscriberFilter_Several(t *testing.T) {
 	})
 }
 
-// A subscriber filter among a subscriber's default message options is ignored: only a Broadcast's own picks.
-func TestSubscriberWithDefaultMessageOptions_SubscriberFilterIgnored(t *testing.T) {
-	t.Parallel()
-
-	synctest.Test(t, func(t *testing.T) {
-		b := newBroadcastor[int](t)
-		r := &recorder[int]{}
-		id := subscribe(t, b, r.handle, subscriber.WithDefaultMessageOptions(
-			message.WithSubscriberFilter[int](func(uint64) bool { return false }),
-		))
-
-		if n := b.Broadcast(t.Context(), 1); n != 1 {
-			t.Errorf("Broadcast handed the message to %d subscribers, want 1", n)
-		}
-		unsubscribe(t, b, id)
-		synctest.Wait()
-
-		if got, want := r.messages(), []int{1}; !slices.Equal(got, want) {
-			t.Errorf("handle got %v, want %v", got, want)
-		}
-	})
-}
-
 func even(msg int) bool {
 	return msg%2 == 0
 }

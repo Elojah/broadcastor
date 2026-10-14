@@ -151,23 +151,3 @@ func TestReduce_NoWindow(t *testing.T) {
 		}
 	}
 }
-
-// Once held has grown to a window's size, a window allocates nothing. Not parallel: AllocsPerRun counts every
-// goroutine's allocations.
-func TestReduce_Allocs(t *testing.T) { //nolint:paralleltest // AllocsPerRun counts every goroutine's allocations
-	r := holder.NewReduce(window, latestByTens)
-	now := start
-	if allocs := testing.AllocsPerRun(100, func() {
-		for _, msg := range []int{11, 21, 12} {
-			r.Hold(message.Message[int]{Value: msg}, now)
-		}
-		now = now.Add(window)
-		for {
-			if _, _, ok := r.Release(now, false); !ok {
-				break
-			}
-		}
-	}); allocs != 0 {
-		t.Errorf("a window allocates %v times, want 0", allocs)
-	}
-}

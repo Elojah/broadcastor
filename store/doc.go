@@ -8,6 +8,6 @@
 //	...
 //	err = lost.Ack(ctx, entry.ID)
 //
-// Ring is an in-memory Queue, File one on local disk, which outlives the process. Drain runs that loop: with Enqueue as the subscriber's handle, it forwards every message
-// to a slow sink, in order. Filter keeps some records out of a store.
+// Ring is an in-memory Queue, File one on local disk, which outlives the process. Drain runs that loop: with Enqueue as
+// the subscriber's handle, it forwards every message to a slow sink, in order. Filter keeps some records out of a store.
 package store

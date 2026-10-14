@@ -4,8 +4,8 @@ func Example() {
 	main()
 
 	// Output:
-	// got 1
+	// 100 / 4 = 25
 	// failed on -2: negative
-	// got 3
-	// failed on -4: negative
+	// panic on 0: division by zero
+	// 100 / 5 = 20
 }

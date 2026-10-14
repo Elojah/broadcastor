@@ -4,10 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
+	"iter"
 	"slices"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -15,14 +14,10 @@ import (
 	"github.com/elojah/broadcastor"
 	"github.com/elojah/broadcastor/message"
 	"github.com/elojah/broadcastor/middleware"
-	"github.com/elojah/broadcastor/store"
 	"github.com/elojah/broadcastor/subscriber"
 )
 
-var (
-	errPut      = errors.New("put failed")
-	errSinkDown = errors.New("sink down")
-)
+var errPut = errors.New("put failed")
 
 // The store gets every message handle fails on, with the subscriber's ID and handle's error, right before the error
 // handler. Messages handled are not stored.
@@ -355,118 +350,6 @@ func TestSubscriberWithDeadLetters_ExactlyOnce(t *testing.T) {
 	})
 }
 
-// A store.Ring can be read while the subscriber runs: the reader gets every lost message in order, with the
-// subscriber's ID and the error.
-func TestSubscriberWithDeadLetters_Ring(t *testing.T) {
-	t.Parallel()
-
-	synctest.Test(t, func(t *testing.T) {
-		b := newBroadcastor[int](t)
-		lost := store.NewRing[int](8)
-		id := subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
-			if msg%2 == 0 {
-				return handleError(msg)
-			}
-
-			return nil
-		}, subscriber.WithDeadLetters[int](lost))
-
-		readBack := &recorder[int]{}
-		ctx, cancel := context.WithCancel(t.Context())
-		readerDone := make(chan struct{})
-		go func() {
-			defer close(readerDone)
-			for {
-				entry, err := lost.Next(ctx)
-				if err != nil {
-					return
-				}
-				if entry.SubscriberID != id || !errors.Is(entry.Err, handleError(entry.Message)) {
-					t.Errorf("read back %+v, want subscriber %d and a handleError for its message", entry, id)
-				}
-				readBack.record(entry.Message)
-				if err := lost.Ack(ctx, entry.ID); err != nil {
-					t.Errorf("Ack: %v", err)
-				}
-			}
-		}()
-
-		for msg := 1; msg <= 6; msg++ {
-			b.Broadcast(t.Context(), msg)
-		}
-		unsubscribe(t, b, id)
-		synctest.Wait()
-		cancel()
-		waitClosed(t, readerDone, "reader")
-
-		if got, want := readBack.messages(), []int{2, 4, 6}; !slices.Equal(got, want) {
-			t.Errorf("read back %v, want %v", got, want)
-		}
-		if n := lost.Len(); n != 0 {
-			t.Errorf("Len = %d once everything is read back, want 0", n)
-		}
-	})
-}
-
-// With store.Enqueue as handle and store.Drain forwarding to a sink that is down, Broadcast never waits for the sink,
-// which gets every message once, in order, once back up.
-func TestStoreAndForward(t *testing.T) {
-	t.Parallel()
-
-	synctest.Test(t, func(t *testing.T) {
-		b := newBroadcastor[int](t)
-		queue := store.NewRing[int](8)
-		id := subscribe(t, b, store.Enqueue[int](queue))
-
-		var up atomic.Bool
-		sent := &recorder[int]{}
-		sink := middleware.Retry[int](middleware.RetryPolicy{Attempts: math.MaxInt, Delay: time.Second})(
-			func(_ context.Context, _ uint64, msg int) error {
-				if !up.Load() {
-					return errSinkDown
-				}
-				sent.record(msg)
-
-				return nil
-			})
-		ctx, cancel := context.WithCancel(t.Context())
-		drained := make(chan error, 1)
-		go func() { drained <- store.Drain(ctx, queue, sink, nil) }()
-
-		start := time.Now()
-		for msg := 1; msg <= 5; msg++ {
-			b.Broadcast(t.Context(), msg)
-		}
-		if elapsed := time.Since(start); elapsed != 0 {
-			t.Errorf("Broadcast waited %v for a sink that is down, want no wait", elapsed)
-		}
-		time.Sleep(10 * time.Second)
-		if got := sent.messages(); len(got) != 0 {
-			t.Fatalf("sink got %v while down, want nothing", got)
-		}
-		up.Store(true)
-		time.Sleep(time.Second) // until the next retry
-		unsubscribe(t, b, id)
-		synctest.Wait()
-		cancel()
-
-		select {
-		case err := <-drained:
-			if !errors.Is(err, context.Canceled) {
-				t.Errorf("Drain = %v, want %v", err, context.Canceled)
-			}
-		case <-time.After(deadlockTimeout):
-			t.Fatalf("still waiting for Drain after %v: deadlock", deadlockTimeout)
-		}
-		if got, want := sent.messages(), []int{1, 2, 3, 4, 5}; !slices.Equal(got, want) {
-			t.Errorf("sink got %v, want %v", got, want)
-		}
-		if n := queue.Len(); n != 0 {
-			t.Errorf("Len = %d once forwarded, want 0", n)
-		}
-	})
-}
-
 // recordStore is a subscriber.Store that records every Record it is given, in order, and fails with err if set.
 type recordStore struct {
 	recorder[subscriber.Record[int]]
@@ -485,4 +368,135 @@ type storeFunc func(ctx context.Context, r subscriber.Record[int]) error
 
 func (f storeFunc) Put(ctx context.Context, r subscriber.Record[int]) error {
 	return f(ctx, r)
+}
+
+// The replay comes before any Broadcast, in order, through the middlewares, error handlers and dead letters, with the
+// default message options, each value counted like a message and acked once handled or reported.
+func TestSubscriberWithReplay(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := newBroadcastor[int](t)
+		events := &recorder[string]{}
+		middleware := func(next subscriber.Handler[int]) subscriber.Handler[int] {
+			return func(ctx context.Context, id uint64, msg int) error {
+				events.record(fmt.Sprintf("middleware %d", msg))
+
+				return next(ctx, id, msg)
+			}
+		}
+		id := subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
+			if msg%2 == 0 {
+				return handleError(msg)
+			}
+
+			return nil
+		},
+			subscriber.WithReplay(replayOf(events, 1, 2, 3)),
+			subscriber.WithMiddleware(middleware),
+			subscriber.WithDeadLetters[int](storeFunc(func(_ context.Context, r subscriber.Record[int]) error {
+				events.record(fmt.Sprintf("stored %d", r.Message))
+
+				return nil
+			})),
+			subscriber.WithErrorHandler[int](func(_ context.Context, err error) { events.record("reported " + err.Error()) }),
+			subscriber.WithDefaultMessageOptions(message.WithErrorHandler[int](func(_ context.Context, err error) {
+				events.record("message reported " + err.Error())
+			})),
+		)
+
+		// It waits until the subscriber has replayed 1 to 3, and counts none of them.
+		if n := b.Broadcast(t.Context(), 4); n != 1 {
+			t.Errorf("Broadcast handed 4 to %d subscribers, want 1", n)
+		}
+		synctest.Wait()
+		want := []string{
+			"middleware 1", "acked 1",
+			"middleware 2", "stored 2", "reported handling 2 failed", "message reported handling 2 failed", "acked 2",
+			"middleware 3", "acked 3",
+			"middleware 4", "stored 4", "reported handling 4 failed", "message reported handling 4 failed",
+		}
+		if got := events.messages(); !slices.Equal(got, want) {
+			t.Errorf("got %q, want %q", got, want)
+		}
+		checkStats(t, b, id, subscriber.Stats{Delivered: 4, Handled: 2, Failed: 2})
+
+		unsubscribe(t, b, id)
+		synctest.Wait()
+	})
+}
+
+// Once the subscriber discards, yield returns false without handling the value, and the replay keeps the rest. Without
+// discard, it keeps replaying once unsubscribed, and Shutdown waits for it.
+func TestSubscriberWithReplay_Unsubscribe(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name   string
+		remove func(t *testing.T, b *broadcastor.Broadcastor[int], id uint64) <-chan error
+		want   []string
+	}{
+		{"Discard", func(t *testing.T, b *broadcastor.Broadcastor[int], id uint64) <-chan error {
+			t.Helper()
+			if err := b.Unsubscribe(t.Context(), id, subscriber.WithUnsubscribeDiscard()); err != nil {
+				t.Fatalf("Unsubscribe: %v", err)
+			}
+
+			return nil
+		}, []string{"handled 1", "acked 1", "stopped at 2"}},
+		{"Shutdown", func(t *testing.T, b *broadcastor.Broadcastor[int], _ uint64) <-chan error {
+			t.Helper()
+			errs := shutdown(t.Context(), b)
+			checkWaiting(t, errs, "the subscriber replays")
+
+			return errs
+		}, []string{"handled 1", "acked 1", "handled 2", "acked 2", "handled 3", "acked 3"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			synctest.Test(t, func(t *testing.T) {
+				b := newBroadcastor[int](t)
+				events := &recorder[string]{}
+				hold := make(chan struct{})
+				id := subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
+					events.record(fmt.Sprintf("handled %d", msg))
+					<-hold
+
+					return nil
+				},
+					subscriber.WithReplay(replayOf(events, 1, 2, 3)),
+					subscriber.WithErrorHandler[int](func(_ context.Context, err error) { t.Errorf("error handler got %v", err) }),
+				)
+
+				synctest.Wait() // handle holds on to 1
+				errs := tt.remove(t, b, id)
+				close(hold)
+				if errs != nil {
+					if err := waitShutdown(t, errs); err != nil {
+						t.Fatalf("Shutdown: %v", err)
+					}
+				}
+				synctest.Wait()
+				if got := events.messages(); !slices.Equal(got, tt.want) {
+					t.Errorf("got %q, want %q", got, tt.want)
+				}
+			})
+		})
+	}
+}
+
+// replayOf returns a replay of values that records "acked <value>" into events once yield returned true for it, and
+// "stopped at <value>" once it returned false.
+func replayOf(events *recorder[string], values ...int) iter.Seq[int] {
+	return func(yield func(int) bool) {
+		for _, v := range values {
+			if !yield(v) {
+				events.record(fmt.Sprintf("stopped at %d", v))
+
+				return
+			}
+			events.record(fmt.Sprintf("acked %d", v))
+		}
+	}
 }

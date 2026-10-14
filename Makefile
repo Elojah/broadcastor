@@ -15,7 +15,7 @@ STRESS_COUNT      ?= 50
 
 # The modules tidy, lint and test cover. Examples with dependencies of their own are modules, so the library's go.mod
 # lists none.
-MODULES            = . examples/19-redis examples/24-mqtt examples/25-modbus
+MODULES            = . examples/11-mqtt examples/12-modbus
 
 # The examples tinygo-run and tinygo-build cover, modules excluded, and the board tinygo-build targets.
 TINYGO             = tinygo

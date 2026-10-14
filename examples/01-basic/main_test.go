@@ -6,4 +6,6 @@ func Example() {
 	// Output:
 	// got hello
 	// got world
+	// got stop
+	// handed to 0 subscribers
 }

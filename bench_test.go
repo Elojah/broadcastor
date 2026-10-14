@@ -11,6 +11,57 @@ import (
 	"github.com/elojah/broadcastor/subscriber"
 )
 
+// A Broadcast allocates nothing without options in sync, buffered and non-blocking modes, and once with options,
+// whatever the number of subscribers. Not parallel: AllocsPerRun counts every goroutine's allocations.
+func TestBroadcast_Allocs(t *testing.T) { //nolint:paralleltest // AllocsPerRun counts every goroutine's allocations
+	const (
+		subscribers = 10
+		runs        = 100
+		// Room for every message, so that no non-blocking send drops one.
+		buffer = 2 * runs
+	)
+	for _, tt := range []struct { //nolint:paralleltest // AllocsPerRun counts every goroutine's allocations
+		name      string
+		subscribe []subscriber.Option[int]
+		broadcast []message.Option[int]
+		want      float64
+	}{
+		{name: "sync"},
+		{name: "buffered", subscribe: []subscriber.Option[int]{subscriber.WithBuffer[int](buffer)}},
+		{name: "non-blocking", subscribe: []subscriber.Option[int]{
+			subscriber.WithBuffer[int](buffer), subscriber.WithDefaultMessageOptions(message.WithNonBlocking[int]()),
+		}},
+		{
+			name:      "options",
+			subscribe: []subscriber.Option[int]{subscriber.WithBuffer[int](buffer)},
+			broadcast: []message.Option[int]{message.WithNonBlocking[int]()},
+			want:      1,
+		},
+		{
+			name:      "subscriber filter",
+			subscribe: []subscriber.Option[int]{subscriber.WithBuffer[int](buffer)},
+			broadcast: []message.Option[int]{message.WithSubscriberFilter[int](func(uint64) bool { return true })},
+			want:      1,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			b := newBroadcastor[int](t)
+			for range subscribers {
+				subscribe(t, b, func(context.Context, uint64, int) error { return nil }, tt.subscribe...)
+			}
+
+			got := testing.AllocsPerRun(runs, func() {
+				if n := b.Broadcast(t.Context(), 0, tt.broadcast...); n != subscribers {
+					t.Errorf("Broadcast handed the message to %d subscribers, want %d", n, subscribers)
+				}
+			})
+			if got > tt.want {
+				t.Errorf("Broadcast to %d subscribers allocates %v times, want at most %v", subscribers, got, tt.want)
+			}
+		})
+	}
+}
+
 // benchSubscribers are the subscriber counts the Broadcast benchmarks run with.
 var benchSubscribers = []int{1, 10, 100, 1000}
 
@@ -142,48 +193,6 @@ func BenchmarkBroadcast_Concurrent(b *testing.B) {
 	}
 }
 
-// BenchmarkBroadcast_Churn is BenchmarkBroadcast_Throughput in sync mode while another goroutine subscribes and
-// unsubscribes, so Broadcast ranges over a sync.Map being written. Only the steady subscribers count as deliveries, and
-// the allocations include the churn's.
-func BenchmarkBroadcast_Churn(b *testing.B) {
-	for _, subscribers := range benchSubscribers {
-		b.Run(fmt.Sprintf("subscribers=%d", subscribers), func(b *testing.B) {
-			bc := newBroadcastor[int](b)
-			wait := subscribeCounting(b, bc, subscribers, b.N, subscriber.WithBuffer[int](benchBuffer))
-
-			stop := make(chan struct{})
-			var churn sync.WaitGroup
-			churn.Go(func() {
-				for {
-					select {
-					case <-stop:
-						return
-					default:
-					}
-					// Buffered, so Broadcast never waits for one to wake up.
-					if err := subscribeUnsubscribe(b.Context(), bc, subscriber.WithBuffer[int](benchBuffer)); err != nil {
-						b.Error(err) // not Fatal, which must not be called from another goroutine
-
-						return
-					}
-				}
-			})
-
-			b.ReportAllocs()
-			b.ResetTimer()
-			for range b.N {
-				bc.Broadcast(b.Context(), 0)
-			}
-			wait()
-			reportPerDelivery(b, subscribers)
-
-			b.StopTimer()
-			close(stop)
-			churn.Wait()
-		})
-	}
-}
-
 // BenchmarkSubscribeUnsubscribe measures a subscription that comes and goes without ever getting a message.
 func BenchmarkSubscribeUnsubscribe(b *testing.B) {
 	bc := newBroadcastor[int](b)
@@ -193,22 +202,6 @@ func BenchmarkSubscribeUnsubscribe(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
-}
-
-// BenchmarkSubscribeUnsubscribe_Parallel is BenchmarkSubscribeUnsubscribe from GOMAXPROCS goroutines at once, on the
-// same Broadcastor.
-func BenchmarkSubscribeUnsubscribe_Parallel(b *testing.B) {
-	bc := newBroadcastor[int](b)
-	b.ReportAllocs()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			if err := subscribeUnsubscribe(b.Context(), bc); err != nil {
-				b.Error(err) // not Fatal, which must not be called from RunParallel's goroutines
-
-				return
-			}
-		}
-	})
 }
 
 func subscribeUnsubscribe(ctx context.Context, bc *broadcastor.Broadcastor[int], options ...subscriber.Option[int]) error {

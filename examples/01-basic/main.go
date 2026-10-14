@@ -1,14 +1,11 @@
-// One subscriber gets every message, in broadcast order.
-//
-// Broadcast returns once the subscriber has taken the message, not handled it, so main waits for handle before
-// returning.
+// One subscriber gets every message, in broadcast order. handle gets the subscriber's ID, so it can unsubscribe
+// itself, since Unsubscribe never waits. Broadcast then hands the message to nobody.
 package main
 
 import (
 	"context"
 	"fmt"
 	"log"
-	"sync"
 
 	"github.com/elojah/broadcastor"
 )
@@ -17,24 +14,24 @@ func main() {
 	ctx := context.Background()
 	b := broadcastor.NewBroadcastor[string]()
 
-	var handled sync.WaitGroup
-	id, err := b.Subscribe(ctx, func(_ context.Context, _ uint64, msg string) error {
-		defer handled.Done()
+	stopped := make(chan struct{})
+	_, err := b.Subscribe(ctx, func(ctx context.Context, id uint64, msg string) error {
 		fmt.Println("got", msg)
+		if msg != "stop" {
+			return nil
+		}
+		defer close(stopped)
 
-		return nil
+		return b.Unsubscribe(ctx, id)
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	for _, msg := range []string{"hello", "world"} {
-		handled.Add(1)
+	for _, msg := range []string{"hello", "world", "stop"} {
 		b.Broadcast(ctx, msg)
 	}
-	handled.Wait()
-
-	if err := b.Unsubscribe(ctx, id); err != nil {
-		log.Fatal(err)
-	}
+	// Broadcast returns once the subscriber has taken the message, not handled it.
+	<-stopped
+	fmt.Println("handed to", b.Broadcast(ctx, "anyone?"), "subscribers")
 }

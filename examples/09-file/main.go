@@ -1,6 +1,6 @@
 // store.File keeps on disk the readings the alerts fail to page (subscriber.WithDeadLetters), for
-// subscriber.WithReplay to hand back after a restart: 19-redis without a server. The pager is down before the restart,
-// and back after it.
+// subscriber.WithReplay to hand back after a restart. The pager is down before the restart, and back after it. Shutdown
+// waits until every reading is handled or stored, so the process can exit.
 package main
 
 import (
