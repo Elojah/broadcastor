@@ -59,6 +59,9 @@ type config[T any] struct {
 	replay              iter.Seq[T]
 	holder              Holder[T]
 
+	// batchHandler is WithBatchHandler's handle, wrapped in its middlewares.
+	batchHandler Handler[message.Batch[T]]
+
 	errorHandler func(ctx context.Context, err error)
 	filter       func(msg T) bool
 	evict        func(err error) bool
@@ -115,39 +118,20 @@ func (s *Subscriber[T]) Deliver(ctx context.Context, value T, config message.Con
 	if s.config.filter != nil && !s.config.filter(value) {
 		return false, nil
 	}
-	m := message.New(value, s.config.defaults, config)
 
-	if !s.acquire() {
-		s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: value}) //nolint:contextcheck // reported with the message's ctx
+	return s.deliver(ctx, message.New(value, s.config.defaults, config))
+}
 
-		return false, nil
-	}
-
-	if m.Config.Delivery == message.DeliveryAsync {
-		if !s.reserve() {
-			defer s.release()
-			s.counters.dropped.Add(1)
-			s.lose(m, &DroppedError[T]{SubscriberID: s.id, Message: value}) //nolint:contextcheck // reported with the message's ctx
-
+// DeliverBatch is Deliver for a batch, which must not be empty. Of a batch the filter keeps part of, it sends a batch
+// from batch.New holding what it keeps.
+func (s *Subscriber[T]) DeliverBatch(ctx context.Context, batch message.Batch[T], config message.Config) (bool, <-chan bool) {
+	if s.config.filter != nil {
+		if batch = s.keep(batch); batch == nil {
 			return false, nil
 		}
-		go func() {
-			s.send(ctx, m)
-			s.counters.sending.Add(-1)
-		}()
-
-		return true, nil
 	}
 
-	if m.Config.Delivery == message.DeliveryParallel {
-		// Buffered, so the goroutine never waits for the reader.
-		taken := make(chan bool, 1)
-		go func() { taken <- s.send(ctx, m) }()
-
-		return false, taken
-	}
-
-	return s.send(ctx, m), nil
+	return s.deliver(ctx, message.NewBatch(batch, s.config.defaults, config))
 }
 
 // Unsubscribe drops the subscription's reference, with the unsubscribe defaults then options. Only whoever removed the
@@ -185,8 +169,9 @@ func (s *Subscriber[T]) Consume(handle Handler[T]) {
 		return
 	}
 	for m := range s.ch {
+		s.took(&m)
 		if s.discarding.Load() {
-			s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: m.Value})
+			s.report(m, s.closed(m))
 
 			continue
 		}
@@ -224,7 +209,7 @@ func (s *Subscriber[T]) Seq() iter.Seq2[T, func(error)] {
 func (s *Subscriber[T]) Stats() Stats {
 	return Stats{
 		SubscriberID: s.id,
-		Queued:       len(s.ch),
+		Queued:       max(len(s.ch)+int(s.counters.batched.Load()), 0),
 		Buffer:       cap(s.ch),
 		Sending:      int(s.counters.sending.Load()),
 		Held:         int(s.counters.held.Load()),
@@ -234,6 +219,7 @@ func (s *Subscriber[T]) Stats() Stats {
 		TimedOut:     s.counters.timedOut.Load(),
 		Dropped:      s.counters.dropped.Load(),
 		Merged:       s.counters.merged.Load(),
+		Batches:      s.counters.batches.Load(),
 		HandleTime:   time.Duration(s.counters.handleTime.Load()),
 		Handling:     s.counters.handling(s.created),
 	}
@@ -285,19 +271,42 @@ func (s *Subscriber[T]) pace(handle Handler[T]) {
 
 				return
 			}
-			// What came due while waiting goes first, so that the holder never gets a message for a window that ended.
-			now := time.Now()
-			s.unhold(handle, now, false)
-			s.hold(m, now)
+			s.took(&m)
+			s.hold(handle, m, time.Now())
 		case <-due:
 		}
 	}
 }
 
-// hold passes m to the holder at now, or reports it once the subscriber discards.
-func (s *Subscriber[T]) hold(m message.Message[T], now time.Time) {
+// hold passes m to the holder at now, a batch one value at a time, or reports it once the subscriber discards. Before
+// each value, it releases what is due at now, which may have come due while waiting or as the holder took the previous
+// one, so that the holder never gets a message for a window that ended.
+func (s *Subscriber[T]) hold(handle Handler[T], m message.Message[T], now time.Time) {
+	if m.Batch == nil {
+		s.holdValue(handle, m, now)
+
+		return
+	}
+	s.unhold(handle, now, false)
 	if s.discarding.Load() {
-		s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: m.Value})
+		s.report(m, s.closed(m))
+
+		return
+	}
+	// Called rather than ranged over, which would allocate the loop's state too.
+	m.Batch.All()(func(value T) bool {
+		s.holdValue(handle, message.Message[T]{Value: value, Config: m.Config}, now)
+
+		return true
+	})
+}
+
+// holdValue releases what is due at now, then passes m, a single value, to the holder, or reports it once the
+// subscriber discards.
+func (s *Subscriber[T]) holdValue(handle Handler[T], m message.Message[T], now time.Time) {
+	s.unhold(handle, now, false)
+	if s.discarding.Load() {
+		s.report(m, s.closed(m))
 
 		return
 	}
@@ -321,9 +330,9 @@ func (s *Subscriber[T]) unhold(handle Handler[T], now time.Time, all bool) time.
 		if !ok {
 			return wait
 		}
-		s.counters.held.Add(-1)
+		s.counters.held.Add(-int64(m.Len()))
 		if s.discarding.Load() {
-			s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: m.Value})
+			s.report(m, s.closed(m))
 
 			continue
 		}
@@ -342,17 +351,88 @@ func (s *Subscriber[T]) replay(handle Handler[T]) {
 	}
 }
 
-// process passes m to handle, counts it, and reports its error.
+// process passes m to handle, counts it, and reports its error. A batch goes to the batch handler, or else to handle
+// one value at a time.
 func (s *Subscriber[T]) process(handle Handler[T], m message.Message[T]) {
+	if m.Batch != nil {
+		s.unroll(handle, m)
+
+		return
+	}
 	start := time.Now()
 	s.counters.handleStart.Store(int64(start.Sub(s.created)) + 1)
 	err := handle(s.context(m), s.id, m.Value)
 	s.counters.handleStart.Store(0)
-	s.counters.handle(time.Since(start), err)
+	s.counters.handle(time.Since(start), 1, err)
 	// Reported outside the chain, so Recover never catches a panic in an error handler or evict.
 	if err != nil {
 		s.lose(m, err)
 	}
+}
+
+// unroll passes the batch m to the batch handler, counting each value, or else each value to process, checking before
+// each that the subscriber does not discard.
+func (s *Subscriber[T]) unroll(handle Handler[T], m message.Message[T]) {
+	if s.config.batchHandler == nil {
+		// Called rather than ranged over, which would allocate the loop's state too.
+		m.Batch.All()(func(value T) bool {
+			v := message.Message[T]{Value: value, Config: m.Config}
+			if s.discarding.Load() {
+				s.report(v, s.closed(v))
+
+				return true
+			}
+			s.process(handle, v)
+
+			return true
+		})
+
+		return
+	}
+	start := time.Now()
+	s.counters.handleStart.Store(int64(start.Sub(s.created)) + 1)
+	err := s.config.batchHandler(s.context(m), s.id, m.Batch)
+	s.counters.handleStart.Store(0)
+	s.counters.batches.Add(1)
+	s.counters.handle(time.Since(start), count(m), err)
+	if err != nil {
+		s.lose(m, err)
+	}
+}
+
+// deliver sends m as its delivery says, for Deliver and DeliverBatch.
+func (s *Subscriber[T]) deliver(ctx context.Context, m message.Message[T]) (bool, <-chan bool) {
+	if !s.acquire() {
+		s.report(m, s.closed(m)) //nolint:contextcheck // reported with the message's ctx
+
+		return false, nil
+	}
+
+	if m.Config.Delivery == message.DeliveryAsync {
+		if !s.reserve() {
+			defer s.release()
+			s.counters.dropped.Add(count(m))
+			s.lose(m, &DroppedError[T]{SubscriberID: s.id, Message: m.Value, Batch: m.Batch}) //nolint:contextcheck // reported with the message's ctx
+
+			return false, nil
+		}
+		go func() {
+			s.send(ctx, m)
+			s.counters.sending.Add(-1)
+		}()
+
+		return true, nil
+	}
+
+	if m.Config.Delivery == message.DeliveryParallel {
+		// Buffered, so the goroutine never waits for the reader.
+		taken := make(chan bool, 1)
+		go func() { taken <- s.send(ctx, m) }()
+
+		return false, taken
+	}
+
+	return s.send(ctx, m), nil
 }
 
 // send hands m over and releases the caller's reference. It gives up once ctx is done, m's timeout runs out or the
@@ -363,7 +443,7 @@ func (s *Subscriber[T]) send(ctx context.Context, m message.Message[T]) bool {
 	// Checked first, since select picks at random: once unsubscribed, only a send racing Unsubscribe gets through.
 	select {
 	case <-s.done:
-		s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: m.Value}) //nolint:contextcheck // reported with the message's ctx
+		s.report(m, s.closed(m)) //nolint:contextcheck // reported with the message's ctx
 
 		return false
 	default:
@@ -373,15 +453,15 @@ func (s *Subscriber[T]) send(ctx context.Context, m message.Message[T]) bool {
 	// done.
 	select {
 	case s.ch <- m:
-		s.counters.delivered.Add(1)
+		s.sent(&m)
 
 		return true
 	default:
 	}
 
 	if m.Config.Delivery == message.DeliveryNonBlocking {
-		s.counters.dropped.Add(1)
-		s.lose(m, &DroppedError[T]{SubscriberID: s.id, Message: m.Value}) //nolint:contextcheck // reported with the message's ctx
+		s.counters.dropped.Add(count(m))
+		s.lose(m, &DroppedError[T]{SubscriberID: s.id, Message: m.Value, Batch: m.Batch}) //nolint:contextcheck // reported with the message's ctx
 
 		return false
 	}
@@ -395,18 +475,36 @@ func (s *Subscriber[T]) send(ctx context.Context, m message.Message[T]) bool {
 
 	select {
 	case s.ch <- m:
-		s.counters.delivered.Add(1)
+		s.sent(&m)
 
 		return true
 	case <-s.done:
-		s.report(m, &ClosedError[T]{SubscriberID: s.id, Message: m.Value}) //nolint:contextcheck // reported with the message's ctx
+		s.report(m, s.closed(m)) //nolint:contextcheck // reported with the message's ctx
 
 		return false
 	case <-sendCtx.Done():
-		s.counters.timedOut.Add(1)
-		s.lose(m, &TimeoutError[T]{SubscriberID: s.id, Message: m.Value, Err: sendCtx.Err()}) //nolint:contextcheck // reported with the message's ctx
+		s.counters.timedOut.Add(count(m))
+		s.lose(m, &TimeoutError[T]{SubscriberID: s.id, Message: m.Value, Batch: m.Batch, Err: sendCtx.Err()}) //nolint:contextcheck // reported with the message's ctx
 
 		return false
+	}
+}
+
+// sent counts m, just taken. A batch's values past its first are counted in Queued until Consume takes it.
+func (s *Subscriber[T]) sent(m *message.Message[T]) {
+	if m.Batch == nil {
+		s.counters.delivered.Add(1)
+
+		return
+	}
+	s.counters.batched.Add(int64(m.Batch.Len() - 1))
+	s.counters.delivered.Add(count(*m))
+}
+
+// took uncounts from Queued the values of m, just read from ch, past its first.
+func (s *Subscriber[T]) took(m *message.Message[T]) {
+	if m.Batch != nil {
+		s.counters.batched.Add(-int64(m.Batch.Len() - 1))
 	}
 }
 
@@ -419,7 +517,7 @@ func (s *Subscriber[T]) lose(m message.Message[T], err error) {
 
 		return
 	}
-	s.report(m, &EvictedError[T]{SubscriberID: s.id, Message: m.Value, Err: err})
+	s.report(m, &EvictedError[T]{SubscriberID: s.id, Message: m.Value, Batch: m.Batch, Err: err})
 }
 
 // reserve counts an async send under way, unless WithAsyncLimit's are already.
@@ -470,14 +568,13 @@ func (s *Subscriber[T]) context(m message.Message[T]) context.Context {
 	return s.ctx
 }
 
-// report stores m, then passes err to the subscriber's error handler, then to m's. A failed Put turns err into a
-// *StoreError.
+// report stores m, a batch one value at a time, then passes err to the subscriber's error handler, then to m's, once
+// even for a batch. A failed Put turns err into a *StoreError.
 func (s *Subscriber[T]) report(m message.Message[T], err error) {
 	ctx := s.context(m)
 	if s.config.store != nil {
-		// Never done: ctx being done is often why m was lost.
-		if putErr := s.config.store.Put(context.WithoutCancel(ctx), Record[T]{SubscriberID: s.id, Message: m.Value, Err: err}); putErr != nil {
-			err = &StoreError[T]{SubscriberID: s.id, Message: m.Value, Err: putErr, Cause: err}
+		if putErr := s.put(ctx, m, err); putErr != nil {
+			err = &StoreError[T]{SubscriberID: s.id, Message: m.Value, Batch: m.Batch, Err: putErr, Cause: err}
 		}
 	}
 	if s.config.errorHandler != nil {
@@ -485,6 +582,63 @@ func (s *Subscriber[T]) report(m message.Message[T], err error) {
 	}
 	if m.Config.ErrorHandler != nil {
 		m.Config.ErrorHandler(ctx, err)
+	}
+}
+
+// put stores m, lost with err, or each value of its batch, and returns the errors of the Puts that failed.
+func (s *Subscriber[T]) put(ctx context.Context, m message.Message[T], err error) error {
+	// Never done: ctx being done is often why m was lost.
+	ctx = context.WithoutCancel(ctx)
+	if m.Batch == nil {
+		return s.config.store.Put(ctx, Record[T]{SubscriberID: s.id, Message: m.Value, Err: err})
+	}
+	var errs []error
+	for value := range m.Batch.All() {
+		if putErr := s.config.store.Put(ctx, Record[T]{SubscriberID: s.id, Message: value, Err: err}); putErr != nil {
+			errs = append(errs, putErr)
+		}
+	}
+
+	return errors.Join(errs...)
+}
+
+// closed returns the error reporting m missed because the subscriber was unsubscribed.
+func (s *Subscriber[T]) closed(m message.Message[T]) *ClosedError[T] {
+	return &ClosedError[T]{SubscriberID: s.id, Message: m.Value, Batch: m.Batch}
+}
+
+// keep returns what of batch the filter keeps: batch itself if every value, nil if none, else a batch from batch.New.
+// The filter sees each value once, since it may keep state.
+func (s *Subscriber[T]) keep(batch message.Batch[T]) message.Batch[T] {
+	var (
+		kept message.Batch[T]
+		// seen counts the values before the current one, all kept while kept is nil.
+		seen int
+	)
+	for value := range batch.All() {
+		switch {
+		case s.config.filter(value):
+			if kept != nil {
+				kept.Add(value)
+			}
+		case kept == nil:
+			kept = batch.New()
+			for v := range batch.All() {
+				if kept.Len() == seen {
+					break
+				}
+				kept.Add(v)
+			}
+		}
+		seen++
+	}
+	switch {
+	case kept == nil:
+		return batch
+	case kept.Len() == 0:
+		return nil
+	default:
+		return kept
 	}
 }
 

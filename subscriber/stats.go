@@ -5,16 +5,19 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/elojah/broadcastor/message"
 )
 
-// Stats is a snapshot of a subscriber's counters. Each message, and each replayed value, is counted once in Handled,
-// Failed, TimedOut, Dropped or Merged. Delivered is Handled + Failed + Merged + Held + Queued, plus one while handle
-// runs and the messages a holder had no room for, but the counters are read one at a time, so they may not add up
+// Stats is a snapshot of a subscriber's counters. Each message, each value of a batch, and each replayed value, is
+// counted once in Handled, Failed, TimedOut, Dropped or Merged. Delivered is Handled + Failed + Merged + Held + Queued,
+// plus the messages a holder had no room for and those taken but not done with: the message or batch handle is on, and
+// the rest of a batch handed to it one value at a time. The counters are read one at a time, so they may not add up
 // while messages are in flight. For SubscribeSeq, handle is the loop body.
 type Stats struct {
 	SubscriberID uuid.UUID
 
-	// Queued messages wait in a buffer of size Buffer (WithBuffer).
+	// Queued messages wait in a buffer of size Buffer (WithBuffer), a batch taking one place.
 	Queued int
 	Buffer int
 	// Sending counts the async sends under way (WithAsyncLimit).
@@ -32,6 +35,8 @@ type Stats struct {
 	Dropped  uint64
 	// Merged counts the messages a holder merged away.
 	Merged uint64
+	// Batches counts the batches handed to the batch handler (WithBatchHandler).
+	Batches uint64
 
 	// HandleTime is the time spent in handle and its middlewares, middleware.Retry's waits included.
 	HandleTime time.Duration
@@ -47,7 +52,11 @@ type counters struct {
 	timedOut   atomic.Uint64
 	dropped    atomic.Uint64
 	merged     atomic.Uint64
+	batches    atomic.Uint64
 	handleTime atomic.Int64
+
+	// batched counts the values of the batches in ch past their first, so that Queued counts values.
+	batched atomic.Int64
 
 	// held counts the messages in the holder.
 	held atomic.Int64
@@ -70,13 +79,18 @@ func (c *counters) handling(created time.Time) time.Duration {
 	return time.Since(created) - time.Duration(start-1)
 }
 
-// handle counts a message handle took d on, and failed on if err is not nil.
-func (c *counters) handle(d time.Duration, err error) {
+// handle counts n messages handle took d on, and failed on if err is not nil.
+func (c *counters) handle(d time.Duration, n uint64, err error) {
 	c.handleTime.Add(int64(d))
 	if err != nil {
-		c.failed.Add(1)
+		c.failed.Add(n)
 
 		return
 	}
-	c.handled.Add(1)
+	c.handled.Add(n)
+}
+
+// count returns how many messages m counts as: 1, or its batch's values.
+func count[T any](m message.Message[T]) uint64 {
+	return uint64(max(m.Len(), 0))
 }

@@ -93,6 +93,35 @@ func BenchmarkBroadcast_Throughput(b *testing.B) {
 	}
 }
 
+// BenchmarkBroadcastBatch_Throughput is BenchmarkBroadcast_Throughput in sync mode for batches of benchBatch values,
+// per value a subscriber gets: handed one at a time to handle, or whole to a batch handler.
+func BenchmarkBroadcastBatch_Throughput(b *testing.B) {
+	const benchBatch = 16
+	batch := batchOf(make([]int, benchBatch)...)
+
+	for _, subscribers := range benchSubscribers {
+		for _, whole := range []bool{false, true} {
+			b.Run(fmt.Sprintf("subscribers=%d/batch handler=%t", subscribers, whole), func(b *testing.B) {
+				bc := newBroadcastor[int](b)
+				var wait func()
+				if whole {
+					wait = subscribeCountingBatches(b, bc, subscribers, b.N, subscriber.WithBuffer[int](benchBuffer))
+				} else {
+					wait = subscribeCounting(b, bc, subscribers, b.N*benchBatch, subscriber.WithBuffer[int](benchBuffer))
+				}
+
+				b.ReportAllocs()
+				b.ResetTimer()
+				for range b.N {
+					bc.BroadcastBatch(b.Context(), batch)
+				}
+				wait()
+				reportPerDelivery(b, subscribers*benchBatch)
+			})
+		}
+	}
+}
+
 // BenchmarkBroadcast_Concurrent is BenchmarkBroadcast_Throughput in sync mode from GOMAXPROCS goroutines, contending on
 // each subscriber's references, counters and channel.
 func BenchmarkBroadcast_Concurrent(b *testing.B) {
@@ -225,8 +254,38 @@ func subscribeCounting(b *testing.B, bc *broadcastor.Broadcastor[int], subscribe
 	}
 }
 
-// reportPerDelivery reports the time per message a subscriber got, for b.N Broadcasts to subscribers each.
-func reportPerDelivery(b *testing.B, subscribers int) {
+// subscribeCountingBatches is subscribeCounting with batch handlers expecting batches.
+func subscribeCountingBatches(b *testing.B, bc *broadcastor.Broadcastor[int], subscribers, batches int, options ...subscriber.Option[int]) func() {
 	b.Helper()
-	b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*subscribers), "ns/delivery")
+	done := make([]chan struct{}, subscribers)
+	for i := range done {
+		handled := make(chan struct{})
+		done[i] = handled
+		remaining := batches // only the batch handler touches it, in the subscriber's goroutine
+		_, err := bc.Subscribe(b.Context(), func(context.Context, uuid.UUID, int) error { return nil },
+			append(options, subscriber.WithBatchHandler(func(context.Context, uuid.UUID, message.Batch[int]) error {
+				remaining--
+				if remaining == 0 {
+					close(handled)
+				}
+
+				return nil
+			}))...)
+		if err != nil {
+			b.Fatalf("Subscribe: %v", err)
+		}
+	}
+
+	return func() {
+		for _, handled := range done {
+			<-handled
+		}
+	}
+}
+
+// reportPerDelivery reports the time per message a subscriber got, for b.N Broadcasts of a message to deliveries, such
+// as subscribers each.
+func reportPerDelivery(b *testing.B, deliveries int) {
+	b.Helper()
+	b.ReportMetric(float64(b.Elapsed().Nanoseconds())/float64(b.N*deliveries), "ns/delivery")
 }

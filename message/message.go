@@ -3,6 +3,8 @@ package message
 
 import (
 	"context"
+	"iter"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,10 +24,57 @@ const (
 	DeliveryNonBlocking
 )
 
-// Message is what one Broadcast sends to one subscriber.
+// Message is what one Broadcast sends to one subscriber: Value, or with BroadcastBatch, Batch.
 type Message[T any] struct {
-	Value  T
+	Value T
+	// Batch is nil for a single value.
+	Batch  Batch[T]
 	Config Config
+}
+
+// Len returns how many values m carries: its batch's, or 1.
+func (m Message[T]) Len() int {
+	if m.Batch != nil {
+		return m.Batch.Len()
+	}
+
+	return 1
+}
+
+// Batch holds values that BroadcastBatch hands to each subscriber at once, with one Config. Slice is one. Every
+// subscriber reads the same batch, possibly at once, so All and Len must be safe for concurrent use.
+type Batch[T any] interface {
+	// Add appends msg.
+	Add(msg T)
+	// All yields each value, in order.
+	All() iter.Seq[T]
+	// Len returns how many values All yields. It is called often, so it must be cheap.
+	Len() int
+	// New returns an empty batch of the same kind, never nil, which a subscriber's filter fills with what it keeps.
+	New() Batch[T]
+}
+
+// Slice is a Batch of the values in a slice.
+type Slice[T any] []T
+
+// Add appends msg.
+func (s *Slice[T]) Add(msg T) {
+	*s = append(*s, msg)
+}
+
+// All yields each value, in order.
+func (s *Slice[T]) All() iter.Seq[T] {
+	return slices.Values(*s)
+}
+
+// Len returns how many values s holds.
+func (s *Slice[T]) Len() int {
+	return len(*s)
+}
+
+// New returns an empty Slice.
+func (s *Slice[T]) New() Batch[T] {
+	return new(Slice[T])
 }
 
 // Config is how one Broadcast sends its message to one subscriber.
@@ -77,6 +126,16 @@ func NewConfig[T any](options ...Option[T]) Config {
 // New returns value with the fields config's options set laid over a subscriber's defaults. Both are copies, so
 // nothing escapes.
 func New[T any](value T, defaults, config Config) Message[T] {
+	return Message[T]{Value: value, Config: defaults.with(config)}
+}
+
+// NewBatch is New for a batch.
+func NewBatch[T any](batch Batch[T], defaults, config Config) Message[T] {
+	return Message[T]{Batch: batch, Config: defaults.with(config)}
+}
+
+// with returns defaults with the fields config's options set laid over them.
+func (defaults Config) with(config Config) Config {
 	if config.set&fieldDelivery != 0 {
 		defaults.Delivery = config.Delivery
 	}
@@ -90,5 +149,5 @@ func New[T any](value T, defaults, config Config) Message[T] {
 		defaults.Context = config.Context
 	}
 
-	return Message[T]{Value: value, Config: defaults}
+	return defaults
 }

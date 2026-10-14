@@ -58,7 +58,9 @@ At `21d751b` (Intel Core Ultra 5 226V, GOMAXPROCS 8), per subscriber and per `Br
   - [ ] A durable store keeps only `Record.Err`'s text, so `errors.Is(entry.Err, subscriber.ErrTimeout)` fails once
     read back. Decide whether `Record` carries the sentinel its error matches, before `store.File` sets its format.
 - [ ] `store.DrainBatch(ctx, q, n, maxWait, handle)`: hands up to n entries at once, or fewer after maxWait, and acks
-  them together, since cellular and LoRa uplinks pay per request. Measure it against `Drain` on `store.File`.
+  them together, since cellular and LoRa uplinks pay per request. Measure it against `Drain` on `store.File`. handle
+  is a `subscriber.Handler[message.Batch[T]]`, like a batch handler's, so one uplink serves both: a batch lost goes to
+  the dead letters one value at a time, and DrainBatch batches them again.
 - [ ] `Shutdown` names the subscribers it still waits for once ctx is done: after `Close` they have left `Stats`, so a
   SIGTERM that times out says only `context.DeadlineExceeded`. `add` could keep each in a set that its `Attach` callback
   deletes it from, and `Shutdown` return a `*ShutdownError` with what is left, matching `ctx.Err()`.

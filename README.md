@@ -59,10 +59,10 @@ for msg, fail := range seq {
 | --- | --- |
 | [`broadcastor`](https://pkg.go.dev/github.com/elojah/broadcastor) | `Broadcastor`. |
 | [`subscriber`](https://pkg.go.dev/github.com/elojah/broadcastor/subscriber) | Options for `Subscribe`, `SubscribeSeq` and `Unsubscribe`, error types, `Stats`, `Holder`. |
-| [`message`](https://pkg.go.dev/github.com/elojah/broadcastor/message) | Options for `Broadcast`. |
+| [`message`](https://pkg.go.dev/github.com/elojah/broadcastor/message) | Options for `Broadcast`, and `Batch` for `BroadcastBatch`, with `Slice`. |
 | [`middleware`](https://pkg.go.dev/github.com/elojah/broadcastor/middleware) | `Recover`, `History`, `MaxAge`, `WrapError`, `Retry`, and `RetryPolicy.Do` for any func. |
 | [`store`](https://pkg.go.dev/github.com/elojah/broadcastor/store) | Queues for dead letters and history: `Ring`, `Drain`, `Enqueue`, `Filter`. |
-| [`holder`](https://pkg.go.dev/github.com/elojah/broadcastor/holder) | Holders for `subscriber.WithHolder`: `Reduce`, `NewLatest`, `Reorder`, `Jitter`. |
+| [`holder`](https://pkg.go.dev/github.com/elojah/broadcastor/holder) | Holders for `subscriber.WithHolder`: `Reduce`, `NewLatest`, `Reorder`, `Jitter`, `Batch`. |
 | [`filter`](https://pkg.go.dev/github.com/elojah/broadcastor/filter) | Filters for `subscriber.WithFilter`: `Changed`, `Every`. |
 
 ## Delivery
@@ -191,6 +191,37 @@ handler. An unsubscribed subscriber handles what is held at once, so `Shutdown` 
 have no room: the message is then lost as a `*subscriber.DroppedError`. Only the subscriber's goroutine calls a holder,
 so it needs no lock: give each subscriber its own.
 
+## Batches
+
+`BroadcastBatch` hands a `message.Batch` to every subscriber at once, with one set of message options: each subscriber
+takes the whole batch in one send, or misses it. A subscriber with a batch handler (`subscriber.WithBatchHandler`) gets
+the batch whole, through middlewares of its own; one without gets each value alone, through `handle`'s:
+
+```go
+// A poll reads every register at once: one batch.
+b.BroadcastBatch(ctx, &message.Slice[Reading]{north, south, east})
+
+// The uplink, billed per request, sends each batch at once, retrying it whole.
+id, err := b.Subscribe(ctx, handle, subscriber.WithBatchHandler(func(ctx context.Context, _ uuid.UUID, batch message.Batch[Reading]) error {
+ return uplink.Send(ctx, slices.Collect(batch.All()))
+}, middleware.Retry[message.Batch[Reading]](policy)))
+```
+
+`message.Slice` is a `Batch` of a slice. A type of your own needs `Add`, `All`, `Len`, and `New`, an empty batch of
+the same type: a subscriber whose filter (`subscriber.WithFilter`) keeps part of a batch takes one from `New` holding
+what it keeps, and one keeping none misses it. Every subscriber reads the same batch, even after an async
+`BroadcastBatch` returns, so don't change it once passed.
+
+`holder.NewBatch(d, n)` gathers what a subscriber takes, single messages and batches' values alike, into batches of `n`
+at most, each released `d` after its first message at the latest, for the batch handler
+([`28-batch`](examples/28-batch/main.go)). Holders get a batch one value at a time.
+
+An error about a batch is one error, with the batch in its `Batch` field: a `*subscriber.TimeoutError` or
+`*subscriber.DroppedError` for a batch missed, or the batch handler's. It reaches the error handlers once, but the dead
+letters get each value as a record of its own, and `Stats` count each value, plus the batch handler's calls in
+`Batches`. A batch takes one place in a subscriber's buffer, whatever its size. Once a subscriber hands a batch to
+`handle` one value at a time, each value's error is its own, as for any message.
+
 ## Dead letters
 
 `subscriber.WithDeadLetters` stores every message the subscriber loses, with its error, so each message is handled or
@@ -264,7 +295,7 @@ for _, s := range b.Stats() {
 
 | Field | What |
 | --- | --- |
-| `Queued`, `Buffer` | Messages in the buffer, and its size. |
+| `Queued`, `Buffer` | Messages in the buffer, and its size, a batch taking one place. |
 | `Sending` | Async sends under way. |
 | `Delivered` | Messages taken, and values replayed. |
 | `Handled`, `Failed` | Messages `handle` returned nil or an error for. |
@@ -272,10 +303,11 @@ for _, s := range b.Stats() {
 | `HandleTime` | Time spent in `handle` and its middlewares. |
 | `Handling` | How long `handle` has been running on the current message, 0 when idle. |
 | `Held`, `Merged` | Messages waiting in a holder, and merged into another one by it. |
+| `Batches` | Batches handed to the batch handler. |
 
-Each message is counted once, in `Handled`, `Failed`, `TimedOut`, `Dropped` or `Merged`, before the error handlers
-run. An unsubscribed subscriber leaves the snapshot. A watchdog can unsubscribe a subscriber whose `handle` hangs, from
-`Handling` ([`22-watchdog`](examples/22-watchdog/main.go)).
+Each message, and each value of a batch, is counted once, in `Handled`, `Failed`, `TimedOut`, `Dropped` or `Merged`,
+before the error handlers run. An unsubscribed subscriber leaves the snapshot. A watchdog can unsubscribe a subscriber
+whose `handle` hangs, from `Handling` ([`22-watchdog`](examples/22-watchdog/main.go)).
 
 ## Lifecycle and contexts
 
@@ -398,6 +430,7 @@ never fails, so give it a timeout. `Unsubscribe` does not end a `Retry` wait: th
 | [`25-modbus`](examples/25-modbus/main.go) | A PLC polled over Modbus TCP, filtered, and a rule that retries and reconnects in place. |
 | [`26-reconnect`](examples/26-reconnect/main.go) | A subscriber reconnecting in place through middlewares of its own, its buffer keeping order. |
 | [`27-holder`](examples/27-holder/main.go) | `subscriber.WithHolder` with `holder.NewLatest` and `holder.Reduce`, for bursts of readings. |
+| [`28-batch`](examples/28-batch/main.go) | `BroadcastBatch`, `subscriber.WithBatchHandler` and `holder.NewBatch`, for an uplink billed per request. |
 
 `19-redis`, `24-mqtt` and `25-modbus` are modules of their own, to keep their dependencies out of the library's go.mod.
 `go run -C examples/19-redis .` needs Redis at `REDIS_ADDR` (`localhost:6379` by default), and `24-mqtt` an MQTT broker

@@ -3,12 +3,16 @@ package subscriber
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/elojah/broadcastor/message"
 )
 
-// Sentinels matched by the error types below with errors.Is, which does not need T.
+// Sentinels matched by the error types below with errors.Is, which does not need T. The errors the library makes
+// about a whole batch (Broadcastor.BroadcastBatch) hold it in Batch, Message being zero.
 var (
 	ErrClosed  = errors.New("subscriber closed")
 	ErrTimeout = errors.New("timeout")
@@ -77,6 +81,7 @@ func (e *ExpiredError[T]) Is(target error) bool {
 type TimeoutError[T any] struct {
 	SubscriberID uuid.UUID
 	Message      T
+	Batch        message.Batch[T]
 	Err          error
 }
 
@@ -97,10 +102,11 @@ func (e *TimeoutError[T]) Is(target error) bool {
 type DroppedError[T any] struct {
 	SubscriberID uuid.UUID
 	Message      T
+	Batch        message.Batch[T]
 }
 
 func (e *DroppedError[T]) Error() string {
-	return "subscriber " + e.SubscriberID.String() + ": busy, message dropped"
+	return "subscriber " + e.SubscriberID.String() + ": busy, " + describe(e.Batch) + " dropped"
 }
 
 func (e *DroppedError[T]) Is(target error) bool {
@@ -112,6 +118,7 @@ func (e *DroppedError[T]) Is(target error) bool {
 type EvictedError[T any] struct {
 	SubscriberID uuid.UUID
 	Message      T
+	Batch        message.Batch[T]
 	Err          error
 }
 
@@ -132,10 +139,11 @@ func (e *EvictedError[T]) Is(target error) bool {
 type ClosedError[T any] struct {
 	SubscriberID uuid.UUID
 	Message      T
+	Batch        message.Batch[T]
 }
 
 func (e *ClosedError[T]) Error() string {
-	return "subscriber " + e.SubscriberID.String() + ": unsubscribed, message dropped"
+	return "subscriber " + e.SubscriberID.String() + ": unsubscribed, " + describe(e.Batch) + " dropped"
 }
 
 func (e *ClosedError[T]) Is(target error) bool {
@@ -147,12 +155,13 @@ func (e *ClosedError[T]) Is(target error) bool {
 type StoreError[T any] struct {
 	SubscriberID uuid.UUID
 	Message      T
+	Batch        message.Batch[T]
 	Err          error
 	Cause        error
 }
 
 func (e *StoreError[T]) Error() string {
-	return "subscriber " + e.SubscriberID.String() + ": storing a lost message: " + e.Err.Error() + " (lost: " + e.Cause.Error() + ")"
+	return "subscriber " + e.SubscriberID.String() + ": storing a lost " + describe(e.Batch) + ": " + e.Err.Error() + " (lost: " + e.Cause.Error() + ")"
 }
 
 func (e *StoreError[T]) Unwrap() []error {
@@ -161,4 +170,13 @@ func (e *StoreError[T]) Unwrap() []error {
 
 func (e *StoreError[T]) Is(target error) bool {
 	return target == ErrStore
+}
+
+// describe names what an error is about: a message, or batch.
+func describe[T any](batch message.Batch[T]) string {
+	if batch == nil {
+		return "message"
+	}
+
+	return "batch of " + strconv.Itoa(batch.Len()) + " messages"
 }

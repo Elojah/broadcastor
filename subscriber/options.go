@@ -21,7 +21,8 @@ type unsubscription struct {
 	discard bool
 }
 
-// WithBuffer sets the subscriber's buffer size: Broadcast waits for it only once the buffer is full.
+// WithBuffer sets the subscriber's buffer size: Broadcast waits for it only once the buffer is full. A batch takes one
+// place, whatever its size.
 func WithBuffer[T any](buffer int) Option[T] {
 	return func(config *config[T]) {
 		config.buffer = buffer
@@ -49,6 +50,19 @@ func WithDeadLetters[T any](store Store[T]) Option[T] {
 func WithMiddleware[T any](middlewares ...Middleware[T]) Option[T] {
 	return func(config *config[T]) {
 		config.middlewares = append(config.middlewares, middlewares...)
+	}
+}
+
+// WithBatchHandler hands each batch the subscriber takes (Broadcastor.BroadcastBatch, or a holder's, such as
+// holder.NewBatch) to handle, wrapped in middlewares, the first one outermost, rather than each of its values to handle
+// or the loop body, through WithMiddleware's. handle gets the ctx its values would, and its error counts every value
+// as failed but is reported once. With SubscribeSeq, handle runs in the subscriber's goroutine, not the loop's. A nil
+// handle is ignored.
+func WithBatchHandler[T any](handle Handler[message.Batch[T]], middlewares ...Middleware[message.Batch[T]]) Option[T] {
+	return func(config *config[T]) {
+		if handle != nil {
+			config.batchHandler = chain(handle, middlewares...)
+		}
 	}
 }
 
@@ -97,7 +111,8 @@ func WithEvict[T any](evict func(err error) bool) Option[T] {
 
 // WithFilter skips every message keep rejects, before anything else, so the subscriber never wakes up for it, and it
 // is neither reported nor counted. keep runs in Broadcast's goroutine, so it may run concurrently. Several WithFilter
-// run in order until one rejects. A nil keep is ignored.
+// run in order until one rejects. keep sees each value of a batch once: of a batch it keeps part of, the subscriber
+// takes a batch from message.Batch.New holding what it keeps. A nil keep is ignored.
 func WithFilter[T any](keep func(msg T) bool) Option[T] {
 	return func(config *config[T]) {
 		if keep == nil {
@@ -134,10 +149,10 @@ func WithReplay[T any](replay iter.Seq[T]) Option[T] {
 	}
 }
 
-// WithHolder passes each message the subscriber takes to h, and each one h releases, once due, to handle and its
-// middlewares, or to the loop body. Once unsubscribed, the subscriber handles everything h still holds, or reports it
-// with WithUnsubscribeDiscard, so Shutdown waits for it. A message h has no room for is lost as a *DroppedError.
-// Replayed values skip h. Give each subscriber its own. A nil h is ignored.
+// WithHolder passes each message the subscriber takes to h, a batch one value at a time, and each one h releases, once
+// due, to handle and its middlewares, or to the loop body. Once unsubscribed, the subscriber handles everything h
+// still holds, or reports it with WithUnsubscribeDiscard, so Shutdown waits for it. A message h has no room for is lost
+// as a *DroppedError. Replayed values skip h. Give each subscriber its own. A nil h is ignored.
 func WithHolder[T any](h Holder[T]) Option[T] {
 	return func(config *config[T]) {
 		if h != nil {

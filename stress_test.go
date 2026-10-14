@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/elojah/broadcastor"
+	"github.com/elojah/broadcastor/holder"
 	"github.com/elojah/broadcastor/message"
 	"github.com/elojah/broadcastor/subscriber"
 )
@@ -28,14 +29,16 @@ const (
 	stressRounds       = 10
 	stressBroadcasters = 4
 	stressChurners     = 4
-	// stressOps is how many Broadcasts each broadcaster makes, and subscriptions each churner starts or ends, per
-	// round.
+	// stressOps is how many Broadcasts or BroadcastBatches each broadcaster makes, and subscriptions each churner
+	// starts or ends, per round.
 	stressOps = 200
+	// stressBatch bounds the values of a BroadcastBatch, and of a holder.NewBatch's batches.
+	stressBatch = 3
 	// stressLive bounds each churner's live subscriptions.
 	stressLive = 8
 	// stressTimeout bounds the timeouts and the pauses in handle, so that some messages time out or are dropped.
 	stressTimeout = 500 * time.Microsecond
-	// handle fails for every multiple of stressFailEvery.
+	// handle fails for every multiple of stressFailEvery, and the batch handler for every batch holding one.
 	stressFailEvery = 7
 	// stressReplay bounds what a subscriber replays: negative numbers, from -1 down.
 	stressReplay = 8
@@ -53,9 +56,9 @@ var (
 
 // TestStress interleaves every method at random from several goroutines, in real time so that timeouts race sends, over
 // rounds with a Broadcastor each. It checks that nothing panics, every goroutine returns once closed, no subscriber
-// gets a message twice, a subscriber gets every message broadcast while subscribed and none outside, its replay comes
-// first, Stats add up once idle, done gets the ID once after handle's last call, and nothing is handled, reported or
-// sent on done after Shutdown.
+// gets a message twice, a subscriber gets every message broadcast while subscribed and none outside, batched or not,
+// its replay comes first, Stats add up once idle, done gets the ID once after handle's last call, and nothing is
+// handled, reported or sent on done after Shutdown.
 func TestStress(t *testing.T) {
 	t.Parallel()
 
@@ -144,8 +147,13 @@ type stressSub struct {
 	mu     sync.Mutex
 	got    map[int]stressOutcome
 	failed map[int]bool
-	// evicted is the message whose loss evicted the subscriber, and evictions how many said so.
-	evicted, evictions int
+	// evicted are the messages whose loss evicted the subscriber, several for a batch, and evictions how many said so.
+	evicted   []int
+	evictions int
+	// fails holds whether handle, the loop body or the batch handler failed for each number it got, and batches counts
+	// the batch handler's calls.
+	fails   map[int]bool
+	batches uint64
 	// replay is how many numbers the subscriber replays, and yielded those yield returned true for.
 	replay  int
 	yielded []int
@@ -206,21 +214,38 @@ func (s *stress) run(ctx context.Context, t *testing.T) {
 	}
 }
 
-// broadcaster broadcasts stressOps unique numbers, each with a random delivery and timeout.
+// broadcaster broadcasts stressOps times unique numbers, alone or in a batch, each time with a random delivery and
+// timeout.
 func (s *stress) broadcaster(ctx context.Context, t *testing.T) {
 	t.Helper()
 	broadcasts := make([]stressBroadcast, 0, stressOps)
 	for range stressOps {
-		n := int(s.next.Add(1))
+		size := 1
+		if randN(3) == 0 {
+			size = 1 + randN(stressBatch)
+		}
+		last := int(s.next.Add(int64(size)))
+		var batch message.Slice[int]
+		for n := last - size + 1; n <= last; n++ {
+			batch.Add(n)
+		}
 		broadcastCtx, cancel, options := stressMessage(ctx)
 		start := s.clock.Add(1)
-		p := recovered(func() { s.b.Broadcast(broadcastCtx, n, options...) })
+		p := recovered(func() {
+			if size == 1 {
+				s.b.Broadcast(broadcastCtx, last, options...)
+			} else {
+				s.b.BroadcastBatch(broadcastCtx, &batch, options...)
+			}
+		})
 		end := s.clock.Add(1)
 		cancel()
 		if p != nil {
-			t.Errorf("Broadcast(%d) panicked: %v", n, p)
+			t.Errorf("broadcasting %v panicked: %v", batch, p)
 		}
-		broadcasts = append(broadcasts, stressBroadcast{number: n, start: start, end: end})
+		for _, n := range batch {
+			broadcasts = append(broadcasts, stressBroadcast{number: n, start: start, end: end})
+		}
 		// So that workers take turns with GOMAXPROCS 1 too.
 		runtime.Gosched()
 	}
@@ -262,7 +287,7 @@ func (s *stress) subscribe(ctx context.Context, t *testing.T) *stressSub {
 	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	sub := &stressSub{
 		seq: randN(3) == 0, cancel: cancel, shut: &s.shut, got: map[int]stressOutcome{}, failed: map[int]bool{},
-		done: make(chan uuid.UUID, 2),
+		fails: map[int]bool{}, done: make(chan uuid.UUID, 2),
 	}
 	options := []subscriber.Option[int]{
 		subscriber.WithBuffer[int](randN(4)),
@@ -289,10 +314,14 @@ func (s *stress) subscribe(ctx context.Context, t *testing.T) *stressSub {
 	if randN(2) == 0 {
 		options = append(options, subscriber.WithEvict[int](sub.evicter()))
 	}
-	if randN(3) == 0 {
-		options = append(options, subscriber.WithHolder[int](&stressHolder{
-			capped: capped{n: math.MaxInt, d: time.Duration(randN(int(stressTimeout)))}, sub: sub,
-		}))
+	switch d := time.Duration(randN(int(stressTimeout))); randN(6) {
+	case 0:
+		options = append(options, subscriber.WithHolder[int](&stressHolder{capped: capped{n: math.MaxInt, d: d}, sub: sub}))
+	case 1:
+		options = append(options, subscriber.WithHolder(holder.NewBatch[int](d, 1+randN(stressBatch))))
+	}
+	if randN(2) == 0 {
+		options = append(options, subscriber.WithBatchHandler(s.handleBatch(sub)))
 	}
 
 	var (
@@ -408,18 +437,10 @@ func (s *stress) unsubscribe(ctx context.Context, sub *stressSub, id uuid.UUID, 
 // of stressFailEvery. It takes the ID as an argument, since sub.id is set only once Subscribe returns.
 func (s *stress) handle(sub *stressSub) func(context.Context, uuid.UUID, int) error {
 	return func(ctx context.Context, id uuid.UUID, n int) error {
-		sub.record(n, stressHandled)
-		stressPause()
-		if sub.leave.CompareAndSwap(true, false) {
-			var options []subscriber.UnsubscribeOption
-			if randN(2) == 0 {
-				options = append(options, subscriber.WithUnsubscribeDiscard())
-			}
-			if err := s.unsubscribe(ctx, sub, id, options...); err != nil {
-				sub.unexpect(err)
-			}
-		}
-		if n%stressFailEvery == 0 {
+		fails := n%stressFailEvery == 0
+		sub.handled(n, fails)
+		s.pauseOrLeave(ctx, sub, id)
+		if fails {
 			return handleError(n)
 		}
 
@@ -427,12 +448,47 @@ func (s *stress) handle(sub *stressSub) func(context.Context, uuid.UUID, int) er
 	}
 }
 
+// handleBatch is handle for a batch: it fails for every value of a batch holding a multiple of stressFailEvery.
+func (s *stress) handleBatch(sub *stressSub) subscriber.Handler[message.Batch[int]] {
+	return func(ctx context.Context, id uuid.UUID, batch message.Batch[int]) error {
+		numbers := slices.Collect(batch.All())
+		fails := slices.ContainsFunc(numbers, func(n int) bool { return n%stressFailEvery == 0 })
+		for _, n := range numbers {
+			sub.handled(n, fails)
+		}
+		sub.mu.Lock()
+		sub.batches++
+		sub.mu.Unlock()
+		s.pauseOrLeave(ctx, sub, id)
+		if fails {
+			return stressBatchError(numbers)
+		}
+
+		return nil
+	}
+}
+
+// pauseOrLeave pauses now and then, and unsubscribes the subscriber once sub.leave is set.
+func (s *stress) pauseOrLeave(ctx context.Context, sub *stressSub, id uuid.UUID) {
+	stressPause()
+	if sub.leave.CompareAndSwap(true, false) {
+		var options []subscriber.UnsubscribeOption
+		if randN(2) == 0 {
+			options = append(options, subscriber.WithUnsubscribeDiscard())
+		}
+		if err := s.unsubscribe(ctx, sub, id, options...); err != nil {
+			sub.unexpect(err)
+		}
+	}
+}
+
 // loop ranges over seq, doing what handle does, until sub.leave is set.
 func (s *stress) loop(sub *stressSub, seq iter.Seq2[int, func(error)]) {
 	for n, fail := range seq {
-		sub.record(n, stressHandled)
+		fails := n%stressFailEvery == 0
+		sub.handled(n, fails)
 		stressPause()
-		if n%stressFailEvery == 0 {
+		if fails {
 			fail(handleError(n))
 		}
 		if sub.leave.Load() {
@@ -557,6 +613,14 @@ func (sub *stressSub) replayed(yield func(int) bool) {
 	}
 }
 
+// handled records that handle, the loop body or the batch handler got n, and whether it fails for it.
+func (sub *stressSub) handled(n int, fails bool) {
+	sub.record(n, stressHandled)
+	sub.mu.Lock()
+	defer sub.mu.Unlock()
+	sub.fails[n] = fails
+}
+
 // record records that the subscriber got n, handled or reported as outcome.
 func (sub *stressSub) record(n int, outcome stressOutcome) {
 	sub.checkShut(n)
@@ -582,27 +646,43 @@ func (sub *stressSub) record(n int, outcome stressOutcome) {
 // report is the subscriber's error handler.
 func (sub *stressSub) report(_ context.Context, err error) {
 	var (
-		failed  handleError
-		evicted *subscriber.EvictedError[int]
-		closed  *subscriber.ClosedError[int]
-		timeout *subscriber.TimeoutError[int]
-		dropped *subscriber.DroppedError[int]
+		failed      handleError
+		batchFailed stressBatchError
+		evicted     *subscriber.EvictedError[int]
+		closed      *subscriber.ClosedError[int]
+		timeout     *subscriber.TimeoutError[int]
+		dropped     *subscriber.DroppedError[int]
+		numbers     []int
+		outcome     stressOutcome
 	)
 	// Then recorded as the timeout or drop it wraps.
 	if errors.As(err, &evicted) {
-		sub.evict(evicted.Message)
+		sub.evict(stressNumbers(evicted.Message, evicted.Batch))
 	}
 	switch {
 	case errors.As(err, &failed):
 		sub.fail(int(failed))
+
+		return
+	case errors.As(err, &batchFailed):
+		for _, n := range batchFailed {
+			sub.fail(n)
+		}
+
+		return
 	case errors.As(err, &closed):
-		sub.record(closed.Message, stressClosed)
+		numbers, outcome = stressNumbers(closed.Message, closed.Batch), stressClosed
 	case errors.As(err, &timeout):
-		sub.record(timeout.Message, stressTimedOut)
+		numbers, outcome = stressNumbers(timeout.Message, timeout.Batch), stressTimedOut
 	case errors.As(err, &dropped):
-		sub.record(dropped.Message, stressDropped)
+		numbers, outcome = stressNumbers(dropped.Message, dropped.Batch), stressDropped
 	default:
 		sub.unexpect(err)
+
+		return
+	}
+	for _, n := range numbers {
+		sub.record(n, outcome)
 	}
 }
 
@@ -637,7 +717,7 @@ func (sub *stressSub) evicter() func(error) bool {
 		}
 	case 1:
 		sub.evictOn = "handle's errors"
-		pick = func(err error) bool { return errors.As(err, new(handleError)) }
+		pick = func(err error) bool { return errors.As(err, new(handleError)) || errors.As(err, new(stressBatchError)) }
 	default:
 		// Called from several goroutines at once.
 		sub.evictOn = fmt.Sprintf("error %d", k)
@@ -653,12 +733,12 @@ func (sub *stressSub) evicter() func(error) bool {
 	}
 }
 
-// evict records that the loss of n evicted the subscriber.
-func (sub *stressSub) evict(n int) {
+// evict records that the loss of numbers, one message or a batch, evicted the subscriber.
+func (sub *stressSub) evict(numbers []int) {
 	sub.mu.Lock()
 	defer sub.mu.Unlock()
 	if sub.evictions++; sub.evictions == 1 {
-		sub.evicted = n
+		sub.evicted = numbers
 	}
 }
 
@@ -721,10 +801,10 @@ func (sub *stressSub) problems(broadcasts []stressBroadcast, byNumber map[int]st
 			len(extra), first(extra), byNumber[extra[0]]))
 	}
 
-	// handle or the loop body failed for every multiple of stressFailEvery it got.
+	// handle, the loop body or the batch handler failed for every number it got and said it failed for.
 	var wrongFailures []int
 	for n, outcome := range sub.got {
-		if fails := outcome == stressHandled && n%stressFailEvery == 0; fails != sub.failed[n] {
+		if fails := outcome == stressHandled && sub.fails[n]; fails != sub.failed[n] {
 			wrongFailures = append(wrongFailures, n)
 		}
 	}
@@ -747,13 +827,16 @@ func (sub *stressSub) left(byNumber map[int]stressBroadcast, closing int64) int6
 	if sub.evictions == 0 {
 		return leaving
 	}
-	// Evicted by that message's Broadcast or handle, once the Broadcast started.
-	if b, ok := byNumber[sub.evicted]; ok {
-		return min(leaving, b.start)
+	// Evicted by those messages' Broadcast or handle, once a Broadcast of one started, or by a replayed value.
+	for _, n := range sub.evicted {
+		b, ok := byNumber[n]
+		if !ok {
+			return min(leaving, sub.subscribing)
+		}
+		leaving = min(leaving, b.start)
 	}
 
-	// Evicted by a replayed value.
-	return min(leaving, sub.subscribing)
+	return leaving
 }
 
 // optionProblems checks what done and the replay got. sub.mu must be held.
@@ -794,7 +877,7 @@ func statsMismatch(stats []subscriber.Stats, subs map[uuid.UUID]*stressSub) stri
 		for _, outcome := range sub.got {
 			counts[outcome]++
 		}
-		failed := uint64(len(sub.failed))
+		failed, batches := uint64(len(sub.failed)), sub.batches
 		sub.mu.Unlock()
 
 		// Nothing queued, and HandleTime cannot be known.
@@ -806,6 +889,7 @@ func statsMismatch(stats []subscriber.Stats, subs map[uuid.UUID]*stressSub) stri
 			Failed:       failed,
 			TimedOut:     counts[stressTimedOut],
 			Dropped:      counts[stressDropped],
+			Batches:      batches,
 			HandleTime:   got.HandleTime,
 		}
 		if got != want || counts[stressClosed] != 0 {
@@ -831,6 +915,22 @@ func (h *stressHolder) Hold(m message.Message[int], now time.Time) (int, bool) {
 	}
 
 	return h.capped.Hold(m, now)
+}
+
+// stressBatchError is the batch handler's error, for a batch of these numbers.
+type stressBatchError []int
+
+func (e stressBatchError) Error() string {
+	return fmt.Sprintf("handling %v failed", []int(e))
+}
+
+// stressNumbers returns the numbers an error is about: msg, or those of batch if not nil.
+func stressNumbers(msg int, batch message.Batch[int]) []int {
+	if batch == nil {
+		return []int{msg}
+	}
+
+	return slices.Collect(batch.All())
 }
 
 // stressMessage returns ctx and options for a Broadcast: a random delivery, and a timeout on the message, on ctx, or

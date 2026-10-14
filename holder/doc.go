@@ -3,8 +3,9 @@
 //
 //	id, err := b.Subscribe(ctx, handle, subscriber.WithHolder(holder.NewLatest[float64](time.Second)))
 //
-// Reduce reduces the messages of a window to fewer, NewLatest to the newest only, and Reorder sorts them. A window
-// starts when the subscriber takes its first message, and ends d later, or as soon as the subscriber is unsubscribed.
+// Reduce reduces the messages of a window to fewer, NewLatest to the newest only, Reorder sorts them, and Batch gathers
+// them into one batch, for the subscriber's batch handler, ending a window early once it holds n. A window starts when
+// the subscriber takes its first message, and ends d later, or as soon as the subscriber is unsubscribed.
 // Jitter has no windows: it holds each message for d, sorted with those it holds. Each holder keeps state, so give each
 // subscriber its own.
 package holder

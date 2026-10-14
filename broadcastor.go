@@ -138,36 +138,29 @@ func (b *Broadcastor[T]) Shutdown(ctx context.Context) error {
 // out, reporting why. A ready subscriber takes msg even then. ctx never reaches handle or the error handlers, but
 // async sends keep using it after Broadcast returns.
 func (b *Broadcastor[T]) Broadcast(ctx context.Context, msg T, options ...message.Option[T]) int {
-	var (
-		config = message.NewConfig(options...)
-		n      int
-		// Whether each parallel send was taken.
-		pending []<-chan bool
-	)
-	b.subscribers.Range(func(_, value any) bool {
-		s, ok := value.(*subscriber.Subscriber[T])
-		if !ok || (config.SubscriberFilter != nil && !config.SubscriberFilter(s.ID())) {
-			return true
-		}
-		taken, parallel := s.Deliver(ctx, msg, config)
-		if taken {
-			n++
-		}
-		if parallel != nil {
-			pending = append(pending, parallel)
-		}
+	config := message.NewConfig(options...)
 
-		return true
+	return b.each(config, func(s *subscriber.Subscriber[T]) (bool, <-chan bool) {
+		return s.Deliver(ctx, msg, config)
 	})
+}
 
-	// Each send gives up on its own, so this never waits for another Broadcast.
-	for _, taken := range pending {
-		if <-taken {
-			n++
-		}
+// BroadcastBatch is Broadcast for every value of batch at once, with one Config: a subscriber takes the whole batch in
+// one send, or misses it, and hands it to its batch handler (subscriber.WithBatchHandler), else to handle one value at
+// a time. Each value counts in Stats as a message, but an error about the whole batch is reported once, with the batch
+// in it.
+//
+// Every subscriber reads batch, at once and after an async BroadcastBatch returns, so batch must not change once
+// passed. An empty or nil batch is not sent.
+func (b *Broadcastor[T]) BroadcastBatch(ctx context.Context, batch message.Batch[T], options ...message.Option[T]) int {
+	if batch == nil || batch.Len() == 0 {
+		return 0
 	}
+	config := message.NewConfig(options...)
 
-	return n
+	return b.each(config, func(s *subscriber.Subscriber[T]) (bool, <-chan bool) {
+		return s.DeliverBatch(ctx, batch, config)
+	})
 }
 
 // Stats returns a snapshot of every subscriber's counters, in subscription order. An unsubscribed subscriber is left
@@ -212,6 +205,39 @@ func (b *Broadcastor[T]) add(ctx context.Context, options []subscriber.Option[T]
 	}
 
 	return s, nil
+}
+
+// each delivers to every subscriber config picks, and returns how many took it, waiting for each parallel send.
+func (b *Broadcastor[T]) each(config message.Config, deliver func(s *subscriber.Subscriber[T]) (bool, <-chan bool)) int {
+	var (
+		n int
+		// Whether each parallel send was taken.
+		pending []<-chan bool
+	)
+	b.subscribers.Range(func(_, value any) bool {
+		s, ok := value.(*subscriber.Subscriber[T])
+		if !ok || (config.SubscriberFilter != nil && !config.SubscriberFilter(s.ID())) {
+			return true
+		}
+		taken, parallel := deliver(s)
+		if taken {
+			n++
+		}
+		if parallel != nil {
+			pending = append(pending, parallel)
+		}
+
+		return true
+	})
+
+	// Each send gives up on its own, so this never waits for another Broadcast.
+	for _, taken := range pending {
+		if <-taken {
+			n++
+		}
+	}
+
+	return n
 }
 
 // remove deletes the subscriber and unsubscribes it, or returns false if there is none. Only the deleter unsubscribes,
