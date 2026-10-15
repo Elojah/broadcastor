@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner.svg" alt="One source sending the same message to every subscriber at once" width="360">
+  <img src="assets/logo.png" alt="broadcastor" width="180">
 </p>
 
 # broadcastor
