@@ -3,72 +3,36 @@ package main
 import (
 	"context"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"sync"
 	"sync/atomic"
 
-	"github.com/simonvetter/modbus"
+	"github.com/elojah/sunspec/modbus"
 )
 
-var _ modbus.RequestHandler = (*plc)(nil)
+var _ modbus.Handler = (*plc)(nil)
 
 // plc simulates a PLC: input register temperatureRegister holds its temperature, and coil fanCoil drives its fan. Each
 // read of the register returns its next reading, then the last one again. It answers its first write with exception 6,
-// server device busy, as a PLC starting up does, and never answers its third, nor any later request on that connection,
-// as if it were gone. The server calls it from a goroutine per connection.
+// server device busy, as a PLC starting up does, and never answers its third, as if it were gone, until the server
+// stops. The server calls it from a goroutine per connection.
 type plc struct {
+	// The fan's coil.
+	*modbus.Memory
+
 	mu       sync.Mutex
 	readings []uint16
 	writes   atomic.Int64
-	fan      atomic.Bool
-	// stopped ends the write the PLC never answers.
-	stopped chan struct{}
 }
 
 func newPLC(readings []uint16) *plc {
-	return &plc{readings: readings, stopped: make(chan struct{})}
+	return &plc{Memory: modbus.NewMemory(modbus.Tables{Coils: make([]bool, 1)}), readings: readings}
 }
 
-// HandleCoils reads or writes the fan.
-func (p *plc) HandleCoils(req *modbus.CoilsRequest) ([]bool, error) {
-	if req.Addr != fanCoil || req.Quantity != 1 {
-		return nil, modbus.ErrIllegalDataAddress
-	}
-	if !req.IsWrite {
-		return []bool{p.fan.Load()}, nil
-	}
-	switch p.writes.Add(1) {
-	case 1:
-		fmt.Println("plc: busy")
-
-		return nil, modbus.ErrServerDeviceBusy
-	case 3:
-		// The server reads the connection's next request only once this returns, so it answers none until the PLC
-		// stops. ErrProtocolError then closes the connection without an answer.
-		<-p.stopped
-
-		return nil, modbus.ErrProtocolError
-	}
-	p.fan.Store(req.Args[0])
-
-	return nil, nil
-}
-
-// HandleDiscreteInputs refuses every request: the PLC has none.
-func (p *plc) HandleDiscreteInputs(*modbus.DiscreteInputsRequest) ([]bool, error) {
-	return nil, modbus.ErrIllegalFunction
-}
-
-// HandleHoldingRegisters refuses every request: the PLC has none.
-func (p *plc) HandleHoldingRegisters(*modbus.HoldingRegistersRequest) ([]uint16, error) {
-	return nil, modbus.ErrIllegalFunction
-}
-
-// HandleInputRegisters returns the temperature.
-func (p *plc) HandleInputRegisters(req *modbus.InputRegistersRequest) ([]uint16, error) {
-	if req.Addr != temperatureRegister || req.Quantity != 1 {
+// ReadRegisters returns the temperature.
+func (p *plc) ReadRegisters(_ context.Context, _ uint8, table modbus.Table, address, quantity uint16) ([]uint16, error) {
+	if table != modbus.InputRegisters || address != temperatureRegister || quantity != 1 {
 		return nil, modbus.ErrIllegalDataAddress
 	}
 	p.mu.Lock()
@@ -81,33 +45,38 @@ func (p *plc) HandleInputRegisters(req *modbus.InputRegistersRequest) ([]uint16,
 	return []uint16{tenths}, nil
 }
 
-// servePLC serves p over Modbus TCP on a free local port, and returns its address and stop, which ends the write p
-// never answers and stops the server. The server does not say which port it took, so servePLC picks a free one first.
+// WriteBits writes the fan.
+func (p *plc) WriteBits(ctx context.Context, unit uint8, address uint16, values []bool) error {
+	switch p.writes.Add(1) {
+	case 1:
+		fmt.Println("plc: busy")
+
+		return modbus.ErrServerDeviceBusy
+	case 3:
+		fmt.Println("plc: not answering")
+		// The server reads the connection's next request only once this returns, and cancels ctx as it stops.
+		<-ctx.Done()
+
+		return ctx.Err()
+	}
+
+	return p.Memory.WriteBits(ctx, unit, address, values)
+}
+
+// servePLC serves p over Modbus TCP on a free local port, and returns its address and stop, which stops the server,
+// ending the write p never answers, and returns what it returned.
 func servePLC(ctx context.Context, p *plc) (string, func() error) {
 	l, err := new(net.ListenConfig).Listen(ctx, "tcp", "127.0.0.1:0")
 	if err != nil {
 		log.Fatal(err)
 	}
-	addr := l.Addr().String()
-	if err := l.Close(); err != nil {
-		log.Fatal(err)
-	}
+	serveCtx, cancel := context.WithCancel(ctx)
+	served := make(chan error, 1)
+	go func() { served <- modbus.Serve(serveCtx, l, p) }()
 
-	server, err := modbus.NewServer(&modbus.ServerConfiguration{
-		URL: "tcp://" + addr,
-		// It logs to stdout without one.
-		Logger: log.New(io.Discard, "", 0),
-	}, p)
-	if err != nil {
-		log.Fatal(err)
-	}
-	if err := server.Start(); err != nil {
-		log.Fatal(err)
-	}
+	return l.Addr().String(), func() error {
+		cancel()
 
-	return addr, func() error {
-		close(p.stopped)
-
-		return server.Stop()
+		return <-served
 	}
 }

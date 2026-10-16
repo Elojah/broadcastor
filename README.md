@@ -173,6 +173,21 @@ sink, in order, so that `Broadcast` never waits for it.
 A subscriber reconnects in place: `handle` or a middleware dials again, `middleware.Retry` retries, and the buffer
 keeps what comes meanwhile in order ([`10-reconnect`](examples/10-reconnect/main.go)).
 
+## Transports
+
+Each transport is a module of its own, at v0, so that only its users get its dependency. It takes a client you
+configure, rather than wrapping it.
+
+```sh
+go get github.com/elojah/broadcastor/transport/modbus
+```
+
+| Module | On | Gives |
+| --- | --- | --- |
+| [`transport/modbus`](transport/modbus) | [`github.com/elojah/sunspec/modbus`](https://github.com/elojah/sunspec) | `Poll`, broadcasting what a device reads, and `IsRetryable`, for `middleware.Retry` writing to one. |
+
+[`12-modbus`](examples/12-modbus/main.go) uses it.
+
 ## Examples
 
 [`examples/`](examples) holds runnable programs: `go run ./examples/01-basic`.
@@ -190,7 +205,7 @@ keeps what comes meanwhile in order ([`10-reconnect`](examples/10-reconnect/main
 | [`09-file`](examples/09-file/main.go) | Dead letters on disk with `store.File`, replayed after a restart. |
 | [`10-reconnect`](examples/10-reconnect/main.go) | A subscriber reconnecting in place, its buffer keeping order. |
 | [`11-mqtt`](examples/11-mqtt/main.go) | MQTT fanned out to a rule, a local store, and an uplink that stores and forwards. |
-| [`12-modbus`](examples/12-modbus/main.go) | A PLC polled over Modbus TCP, and a rule that retries and reconnects. |
+| [`12-modbus`](examples/12-modbus/main.go) | A PLC polled over Modbus TCP with `transport/modbus`, and a rule retrying a busy or silent PLC. |
 
 `11-mqtt` and `12-modbus` are modules of their own, to keep their dependencies out of the library's go.mod.
 `go run -C examples/11-mqtt .` needs an MQTT broker at `MQTT_ADDR` (`localhost:1883` by default). `12-modbus` simulates

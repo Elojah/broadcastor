@@ -11,6 +11,9 @@ README, plans in TODO.md.
   subscriber's, `report.go` in either. `inbox` owns the channel and its references, `counters` every counter.
 - `examples/11-mqtt` and `12-modbus` are modules of their own (`replace ../..`), to keep their dependencies out of
   go.mod. `go test ./...` skips them, `make` covers them.
+- `transport/*` are modules too, at v0, each adapting one client library that stays the user's: `transport/modbus` is
+  on `github.com/elojah/sunspec/modbus`. They never import `broadcastor`, but declare the `Broadcaster` they need.
+  Tags carry their path: `transport/modbus/v0.1.0`.
 
 ## Commands
 

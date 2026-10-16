@@ -6,7 +6,7 @@ func Example() {
 	// Output:
 	// plc: busy
 	// rule: poll 1, 21.5°C, fan off
-	// rule: reconnecting
+	// plc: not answering
 	// rule: poll 5, 30.5°C, fan on
 	// rule: poll 10, 28.4°C, fan off
 	// trend: poll 1, 21.5°C
