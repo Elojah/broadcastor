@@ -224,7 +224,7 @@ make benchcmp  # benchstat of main against the working tree
 make tinygo    # with TinyGo: run each example and build it for a Raspberry Pi Pico
 ```
 
-The library needs TinyGo 0.43 or later, a dev build until released: 0.42 can deadlock a `Close` racing `Subscribe`s
+The library needs TinyGo 0.43 or later: 0.42 can deadlock a `Close` racing `Subscribe`s
 ([tinygo#5692](https://github.com/tinygo-org/tinygo/issues/5692)). Under TinyGo, `PanicError.Stack` is nil, and the
 tests need Go, since they use `testing/synctest`.
 

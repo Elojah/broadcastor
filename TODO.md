@@ -8,7 +8,6 @@ reliability fix with a test that fails without it. The API follows semver since 
 
 - [ ] Measure what a subscriber costs in memory, idle and with `WithBuffer(n)`, under Go and TinyGo, for the README.
 - [ ] Document that `expvar.Publish("bus", expvar.Func(func() any { return b.Stats() }))` exposes `Stats`.
-- [ ] Once TinyGo 0.43.0 is out, install its `.deb` in CI instead of the dev image, and update the README.
 
 ## Mid-term
 
