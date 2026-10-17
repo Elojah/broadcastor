@@ -16,4 +16,5 @@ func Example() {
 	// link 2: 4
 	// link 2: 5
 	// link 2: closed
+	// reconnects: 1
 }

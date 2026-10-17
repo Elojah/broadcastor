@@ -8,6 +8,7 @@ import (
 	"iter"
 	"math"
 	"math/rand/v2"
+	"reflect"
 	"runtime"
 	"runtime/pprof"
 	"slices"
@@ -894,7 +895,7 @@ func statsMismatch(stats []subscriber.Stats, subs map[uint64]*stressSub) string 
 			Batches:      batches,
 			HandleTime:   got.HandleTime,
 		}
-		if got != want || counts[stressClosed] != 0 {
+		if !reflect.DeepEqual(got, want) || counts[stressClosed] != 0 {
 			return fmt.Sprintf("got Stats %+v, want %+v, with %d messages reported closed, want 0", got, want, counts[stressClosed])
 		}
 	}

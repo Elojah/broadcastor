@@ -25,6 +25,7 @@ type config[T any] struct {
 	asyncLimit          int
 	replay              iter.Seq[T]
 	holder              Holder[T]
+	counters            []*Counter
 
 	// batchHandler is WithBatchHandler's handle, wrapped in its middlewares.
 	batchHandler Handler[message.Batch[T]]
@@ -195,6 +196,18 @@ func WithDone[T any](ctx context.Context, done chan<- uint64) Option[T] {
 	return func(config *config[T]) {
 		if done != nil {
 			config.done = append(config.done, ctxchan{ctx: ctx, ch: done})
+		}
+	}
+}
+
+// WithCounters reports counters in the subscriber's Stats, in order, after those of earlier WithCounters. A counter
+// given to several subscribers is reported by each. A nil counter is ignored.
+func WithCounters[T any](counters ...*Counter) Option[T] {
+	return func(config *config[T]) {
+		for _, c := range counters {
+			if c != nil {
+				config.counters = append(config.counters, c)
+			}
 		}
 	}
 }

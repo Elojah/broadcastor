@@ -1,5 +1,5 @@
-// Package subscriber holds the subscriber options, Handler and Middleware, Store, Stats, the errors about messages, and
-// the Subscriber a Broadcastor manages.
+// Package subscriber holds the subscriber options, Handler and Middleware, Store, Stats and Counter, the errors about
+// messages, and the Subscriber a Broadcastor manages.
 package subscriber
 
 import (
