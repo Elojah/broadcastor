@@ -38,6 +38,8 @@ Breaking changes, kept for a major version.
   `NewBroadcastor[T]` as a func value.
 - [ ] `Shutdown` names the subscribers it still waits for once ctx is done, in a `*ShutdownError` matching
   `ctx.Err()`. Its godoc promises `ctx.Err()` itself, which `==` compares.
+- [x] A subscriber's own counters in `Stats` (`subscriber.WithCounters`). `Stats.Counters` is a slice, so `Stats` no
+  longer compares with `==`.
 
 ## Out of scope
 

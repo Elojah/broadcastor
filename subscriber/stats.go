@@ -38,6 +38,58 @@ type Stats struct {
 	HandleTime time.Duration
 	// Handling is how long handle has been running on the current message, 0 when idle.
 	Handling time.Duration
+
+	// Counters are the subscriber's own counters (WithCounters), in order, nil without any.
+	Counters []CounterValue
+}
+
+// CounterValue is a Counter's value in a Stats snapshot.
+type CounterValue struct {
+	Name  string
+	Value int64
+}
+
+// Counter is a value of the user's that the Stats of each subscriber it is given to report under its name
+// (WithCounters): a count handle or a middleware adds to, or a gauge it stores. It is safe for concurrent use.
+type Counter struct {
+	name  string
+	value atomic.Int64
+}
+
+// NewCounter returns a counter at 0, named name in Stats.
+func NewCounter(name string) *Counter {
+	return &Counter{name: name}
+}
+
+// Name returns the counter's name.
+func (c *Counter) Name() string {
+	return c.name
+}
+
+// Add adds delta to the counter and returns its new value.
+func (c *Counter) Add(delta int64) int64 {
+	return c.value.Add(delta)
+}
+
+// Store sets the counter to value.
+func (c *Counter) Store(value int64) {
+	c.value.Store(value)
+}
+
+// Load returns the counter's value.
+func (c *Counter) Load() int64 {
+	return c.value.Load()
+}
+
+// Counter returns the value of the first counter named name, and whether there is one.
+func (s Stats) Counter(name string) (int64, bool) {
+	for _, c := range s.Counters {
+		if c.Name == name {
+			return c.Value, true
+		}
+	}
+
+	return 0, false
 }
 
 // Stats returns a snapshot of the subscriber's counters.
@@ -57,7 +109,21 @@ func (s *Subscriber[T]) Stats() Stats {
 		Batches:      s.counters.batches.Load(),
 		HandleTime:   time.Duration(s.counters.handleTime.Load()),
 		Handling:     s.counters.handling(),
+		Counters:     snapshot(s.config.counters),
 	}
+}
+
+// snapshot returns the value of each counter, nil without any.
+func snapshot(counters []*Counter) []CounterValue {
+	if len(counters) == 0 {
+		return nil
+	}
+	values := make([]CounterValue, len(counters))
+	for i, c := range counters {
+		values[i] = CounterValue{Name: c.name, Value: c.Load()}
+	}
+
+	return values
 }
 
 // counters are what Stats reads, one method per event. They count values, n for a batch of n, each before the message

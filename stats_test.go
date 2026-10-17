@@ -2,6 +2,7 @@ package broadcastor_test
 
 import (
 	"context"
+	"reflect"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -236,6 +237,67 @@ func TestStats_AddUp(t *testing.T) {
 	})
 }
 
+// Stats report each subscriber's own counters, in order, as handle and its middlewares leave them.
+func TestSubscriberWithCounters(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := newBroadcastor[int](t)
+		calls := subscriber.NewCounter("calls")
+		last := subscriber.NewCounter("last")
+		shared := subscriber.NewCounter("shared")
+		count := func(next subscriber.Handler[int]) subscriber.Handler[int] {
+			return func(ctx context.Context, id uint64, msg int) error {
+				calls.Add(1)
+
+				return next(ctx, id, msg)
+			}
+		}
+		id := subscribe(t, b, func(context.Context, uint64, int) error {
+			shared.Add(1)
+
+			return nil
+		},
+			subscriber.WithMiddleware(count),
+			subscriber.WithMiddleware(func(next subscriber.Handler[int]) subscriber.Handler[int] {
+				return func(ctx context.Context, id uint64, msg int) error {
+					last.Store(int64(msg))
+
+					return next(ctx, id, msg)
+				}
+			}),
+			subscriber.WithCounters[int](calls, nil),
+			subscriber.WithCounters[int](last, shared),
+		)
+		sharingID := subscribe(t, b, func(context.Context, uint64, int) error { return nil },
+			subscriber.WithCounters[int](shared))
+		plainID := subscribe(t, b, func(context.Context, uint64, int) error { return nil })
+
+		for msg := 1; msg <= 3; msg++ {
+			b.Broadcast(t.Context(), msg)
+		}
+		synctest.Wait()
+
+		checkStats(t, b, id, subscriber.Stats{Delivered: 3, Handled: 3, Counters: []subscriber.CounterValue{
+			{Name: "calls", Value: 3}, {Name: "last", Value: 3}, {Name: "shared", Value: 3},
+		}})
+		checkStats(t, b, sharingID, subscriber.Stats{Delivered: 3, Handled: 3, Counters: []subscriber.CounterValue{
+			{Name: "shared", Value: 3},
+		}})
+		checkStats(t, b, plainID, subscriber.Stats{Delivered: 3, Handled: 3})
+		stats := statsOf(t, b, id)
+		if got, ok := stats.Counter("last"); !ok || got != 3 {
+			t.Errorf("Counter(%q) = %d, %t, want 3, true", "last", got, ok)
+		}
+		if got, ok := stats.Counter("unknown"); ok {
+			t.Errorf("Counter(%q) = %d, true, want false", "unknown", got)
+		}
+
+		unsubscribeAll(t, b, id, sharingID, plainID)
+		synctest.Wait()
+	})
+}
+
 // statsOf returns the Stats of subscriber id. It may be called from any goroutine.
 func statsOf[T any](t *testing.T, b *broadcastor.Broadcastor[T], id uint64) subscriber.Stats {
 	t.Helper()
@@ -253,7 +315,7 @@ func statsOf[T any](t *testing.T, b *broadcastor.Broadcastor[T], id uint64) subs
 func checkStats[T any](t *testing.T, b *broadcastor.Broadcastor[T], id uint64, want subscriber.Stats) {
 	t.Helper()
 	want.SubscriberID = id
-	if got := statsOf(t, b, id); got != want {
+	if got := statsOf(t, b, id); !reflect.DeepEqual(got, want) {
 		t.Errorf("got Stats %+v, want %+v", got, want)
 	}
 }

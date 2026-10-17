@@ -1,8 +1,8 @@
 // A forwarder sends each message over a link, which goes down on 3. Two middlewares of its own reconnect it in place:
 // disconnect finds the link down after 3 failed sends in a row, then reconnect dials a new one, with
 // middleware.RetryPolicy's backoff, and sends 3 again. middleware.Retry retries the sends until then. Meanwhile, 4 and
-// 5 wait in the buffer, so the new link sends 3, 4 then 5, in order. subscriber.WithDone tells main when to close the
-// last link.
+// 5 wait in the buffer, so the new link sends 3, 4 then 5, in order. reconnect counts its reconnections in a
+// subscriber.Counter, which the forwarder's Stats report. subscriber.WithDone tells main when to close the last link.
 //
 // Dialling waits until main brings the network back up, standing in for a slow reconnection.
 package main
@@ -30,7 +30,8 @@ func main() {
 	ctx := context.Background()
 	b := broadcastor.NewBroadcastor[int]()
 	n := &network{dialling: make(chan struct{}), up: make(chan struct{})}
-	closeLink := subscribeForwarder(ctx, b, n)
+	reconnects := subscriber.NewCounter("reconnects")
+	closeLink := subscribeForwarder(ctx, b, n, reconnects)
 
 	for msg := 1; msg <= 3; msg++ {
 		b.Broadcast(ctx, msg)
@@ -45,11 +46,12 @@ func main() {
 		log.Fatal(err)
 	}
 	closeLink()
+	fmt.Println("reconnects:", reconnects.Load())
 }
 
-// subscribeForwarder subscribes the forwarder, which sends each message over its link. It returns a func that closes the
-// last link once the forwarder is done.
-func subscribeForwarder(ctx context.Context, b *broadcastor.Broadcastor[int], n *network) func() {
+// subscribeForwarder subscribes the forwarder, which sends each message over its link and counts its reconnections in
+// reconnects. It returns a func that closes the last link once the forwarder is done.
+func subscribeForwarder(ctx context.Context, b *broadcastor.Broadcastor[int], n *network, reconnects *subscriber.Counter) func() {
 	// Only the forwarder's goroutine uses it, in handle and redial, and the returned func once done has the ID, so it
 	// needs no lock.
 	l := n.dial()
@@ -71,12 +73,13 @@ func subscribeForwarder(ctx context.Context, b *broadcastor.Broadcastor[int], n 
 			// Until the link is back up: the subscription's ctx bounds it.
 			reconnect[int](redial, middleware.RetryPolicy{
 				Attempts: math.MaxInt, Delay: time.Millisecond, Multiplier: 2, MaxDelay: time.Second,
-			}),
+			}, reconnects),
 			disconnect[int](3),
 		),
 		// What Broadcast hands the forwarder while it reconnects waits there, in order.
 		subscriber.WithBuffer[int](8),
 		subscriber.WithDone[int](ctx, done),
+		subscriber.WithCounters[int](reconnects),
 	)
 	if err != nil {
 		log.Fatal(err)
@@ -111,8 +114,11 @@ func disconnect[T any](n int) subscriber.Middleware[T] {
 	}
 }
 
-// reconnect calls redial once next returns errDisconnected, as policy retries it, then hands next the message again.
-func reconnect[T any](redial func(ctx context.Context) error, policy middleware.RetryPolicy) subscriber.Middleware[T] {
+// reconnect calls redial once next returns errDisconnected, as policy retries it, counts it in reconnects once it
+// succeeds, then hands next the message again.
+func reconnect[T any](
+	redial func(ctx context.Context) error, policy middleware.RetryPolicy, reconnects *subscriber.Counter,
+) subscriber.Middleware[T] {
 	return func(next subscriber.Handler[T]) subscriber.Handler[T] {
 		return func(ctx context.Context, id uint64, msg T) error {
 			if err := next(ctx, id, msg); !errors.Is(err, errDisconnected) {
@@ -121,6 +127,7 @@ func reconnect[T any](redial func(ctx context.Context) error, policy middleware.
 			if err := policy.Do(ctx, redial); err != nil {
 				return err
 			}
+			reconnects.Add(1)
 
 			return next(ctx, id, msg)
 		}

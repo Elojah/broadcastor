@@ -173,8 +173,8 @@ sink, in order, so that `Broadcast` never waits for it.
 - `subscriber.WithEvict(evict)` unsubscribes a subscriber on the first error `evict` picks, such as a timeout.
 - `subscriber.WithDone(ctx, done)` sends the subscriber's ID once it is done with what it took.
 - `Shutdown(ctx)` is `Close`, then waits until every subscriber is done, or ctx is. Call it on SIGTERM.
-- `Stats` returns each subscriber's counters: queued, handled, failed, lost, held, and how long `handle` has been
-  running, for a watchdog.
+- `Stats` returns each subscriber's counters: queued, handled, failed, lost, held, how long `handle` has been
+  running, and its own (`subscriber.WithCounters`), such as a middleware's reconnections, for a watchdog.
 
 A subscriber reconnects in place: `handle` or a middleware dials again, `middleware.Retry` retries, and the buffer
 keeps what comes meanwhile in order ([`10-reconnect`](examples/10-reconnect/main.go)).
