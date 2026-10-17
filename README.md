@@ -52,7 +52,7 @@ for msg, fail := range seq {
 | [`middleware`](https://pkg.go.dev/github.com/elojah/broadcastor/middleware) | `Recover`, `History`, `MaxAge`, `WrapError`, `Retry`. |
 | [`store`](https://pkg.go.dev/github.com/elojah/broadcastor/store) | Queues for dead letters: `Ring` in memory, `File` on disk, `Drain`, `Enqueue`, `Filter`. |
 | [`holder`](https://pkg.go.dev/github.com/elojah/broadcastor/holder) | Holders: `Reduce`, `NewLatest`, `Reorder`, `Jitter`, `Batch`. |
-| [`filter`](https://pkg.go.dev/github.com/elojah/broadcastor/filter) | Stateful filters: `Changed`, `Every`. |
+| [`filter`](https://pkg.go.dev/github.com/elojah/broadcastor/filter) | Stateful filters: `Changed`, `Every`, per key with `WithKey`, with `WithHeartbeat` and `WithHeartbeatCount`. |
 
 ## Delivery
 
@@ -79,6 +79,12 @@ its own:
 // Once the temperature has moved by half a degree since the last one passed, and at most once a minute.
 id, err := b.Subscribe(ctx, display, subscriber.WithFilter(filter.Changed(func(prev, next float64) bool { return math.Abs(next-prev) >= 0.5 })))
 id, err = b.Subscribe(ctx, uplink, subscriber.WithFilter(filter.Every[float64](time.Minute)))
+// The same deadband for each sensor apart, and each one's reading at least once an hour, however steady.
+id, err = sensors.Subscribe(ctx, trend, subscriber.WithFilter(filter.Changed(
+	func(prev, next reading) bool { return math.Abs(next.Celsius-prev.Celsius) >= 0.5 },
+	filter.WithKey(func(r reading) string { return r.Sensor }),
+	filter.WithHeartbeat[reading](time.Hour),
+)))
 ```
 
 ## Errors
