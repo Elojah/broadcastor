@@ -7,7 +7,7 @@ import (
 	"testing"
 	"testing/synctest"
 
-	"github.com/elojah/broadcastor/subscriber"
+	"github.com/elojah/broadcastor/v2/subscriber"
 )
 
 // SubscribeSeq yields every message the subscriber takes, in order, and breaking out of the loop unsubscribes it.

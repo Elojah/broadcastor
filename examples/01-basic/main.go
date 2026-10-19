@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/elojah/broadcastor"
+	"github.com/elojah/broadcastor/v2"
 )
 
 func main() {

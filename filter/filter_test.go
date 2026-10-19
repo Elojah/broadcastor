@@ -8,7 +8,7 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/elojah/broadcastor/filter"
+	"github.com/elojah/broadcastor/v2/filter"
 )
 
 // Changed passes the first value, then each one at least 5 from the last one it passed: 15 passes although 12 and 14

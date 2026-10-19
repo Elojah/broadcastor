@@ -1,7 +1,7 @@
 # CLAUDE.md
 
-`github.com/elojah/broadcastor`, a generic in-process fan-out. Go 1.26.1, no dependency. Behaviour is in godoc and the
-README, plans in TODO.md.
+`github.com/elojah/broadcastor/v2`, a generic in-process fan-out. Go 1.26.1, no dependency. Behaviour is in godoc and
+the README, plans in TODO.md.
 
 ## Layout
 

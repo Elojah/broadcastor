@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/elojah/broadcastor/message"
+	"github.com/elojah/broadcastor/v2/message"
 )
 
 // lose reports m, lost or failed with err, and evicts the subscriber if evict picks err. Only the call whose remove

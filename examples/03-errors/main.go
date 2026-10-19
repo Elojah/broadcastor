@@ -13,9 +13,9 @@ import (
 	"log"
 	"sync"
 
-	"github.com/elojah/broadcastor"
-	"github.com/elojah/broadcastor/middleware"
-	"github.com/elojah/broadcastor/subscriber"
+	"github.com/elojah/broadcastor/v2"
+	"github.com/elojah/broadcastor/v2/middleware"
+	"github.com/elojah/broadcastor/v2/subscriber"
 )
 
 var errNegative = errors.New("negative")

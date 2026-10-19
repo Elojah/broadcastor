@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/elojah/broadcastor/subscriber"
+	"github.com/elojah/broadcastor/v2/subscriber"
 )
 
 // Ring is a fixed-size in-memory Queue. Put never waits nor fails: when full, it drops the oldest entry, even one Next

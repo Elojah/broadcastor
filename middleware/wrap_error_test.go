@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/elojah/broadcastor/middleware"
-	"github.com/elojah/broadcastor/subscriber"
+	"github.com/elojah/broadcastor/v2/middleware"
+	"github.com/elojah/broadcastor/v2/subscriber"
 )
 
 // WrapError makes an error a *HandleError with the subscriber and the message, and leaves success alone.

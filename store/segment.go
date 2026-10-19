@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/elojah/broadcastor/subscriber"
+	"github.com/elojah/broadcastor/v2/subscriber"
 )
 
 // A File's directory holds its segments and its ack file. A segment, named after the position of its first record,

@@ -10,9 +10,9 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/elojah/broadcastor"
-	"github.com/elojah/broadcastor/message"
-	"github.com/elojah/broadcastor/subscriber"
+	"github.com/elojah/broadcastor/v2"
+	"github.com/elojah/broadcastor/v2/message"
+	"github.com/elojah/broadcastor/v2/subscriber"
 )
 
 // Once its ctx is done, a subscriber is unsubscribed: Broadcast no longer reaches it, and its goroutine ends.

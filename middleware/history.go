@@ -3,7 +3,7 @@ package middleware
 import (
 	"context"
 
-	"github.com/elojah/broadcastor/subscriber"
+	"github.com/elojah/broadcastor/v2/subscriber"
 )
 
 // History puts every message the wrapped handler handles in s, with a nil Err. With subscriber.WithDeadLetters(s) too,

@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/elojah/broadcastor"
-	"github.com/elojah/broadcastor/subscriber"
+	"github.com/elojah/broadcastor/v2"
+	"github.com/elojah/broadcastor/v2/subscriber"
 )
 
 var errEmpty = errors.New("empty message")

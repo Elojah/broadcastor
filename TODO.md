@@ -2,7 +2,7 @@
 
 The library mostly runs on IoT gateways: little memory, sensors that repeat themselves, an uplink that drops out, power
 that may go at any time. No new dependency in the library's go.mod. A performance change comes with `make benchcmp`, a
-reliability fix with a test that fails without it. The API follows semver since v1.0.0: a breaking change waits for v2.
+reliability fix with a test that fails without it. The API follows semver: a breaking change waits for v3.
 
 ## Short-term
 
@@ -28,7 +28,7 @@ reliability fix with a test that fails without it. The API follows semver since 
 - [ ] Run the examples on TinyGo's `cortex-m-qemu` target in `make tinygo-run`. CI then needs `qemu-system-arm`.
 - [ ] Only once someone needs it: an observer hook on the counters, for a `broadcastor/otel` module.
 
-## v2
+## v3
 
 Breaking changes, kept for a major version.
 

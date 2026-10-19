@@ -3,7 +3,7 @@ package holder
 import (
 	"time"
 
-	"github.com/elojah/broadcastor/message"
+	"github.com/elojah/broadcastor/v2/message"
 )
 
 // Reduce is a subscriber.Holder that reduces the messages of a window as they come, then releases what is left, in

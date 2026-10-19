@@ -5,9 +5,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/elojah/broadcastor/middleware"
-	"github.com/elojah/broadcastor/store"
-	"github.com/elojah/broadcastor/subscriber"
+	"github.com/elojah/broadcastor/v2/middleware"
+	"github.com/elojah/broadcastor/v2/store"
+	"github.com/elojah/broadcastor/v2/subscriber"
 )
 
 var errPut = errors.New("put failed")

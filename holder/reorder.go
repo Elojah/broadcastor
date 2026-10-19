@@ -5,7 +5,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/elojah/broadcastor/message"
+	"github.com/elojah/broadcastor/v2/message"
 )
 
 // Reorder is a subscriber.Holder that holds every message of a window, then releases them sorted once the window

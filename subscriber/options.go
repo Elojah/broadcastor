@@ -5,7 +5,7 @@ import (
 	"iter"
 	"time"
 
-	"github.com/elojah/broadcastor/message"
+	"github.com/elojah/broadcastor/v2/message"
 )
 
 // Option configures a subscriber, when passed to Subscribe or SubscribeSeq.

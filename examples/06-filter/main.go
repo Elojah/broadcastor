@@ -13,9 +13,9 @@ import (
 	"math"
 	"time"
 
-	"github.com/elojah/broadcastor"
-	"github.com/elojah/broadcastor/filter"
-	"github.com/elojah/broadcastor/subscriber"
+	"github.com/elojah/broadcastor/v2"
+	"github.com/elojah/broadcastor/v2/filter"
+	"github.com/elojah/broadcastor/v2/subscriber"
 )
 
 func main() {

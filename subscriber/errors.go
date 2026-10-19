@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/elojah/broadcastor/message"
+	"github.com/elojah/broadcastor/v2/message"
 )
 
 // Sentinels matched by the error types below with errors.Is, which does not need T. The errors the library makes

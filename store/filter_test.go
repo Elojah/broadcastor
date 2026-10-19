@@ -6,8 +6,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/elojah/broadcastor/store"
-	"github.com/elojah/broadcastor/subscriber"
+	"github.com/elojah/broadcastor/v2/store"
+	"github.com/elojah/broadcastor/v2/subscriber"
 )
 
 // Filter puts only the records keep accepts, returning Put's error, and ignores the others.

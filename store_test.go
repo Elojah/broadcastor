@@ -11,10 +11,10 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/elojah/broadcastor"
-	"github.com/elojah/broadcastor/message"
-	"github.com/elojah/broadcastor/middleware"
-	"github.com/elojah/broadcastor/subscriber"
+	"github.com/elojah/broadcastor/v2"
+	"github.com/elojah/broadcastor/v2/message"
+	"github.com/elojah/broadcastor/v2/middleware"
+	"github.com/elojah/broadcastor/v2/subscriber"
 )
 
 var errPut = errors.New("put failed")

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/elojah/broadcastor/holder"
-	"github.com/elojah/broadcastor/message"
+	"github.com/elojah/broadcastor/v2/holder"
+	"github.com/elojah/broadcastor/v2/message"
 )
 
 // latestByTens keeps the latest message of each ten, in place, so that 11, 12 and 13 share a slot.

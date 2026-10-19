@@ -13,10 +13,10 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/elojah/broadcastor"
-	"github.com/elojah/broadcastor/filter"
-	"github.com/elojah/broadcastor/message"
-	"github.com/elojah/broadcastor/subscriber"
+	"github.com/elojah/broadcastor/v2"
+	"github.com/elojah/broadcastor/v2/filter"
+	"github.com/elojah/broadcastor/v2/message"
+	"github.com/elojah/broadcastor/v2/subscriber"
 )
 
 // deadlockTimeout bounds every wait, so a deadlock fails instead of hanging. In a synctest bubble, it fires exactly

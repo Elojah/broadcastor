@@ -3,7 +3,7 @@ package store
 import (
 	"context"
 
-	"github.com/elojah/broadcastor/subscriber"
+	"github.com/elojah/broadcastor/v2/subscriber"
 )
 
 // Queue is a subscriber.Store that a single reader reads back, oldest first. Put may be called concurrently with it.

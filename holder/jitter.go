@@ -4,7 +4,7 @@ import (
 	"cmp"
 	"time"
 
-	"github.com/elojah/broadcastor/message"
+	"github.com/elojah/broadcastor/v2/message"
 )
 
 // Jitter is a subscriber.Holder buffering jitter: it holds each message for d from when it came, and once one is due,

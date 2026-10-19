@@ -8,9 +8,9 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/elojah/broadcastor/message"
-	"github.com/elojah/broadcastor/pkg/gate"
-	"github.com/elojah/broadcastor/subscriber"
+	"github.com/elojah/broadcastor/v2/message"
+	"github.com/elojah/broadcastor/v2/pkg/gate"
+	"github.com/elojah/broadcastor/v2/subscriber"
 )
 
 // Broadcastor hands each message to every subscriber. Create one with NewBroadcastor. It is safe for concurrent use,

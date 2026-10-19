@@ -7,8 +7,8 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/elojah/broadcastor/message"
-	"github.com/elojah/broadcastor/subscriber"
+	"github.com/elojah/broadcastor/v2/message"
+	"github.com/elojah/broadcastor/v2/subscriber"
 )
 
 // A filtered message never reaches the subscriber: Broadcast neither waits for it, stuck as it is, nor counts it, and

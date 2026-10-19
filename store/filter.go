@@ -3,7 +3,7 @@ package store
 import (
 	"context"
 
-	"github.com/elojah/broadcastor/subscriber"
+	"github.com/elojah/broadcastor/v2/subscriber"
 )
 
 // PutFunc is a func used as a subscriber.Store.

@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/elojah/broadcastor/subscriber"
+	"github.com/elojah/broadcastor/v2/subscriber"
 )
 
 // ErrTooLarge is what File.Put returns for a record larger than WithMaxSize.

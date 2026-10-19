@@ -3,7 +3,7 @@ package subscriber
 import (
 	"context"
 
-	"github.com/elojah/broadcastor/message"
+	"github.com/elojah/broadcastor/v2/message"
 )
 
 // Deliver sends value, with config laid over the subscriber's defaults, and reports whether it was taken, or for async,

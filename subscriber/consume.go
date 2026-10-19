@@ -3,7 +3,7 @@ package subscriber
 import (
 	"time"
 
-	"github.com/elojah/broadcastor/message"
+	"github.com/elojah/broadcastor/v2/message"
 )
 
 // Consume calls handle, wrapped in the middlewares, for each replayed value then each message until ch closes, and

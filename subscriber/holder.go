@@ -3,7 +3,7 @@ package subscriber
 import (
 	"time"
 
-	"github.com/elojah/broadcastor/message"
+	"github.com/elojah/broadcastor/v2/message"
 )
 
 // Holder holds the messages a subscriber takes until they are due (WithHolder). Package holder holds ready-made ones.

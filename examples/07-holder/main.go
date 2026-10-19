@@ -12,9 +12,9 @@ import (
 	"log"
 	"time"
 
-	"github.com/elojah/broadcastor"
-	"github.com/elojah/broadcastor/holder"
-	"github.com/elojah/broadcastor/subscriber"
+	"github.com/elojah/broadcastor/v2"
+	"github.com/elojah/broadcastor/v2/holder"
+	"github.com/elojah/broadcastor/v2/subscriber"
 )
 
 // window is far longer than a burst takes to come.

@@ -14,8 +14,8 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/elojah/broadcastor/store"
-	"github.com/elojah/broadcastor/subscriber"
+	"github.com/elojah/broadcastor/v2/store"
+	"github.com/elojah/broadcastor/v2/subscriber"
 )
 
 var _ store.Queue[int] = (*store.File[int])(nil)

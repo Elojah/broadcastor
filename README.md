@@ -5,13 +5,13 @@
 # broadcastor
 
 [![CI](https://github.com/Elojah/broadcastor/actions/workflows/ci.yml/badge.svg)](https://github.com/Elojah/broadcastor/actions/workflows/ci.yml)
-[![Go Reference](https://pkg.go.dev/badge/github.com/elojah/broadcastor.svg)](https://pkg.go.dev/github.com/elojah/broadcastor)
+[![Go Reference](https://pkg.go.dev/badge/github.com/elojah/broadcastor/v2.svg)](https://pkg.go.dev/github.com/elojah/broadcastor/v2)
 
 A generic in-process fan-out for Go: one `Broadcast` hands a message to every subscriber, and each subscriber handles
 its messages one at a time, in its own goroutine. No dependencies, and it runs on TinyGo.
 
 ```sh
-go get github.com/elojah/broadcastor
+go get github.com/elojah/broadcastor/v2
 ```
 
 ## Quick start
@@ -46,13 +46,13 @@ for msg, fail := range seq {
 
 | Package | Holds |
 | --- | --- |
-| [`broadcastor`](https://pkg.go.dev/github.com/elojah/broadcastor) | `Broadcastor`, `WithSerial`, `WithDefaultSubscriberOptions`. |
-| [`subscriber`](https://pkg.go.dev/github.com/elojah/broadcastor/subscriber) | Subscriber options, error types, `Stats`, `Holder`. |
-| [`message`](https://pkg.go.dev/github.com/elojah/broadcastor/message) | `Broadcast` options, and `Batch` with `Slice` and `Map`. |
-| [`middleware`](https://pkg.go.dev/github.com/elojah/broadcastor/middleware) | `Recover`, `History`, `MaxAge`, `WrapError`, `Retry`. |
-| [`store`](https://pkg.go.dev/github.com/elojah/broadcastor/store) | Queues for dead letters: `Ring` in memory, `File` on disk, `Drain`, `Enqueue`, `Filter`. |
-| [`holder`](https://pkg.go.dev/github.com/elojah/broadcastor/holder) | Holders: `Reduce`, `NewLatest`, `Reorder`, `Jitter`, `Batch`. |
-| [`filter`](https://pkg.go.dev/github.com/elojah/broadcastor/filter) | Stateful filters: `Changed`, `Every`, per key with `WithKey`, with `WithHeartbeat` and `WithHeartbeatCount`. |
+| [`broadcastor`](https://pkg.go.dev/github.com/elojah/broadcastor/v2) | `Broadcastor`, `WithSerial`, `WithDefaultSubscriberOptions`. |
+| [`subscriber`](https://pkg.go.dev/github.com/elojah/broadcastor/v2/subscriber) | Subscriber options, error types, `Stats`, `Holder`. |
+| [`message`](https://pkg.go.dev/github.com/elojah/broadcastor/v2/message) | `Broadcast` options, and `Batch` with `Slice` and `Map`. |
+| [`middleware`](https://pkg.go.dev/github.com/elojah/broadcastor/v2/middleware) | `Recover`, `History`, `MaxAge`, `WrapError`, `Retry`. |
+| [`store`](https://pkg.go.dev/github.com/elojah/broadcastor/v2/store) | Queues for dead letters: `Ring` in memory, `File` on disk, `Drain`, `Enqueue`, `Filter`. |
+| [`holder`](https://pkg.go.dev/github.com/elojah/broadcastor/v2/holder) | Holders: `Reduce`, `NewLatest`, `Reorder`, `Jitter`, `Batch`. |
+| [`filter`](https://pkg.go.dev/github.com/elojah/broadcastor/v2/filter) | Stateful filters: `Changed`, `Every`, per key with `WithKey`, with `WithHeartbeat` and `WithHeartbeatCount`. |
 
 ## Delivery
 
