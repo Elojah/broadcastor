@@ -28,14 +28,34 @@ type Broadcastor[T any] struct {
 
 	// ids is the last ID given out.
 	ids atomic.Uint64
+
+	// turn, set by WithSerial, holds a token while a Broadcast runs. A channel rather than a mutex, so that Broadcasts
+	// take turns in the order they come, and one waiting blocks durably in a synctest bubble.
+	turn chan struct{}
 }
 
+// Option configures a Broadcastor, when passed to NewBroadcastor.
+type Option[T any] func(b *Broadcastor[T])
+
 // NewBroadcastor returns an empty Broadcastor.
-func NewBroadcastor[T any]() *Broadcastor[T] {
+func NewBroadcastor[T any](options ...Option[T]) *Broadcastor[T] {
 	b := &Broadcastor[T]{stopped: make(chan struct{})}
 	b.running.Store(1)
+	for _, option := range options {
+		option(b)
+	}
 
 	return b
+}
+
+// WithSerial makes each Broadcast and BroadcastBatch wait, whatever its ctx, until the ones under way have returned,
+// so that every subscriber takes messages in the same order, async sends aside. A Broadcast from a filter, or from an
+// error handler a Broadcast runs, waits for good, and one from handle until the Broadcast waiting on that subscriber
+// gives up.
+func WithSerial[T any]() Option[T] {
+	return func(b *Broadcastor[T]) {
+		b.turn = make(chan struct{}, 1)
+	}
 }
 
 // Subscribe adds a subscriber and returns its ID. Its goroutine calls handle for each message, one at a time, with the
@@ -206,8 +226,15 @@ func (b *Broadcastor[T]) add(ctx context.Context, options []subscriber.Option[T]
 	return s, nil
 }
 
-// each delivers to every subscriber config picks, and returns how many took it, waiting for each parallel send.
+// each delivers to every subscriber config picks, and returns how many took it, waiting for each parallel send. With
+// WithSerial, it first waits for its turn.
 func (b *Broadcastor[T]) each(config message.Config, deliver func(s *subscriber.Subscriber[T]) (bool, <-chan bool)) int {
+	if b.turn != nil {
+		b.turn <- struct{}{}
+		// Deferred, so that a filter's panic gives the turn back.
+		defer func() { <-b.turn }()
+	}
+
 	var (
 		n int
 		// Whether each parallel send was taken.

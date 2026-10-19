@@ -38,8 +38,8 @@ A change to channels, removal or error reporting must keep these and pass `make 
 
 - Only `inbox.release` closes `ch`, on the last reference: the subscription holds one, each send another. `acquire`
   refuses at 0, so a `Broadcast` racing removal skips the subscriber with a `ClosedError`.
-- Nothing waits for a `Broadcast`, since `handle` may unsubscribe or `Close` while one waits on it. `Unsubscribe` closes
-  `done` to free it, and `Shutdown` waits only on `Consume`.
+- Nothing waits for a `Broadcast` but, with `WithSerial`, the next `Broadcast`, since `handle` may unsubscribe or
+  `Close` while one waits on it. `Unsubscribe` closes `done` to free it, and `Shutdown` waits only on `Consume`.
 - Every removal goes through `Broadcastor.remove` (`LoadAndDelete`, then `Subscriber.Unsubscribe`), so racing
   removals act once, and an eviction is reported once, by the error whose `remove` succeeded.
 - `discarding` is set before `inbox.stop`, which may close `ch` at once.

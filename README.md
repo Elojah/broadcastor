@@ -46,7 +46,7 @@ for msg, fail := range seq {
 
 | Package | Holds |
 | --- | --- |
-| [`broadcastor`](https://pkg.go.dev/github.com/elojah/broadcastor) | `Broadcastor`. |
+| [`broadcastor`](https://pkg.go.dev/github.com/elojah/broadcastor) | `Broadcastor`, `WithSerial`. |
 | [`subscriber`](https://pkg.go.dev/github.com/elojah/broadcastor/subscriber) | Subscriber options, error types, `Stats`, `Holder`. |
 | [`message`](https://pkg.go.dev/github.com/elojah/broadcastor/message) | `Broadcast` options, and `Batch` with `Slice` and `Map`. |
 | [`middleware`](https://pkg.go.dev/github.com/elojah/broadcastor/middleware) | `Recover`, `History`, `MaxAge`, `WrapError`, `Retry`. |
@@ -70,6 +70,9 @@ The mode is a message option, passed to `Broadcast` or set as a subscriber's def
 Delivery is at most once, in broadcast order from one goroutine, except async. `Broadcast` gives up on a subscriber
 once its ctx is done or the message's timeout runs out (`message.WithTimeout`, `subscriber.WithTimeout`), and the error
 handlers learn why. `subscriber.WithAsyncLimit(n)` bounds the async sends waiting on a subscriber.
+
+`broadcastor.NewBroadcastor(broadcastor.WithSerial[T]())` makes each `Broadcast` wait for the one under way to return,
+so that messages from every goroutine reach every subscriber in the same order, async sends aside.
 
 `subscriber.WithFilter(keep)` skips what `keep` rejects before any send. `message.WithSubscriberFilter(keep)` hands one
 message only to the subscribers `keep` picks by ID. Package `filter` holds stateful filters, so give each subscriber

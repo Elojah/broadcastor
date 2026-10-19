@@ -21,12 +21,14 @@ func TestBroadcast_Allocs(t *testing.T) { //nolint:paralleltest // AllocsPerRun 
 		buffer = 2 * runs
 	)
 	for _, tt := range []struct { //nolint:paralleltest // AllocsPerRun counts every goroutine's allocations
-		name      string
-		subscribe []subscriber.Option[int]
-		broadcast []message.Option[int]
-		want      float64
+		name        string
+		broadcastor []broadcastor.Option[int]
+		subscribe   []subscriber.Option[int]
+		broadcast   []message.Option[int]
+		want        float64
 	}{
 		{name: "sync"},
+		{name: "serial", broadcastor: []broadcastor.Option[int]{broadcastor.WithSerial[int]()}},
 		{name: "buffered", subscribe: []subscriber.Option[int]{subscriber.WithBuffer[int](buffer)}},
 		{name: "non-blocking", subscribe: []subscriber.Option[int]{
 			subscriber.WithBuffer[int](buffer), subscriber.WithDefaultMessageOptions(message.WithNonBlocking[int]()),
@@ -45,7 +47,7 @@ func TestBroadcast_Allocs(t *testing.T) { //nolint:paralleltest // AllocsPerRun 
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			b := newBroadcastor[int](t)
+			b := newBroadcastor(t, tt.broadcastor...)
 			for range subscribers {
 				subscribe(t, b, func(context.Context, uint64, int) error { return nil }, tt.subscribe...)
 			}

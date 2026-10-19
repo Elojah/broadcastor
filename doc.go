@@ -30,7 +30,8 @@
 // Delivery is at most once. By default Broadcast waits for each subscriber in turn, until it takes the message, the
 // Broadcast ctx is done or the message's timeout runs out. subscriber.WithBuffer, message.WithParallel,
 // message.WithAsync and message.WithNonBlocking wait less. Messages broadcast from one goroutine arrive in order,
-// except with message.WithAsync.
+// except with message.WithAsync. With WithSerial, Broadcasts take turns, so messages from every goroutine arrive at
+// every subscriber in the same order, async sends aside.
 //
 // # Lifecycle
 //

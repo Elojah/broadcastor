@@ -884,6 +884,99 @@ func TestMessageWithParallel_Order(t *testing.T) {
 	})
 }
 
+// With WithSerial, a Broadcast waits for the one under way to return, even a non-blocking one.
+func TestBroadcastorWithSerial(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		b := newBroadcastor(t, broadcastor.WithSerial[int]())
+		stuck, stuckID := hold(t, b)
+		// Buffered, so that it has room for the non-blocking Broadcast, however late it handles the one before.
+		reader := &recorder[int]{}
+		readerID := subscribe(t, b, reader.handle, subscriber.WithBuffer[int](2))
+		b.Broadcast(t.Context(), 0)
+		synctest.Wait() // stuck is now processing 0 and not reading
+
+		first, second := make(chan struct{}), make(chan struct{})
+		go func() {
+			defer close(first)
+			b.Broadcast(t.Context(), 1)
+		}()
+		synctest.Wait() // the first Broadcast now waits on stuck
+		go func() {
+			defer close(second)
+			b.Broadcast(t.Context(), 2, message.WithNonBlocking[int]())
+		}()
+		synctest.Wait()
+		select {
+		case <-second:
+			t.Error("non-blocking Broadcast returned while the one before was under way")
+		default:
+		}
+		if got := reader.messages(); slices.Contains(got, 2) {
+			t.Errorf("reader received %v while the Broadcast before was under way, want no 2", got)
+		}
+
+		stuck.release()
+		waitClosed(t, first, "first Broadcast")
+		waitClosed(t, second, "non-blocking Broadcast")
+
+		unsubscribeAll(t, b, stuckID, readerID)
+		synctest.Wait()
+		if got, want := reader.messages(), []int{0, 1, 2}; !slices.Equal(got, want) {
+			t.Errorf("reader received %v, want %v", got, want)
+		}
+	})
+}
+
+// With WithSerial, parallel Broadcasts from several goroutines reach every subscriber in the same order, however slow.
+func TestBroadcastorWithSerial_Order(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		const (
+			goroutines = 5
+			messages   = 10
+		)
+		b := newBroadcastor(t, broadcastor.WithSerial[int]())
+		delays := []time.Duration{time.Millisecond, 3 * time.Millisecond}
+		ids := make([]uint64, 0, len(delays))
+		recorders := make([]*recorder[int], 0, len(delays))
+		for _, delay := range delays {
+			r := &recorder[int]{}
+			ids = append(ids, subscribe(t, b, func(ctx context.Context, id uint64, msg int) error {
+				time.Sleep(delay)
+
+				return r.handle(ctx, id, msg)
+			}))
+			recorders = append(recorders, r)
+		}
+
+		var wg sync.WaitGroup
+		for g := range goroutines {
+			wg.Go(func() {
+				for i := range messages {
+					b.Broadcast(t.Context(), g*messages+i, message.WithParallel[int]())
+				}
+			})
+		}
+		waitGroup(t, &wg, "Broadcasts")
+		unsubscribeAll(t, b, ids...)
+		time.Sleep(slices.Max(delays)) // for each subscriber to be done with the last message, which it may have just taken
+		synctest.Wait()
+
+		want := recorders[0].messages()
+		if len(want) != goroutines*messages {
+			t.Fatalf("subscriber 0 received %d messages, want %d", len(want), goroutines*messages)
+		}
+		for i, r := range recorders[1:] {
+			if got := r.messages(); !slices.Equal(got, want) {
+				t.Errorf("subscriber %d received %v, want the order subscriber 0 received them in: %v", i+1, got, want)
+			}
+		}
+	})
+}
+
 // Close unsubscribes every subscriber, which still processes what it took, and every later call returns ErrClosed.
 func TestClose(t *testing.T) {
 	t.Parallel()
@@ -1062,9 +1155,9 @@ func recordTimeouts(t *testing.T, r *recorder[int]) func(context.Context, error)
 }
 
 // newBroadcastor returns a Broadcastor closed in Cleanup, since its goroutine would otherwise outlive a synctest bubble.
-func newBroadcastor[T any](tb testing.TB) *broadcastor.Broadcastor[T] {
+func newBroadcastor[T any](tb testing.TB, options ...broadcastor.Option[T]) *broadcastor.Broadcastor[T] {
 	tb.Helper()
-	b := broadcastor.NewBroadcastor[T]()
+	b := broadcastor.NewBroadcastor(options...)
 	tb.Cleanup(func() { _ = b.Close() })
 
 	return b
