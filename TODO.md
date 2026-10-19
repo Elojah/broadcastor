@@ -20,8 +20,6 @@ reliability fix with a test that fails without it. The API follows semver since 
   rather than from when a busy subscriber takes it.
 - [ ] `store.DrainBatch(ctx, q, n, maxWait, handle)`: hands up to n entries at once and acks them together, for uplinks
   that pay per request. handle is a `subscriber.Handler[message.Batch[T]]`, so one uplink serves both.
-- [ ] `broadcastor.WithDefaultSubscriberOptions`, applied before each `Subscribe`'s own. Filters keep state, so it takes
-  a func building the options per subscriber.
 
 ## Long-term
 

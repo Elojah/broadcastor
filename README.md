@@ -46,7 +46,7 @@ for msg, fail := range seq {
 
 | Package | Holds |
 | --- | --- |
-| [`broadcastor`](https://pkg.go.dev/github.com/elojah/broadcastor) | `Broadcastor`, `WithSerial`. |
+| [`broadcastor`](https://pkg.go.dev/github.com/elojah/broadcastor) | `Broadcastor`, `WithSerial`, `WithDefaultSubscriberOptions`. |
 | [`subscriber`](https://pkg.go.dev/github.com/elojah/broadcastor/subscriber) | Subscriber options, error types, `Stats`, `Holder`. |
 | [`message`](https://pkg.go.dev/github.com/elojah/broadcastor/message) | `Broadcast` options, and `Batch` with `Slice` and `Map`. |
 | [`middleware`](https://pkg.go.dev/github.com/elojah/broadcastor/middleware) | `Recover`, `History`, `MaxAge`, `WrapError`, `Retry`. |
@@ -88,6 +88,18 @@ id, err = sensors.Subscribe(ctx, trend, subscriber.WithFilter(filter.Changed(
 	filter.WithKey(func(r reading) string { return r.Sensor }),
 	filter.WithHeartbeat[reading](time.Hour),
 )))
+```
+
+`broadcastor.WithDefaultSubscriberOptions(build)` gives each subscriber the options `build` returns, before its
+`Subscribe`'s own, which override them. `build` runs for each subscriber, so that each gets its own filter:
+
+```go
+sensors := broadcastor.NewBroadcastor(broadcastor.WithDefaultSubscriberOptions(func() []subscriber.Option[reading] {
+	return []subscriber.Option[reading]{
+		subscriber.WithBuffer[reading](16),
+		subscriber.WithFilter(filter.Every[reading](time.Second, filter.WithKey(func(r reading) string { return r.Sensor }))),
+	}
+}))
 ```
 
 ## Errors

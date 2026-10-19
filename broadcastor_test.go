@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/elojah/broadcastor"
+	"github.com/elojah/broadcastor/filter"
 	"github.com/elojah/broadcastor/message"
 	"github.com/elojah/broadcastor/subscriber"
 )
@@ -972,6 +973,55 @@ func TestBroadcastorWithSerial_Order(t *testing.T) {
 		for i, r := range recorders[1:] {
 			if got := r.messages(); !slices.Equal(got, want) {
 				t.Errorf("subscriber %d received %v, want the order subscriber 0 received them in: %v", i+1, got, want)
+			}
+		}
+	})
+}
+
+// WithDefaultSubscriberOptions builds each subscriber its own options, Subscribe's and SubscribeSeq's alike, which
+// their own override.
+func TestBroadcastorWithDefaultSubscriberOptions(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		defaultErrs, ownErrs := &recorder[int]{}, &recorder[int]{}
+		b := newBroadcastor(t, broadcastor.WithDefaultSubscriberOptions(func() []subscriber.Option[int] {
+			return []subscriber.Option[int]{
+				// Shared, it would pass each value to the first subscriber only.
+				subscriber.WithFilter(filter.Changed(func(prev, next int) bool { return prev != next })),
+				subscriber.WithErrorHandler[int](recordFailures(t, defaultErrs)),
+			}
+		}))
+		fail := func(_ context.Context, _ uint64, msg int) error { return handleError(msg) }
+		defaultID := subscribe(t, b, fail)
+		ownID := subscribe(t, b, fail, subscriber.WithErrorHandler[int](recordFailures(t, ownErrs)))
+		seqID, seq := subscribeSeq(t, b)
+
+		yielded := &recorder[int]{}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for msg := range seq {
+				yielded.record(msg)
+			}
+		}()
+		for _, msg := range []int{1, 1, 2} {
+			b.Broadcast(t.Context(), msg)
+		}
+		unsubscribeAll(t, b, defaultID, ownID, seqID)
+		waitClosed(t, done, "SubscribeSeq loop")
+		synctest.Wait()
+
+		for _, c := range []struct {
+			what string
+			r    *recorder[int]
+		}{
+			{"the default error handler", defaultErrs},
+			{"Subscribe's own error handler", ownErrs},
+			{"the SubscribeSeq loop", yielded},
+		} {
+			if got, want := c.r.messages(), []int{1, 2}; !slices.Equal(got, want) {
+				t.Errorf("%s got %v, want %v", c.what, got, want)
 			}
 		}
 	})

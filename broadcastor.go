@@ -32,6 +32,9 @@ type Broadcastor[T any] struct {
 	// turn, set by WithSerial, holds a token while a Broadcast runs. A channel rather than a mutex, so that Broadcasts
 	// take turns in the order they come, and one waiting blocks durably in a synctest bubble.
 	turn chan struct{}
+
+	// defaults, set by WithDefaultSubscriberOptions, build each subscriber's options, which come before its own.
+	defaults []func() []subscriber.Option[T]
 }
 
 // Option configures a Broadcastor, when passed to NewBroadcastor.
@@ -55,6 +58,18 @@ func NewBroadcastor[T any](options ...Option[T]) *Broadcastor[T] {
 func WithSerial[T any]() Option[T] {
 	return func(b *Broadcastor[T]) {
 		b.turn = make(chan struct{}, 1)
+	}
+}
+
+// WithDefaultSubscriberOptions gives each subscriber the options build returns, before its Subscribe's own: those
+// override a value, such as subscriber.WithBuffer's, and come after in a list, such as subscriber.WithMiddleware's.
+// build runs on each Subscribe and SubscribeSeq, so that each subscriber gets its own filter or holder. Several run in
+// order, and a nil build is ignored.
+func WithDefaultSubscriberOptions[T any](build func() []subscriber.Option[T]) Option[T] {
+	return func(b *Broadcastor[T]) {
+		if build != nil {
+			b.defaults = append(b.defaults, build)
+		}
 	}
 }
 
@@ -206,6 +221,14 @@ func (b *Broadcastor[T]) Stats() []subscriber.Stats {
 
 // add creates and stores a subscriber, or returns ErrClosed. Nothing reads its channel yet.
 func (b *Broadcastor[T]) add(ctx context.Context, options []subscriber.Option[T]) (*subscriber.Subscriber[T], error) {
+	// Before Enter, since build may call Subscribe or Close.
+	if len(b.defaults) > 0 {
+		all := make([][]subscriber.Option[T], 0, len(b.defaults)+1)
+		for _, build := range b.defaults {
+			all = append(all, build())
+		}
+		options = slices.Concat(append(all, options)...)
+	}
 	id := b.ids.Add(1)
 	s := subscriber.New(id, options...)
 

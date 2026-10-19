@@ -22,8 +22,8 @@
 // BroadcastBatch hands several messages at once, with one Config: a subscriber's batch handler
 // (subscriber.WithBatchHandler) gets the batch whole, and handle otherwise gets each message alone.
 //
-// Subscriber options are in package subscriber, Broadcast options in package message. Packages middleware, store and
-// filter hold ready-made middlewares, stores and filters.
+// Subscriber options are in package subscriber, and WithDefaultSubscriberOptions gives every subscriber some. Broadcast
+// options are in package message. Packages middleware, store and filter hold ready-made middlewares, stores and filters.
 //
 // # Delivery
 //
