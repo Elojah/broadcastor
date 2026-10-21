@@ -1,4 +1,4 @@
-package broadcastor_test
+package multicast_test
 
 import (
 	"context"
@@ -6,9 +6,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/elojah/broadcastor/v2"
-	"github.com/elojah/broadcastor/v2/message"
-	"github.com/elojah/broadcastor/v2/subscriber"
+	"github.com/elojah/multicast"
+	"github.com/elojah/multicast/message"
+	"github.com/elojah/multicast/subscriber"
 )
 
 // A Broadcast allocates nothing without options in sync, buffered and non-blocking modes, and once with options,
@@ -21,14 +21,14 @@ func TestBroadcast_Allocs(t *testing.T) { //nolint:paralleltest // AllocsPerRun 
 		buffer = 2 * runs
 	)
 	for _, tt := range []struct { //nolint:paralleltest // AllocsPerRun counts every goroutine's allocations
-		name        string
-		broadcastor []broadcastor.Option[int]
-		subscribe   []subscriber.Option[int]
-		broadcast   []message.Option[int]
-		want        float64
+		name      string
+		multicast []multicast.Option[int]
+		subscribe []subscriber.Option[int]
+		broadcast []message.Option[int]
+		want      float64
 	}{
 		{name: "sync"},
-		{name: "serial", broadcastor: []broadcastor.Option[int]{broadcastor.WithSerial[int]()}},
+		{name: "serial", multicast: []multicast.Option[int]{multicast.WithSerial[int]()}},
 		{name: "buffered", subscribe: []subscriber.Option[int]{subscriber.WithBuffer[int](buffer)}},
 		{name: "non-blocking", subscribe: []subscriber.Option[int]{
 			subscriber.WithBuffer[int](buffer), subscriber.WithDefaultMessageOptions(message.WithNonBlocking[int]()),
@@ -47,7 +47,7 @@ func TestBroadcast_Allocs(t *testing.T) { //nolint:paralleltest // AllocsPerRun 
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			b := newBroadcastor(t, tt.broadcastor...)
+			b := newGroup(t, tt.multicast...)
 			for range subscribers {
 				subscribe(t, b, func(context.Context, uint64, int) error { return nil }, tt.subscribe...)
 			}
@@ -90,7 +90,7 @@ func BenchmarkBroadcast(b *testing.B) {
 	for _, subscribers := range benchSubscribers {
 		for _, mode := range modes {
 			b.Run(fmt.Sprintf("subscribers=%d/%s", subscribers, mode.name), func(b *testing.B) {
-				bc := newBroadcastor[int](b)
+				bc := newGroup[int](b)
 				var handled sync.WaitGroup
 				for range subscribers {
 					_, err := bc.Subscribe(b.Context(), func(context.Context, uint64, int) error {
@@ -129,7 +129,7 @@ func BenchmarkBroadcast_Throughput(b *testing.B) {
 	for _, subscribers := range benchSubscribers {
 		for _, mode := range modes {
 			b.Run(fmt.Sprintf("subscribers=%d/%s", subscribers, mode.name), func(b *testing.B) {
-				bc := newBroadcastor[int](b)
+				bc := newGroup[int](b)
 				wait := subscribeCounting(b, bc, subscribers, b.N, subscriber.WithBuffer[int](benchBuffer))
 
 				b.ReportAllocs()
@@ -153,7 +153,7 @@ func BenchmarkBroadcastBatch_Throughput(b *testing.B) {
 	for _, subscribers := range benchSubscribers {
 		for _, whole := range []bool{false, true} {
 			b.Run(fmt.Sprintf("subscribers=%d/batch handler=%t", subscribers, whole), func(b *testing.B) {
-				bc := newBroadcastor[int](b)
+				bc := newGroup[int](b)
 				var wait func()
 				if whole {
 					wait = subscribeCountingBatches(b, bc, subscribers, b.N, subscriber.WithBuffer[int](benchBuffer))
@@ -178,7 +178,7 @@ func BenchmarkBroadcastBatch_Throughput(b *testing.B) {
 func BenchmarkBroadcast_Concurrent(b *testing.B) {
 	for _, subscribers := range benchSubscribers {
 		b.Run(fmt.Sprintf("subscribers=%d", subscribers), func(b *testing.B) {
-			bc := newBroadcastor[int](b)
+			bc := newGroup[int](b)
 			// RunParallel shares the b.N Broadcasts out between its goroutines.
 			wait := subscribeCounting(b, bc, subscribers, b.N, subscriber.WithBuffer[int](benchBuffer))
 
@@ -197,7 +197,7 @@ func BenchmarkBroadcast_Concurrent(b *testing.B) {
 
 // BenchmarkSubscribeUnsubscribe measures a subscription that comes and goes without ever getting a message.
 func BenchmarkSubscribeUnsubscribe(b *testing.B) {
-	bc := newBroadcastor[int](b)
+	bc := newGroup[int](b)
 	b.ReportAllocs()
 	for b.Loop() {
 		if err := subscribeUnsubscribe(b.Context(), bc); err != nil {
@@ -206,7 +206,7 @@ func BenchmarkSubscribeUnsubscribe(b *testing.B) {
 	}
 }
 
-func subscribeUnsubscribe(ctx context.Context, bc *broadcastor.Broadcastor[int], options ...subscriber.Option[int]) error {
+func subscribeUnsubscribe(ctx context.Context, bc *multicast.Group[int], options ...subscriber.Option[int]) error {
 	id, err := bc.Subscribe(ctx, func(context.Context, uint64, int) error { return nil }, options...)
 	if err != nil {
 		return fmt.Errorf("Subscribe: %w", err)
@@ -220,7 +220,7 @@ func subscribeUnsubscribe(ctx context.Context, bc *broadcastor.Broadcastor[int],
 
 // subscribeCounting subscribes subscribers that each expect messages, and returns a func waiting until each has handled
 // them. Each counts on its own, so waiting adds no contention. b.Context() unsubscribes them after each run.
-func subscribeCounting(b *testing.B, bc *broadcastor.Broadcastor[int], subscribers, messages int, options ...subscriber.Option[int]) func() {
+func subscribeCounting(b *testing.B, bc *multicast.Group[int], subscribers, messages int, options ...subscriber.Option[int]) func() {
 	b.Helper()
 	done := make([]chan struct{}, subscribers)
 	for i := range done {
@@ -248,7 +248,7 @@ func subscribeCounting(b *testing.B, bc *broadcastor.Broadcastor[int], subscribe
 }
 
 // subscribeCountingBatches is subscribeCounting with batch handlers expecting batches.
-func subscribeCountingBatches(b *testing.B, bc *broadcastor.Broadcastor[int], subscribers, batches int, options ...subscriber.Option[int]) func() {
+func subscribeCountingBatches(b *testing.B, bc *multicast.Group[int], subscribers, batches int, options ...subscriber.Option[int]) func() {
 	b.Helper()
 	done := make([]chan struct{}, subscribers)
 	for i := range done {

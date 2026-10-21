@@ -8,15 +8,15 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/elojah/broadcastor/v2"
-	"github.com/elojah/broadcastor/v2/subscriber"
+	"github.com/elojah/multicast"
+	"github.com/elojah/multicast/subscriber"
 )
 
 var errEmpty = errors.New("empty message")
 
 func main() {
 	ctx := context.Background()
-	b := broadcastor.NewBroadcastor[string]()
+	b := multicast.New[string]()
 
 	_, seq, err := b.SubscribeSeq(ctx, subscriber.WithErrorHandler[string](func(_ context.Context, err error) {
 		fmt.Println("failed:", err)

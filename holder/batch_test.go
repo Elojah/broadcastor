@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/elojah/broadcastor/v2/holder"
-	"github.com/elojah/broadcastor/v2/message"
+	"github.com/elojah/multicast/holder"
+	"github.com/elojah/multicast/message"
 )
 
 // Batch releases the messages of a window as one batch, in order, once it ends, d after the first message, with the

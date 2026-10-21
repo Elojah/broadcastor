@@ -7,8 +7,8 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/elojah/broadcastor/v2/middleware"
-	"github.com/elojah/broadcastor/v2/subscriber"
+	"github.com/elojah/multicast/middleware"
+	"github.com/elojah/multicast/subscriber"
 )
 
 // The messages are when they were made, and the tests run in a synctest bubble, whose fake clock sets their age exactly.

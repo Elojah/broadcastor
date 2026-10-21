@@ -9,9 +9,9 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/elojah/broadcastor/v2/middleware"
-	"github.com/elojah/broadcastor/v2/store"
-	"github.com/elojah/broadcastor/v2/subscriber"
+	"github.com/elojah/multicast/middleware"
+	"github.com/elojah/multicast/store"
+	"github.com/elojah/multicast/subscriber"
 )
 
 var (

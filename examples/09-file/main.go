@@ -12,9 +12,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/elojah/broadcastor/v2"
-	"github.com/elojah/broadcastor/v2/store"
-	"github.com/elojah/broadcastor/v2/subscriber"
+	"github.com/elojah/multicast"
+	"github.com/elojah/multicast/store"
+	"github.com/elojah/multicast/subscriber"
 )
 
 var (
@@ -58,7 +58,7 @@ func decode(b []byte) (reading, error) {
 }
 
 func main() {
-	dir, err := os.MkdirTemp("", "broadcastor-file")
+	dir, err := os.MkdirTemp("", "multicast-file")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -81,7 +81,7 @@ func runAlerts(dir string, pagerDown bool, readings ...reading) {
 		log.Fatal(err)
 	}
 
-	b := broadcastor.NewBroadcastor[reading]()
+	b := multicast.New[reading]()
 	_, err = b.Subscribe(ctx, func(_ context.Context, _ uint64, r reading) error {
 		if r.Celsius <= 30 {
 			return nil

@@ -1,4 +1,4 @@
-package broadcastor
+package multicast
 
 import (
 	"errors"
@@ -6,7 +6,7 @@ import (
 )
 
 // ErrClosed is returned by Subscribe and SubscribeSeq after Close, and by every Close or Shutdown after the first.
-var ErrClosed = errors.New("broadcastor closed")
+var ErrClosed = errors.New("group closed")
 
 // ErrSubscriberNotFound is matched by *SubscriberNotFoundError.
 var ErrSubscriberNotFound = errors.New("subscriber not found")

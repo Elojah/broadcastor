@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/elojah/broadcastor/v2"
+	"github.com/elojah/multicast"
 )
 
 func main() {
 	ctx := context.Background()
-	b := broadcastor.NewBroadcastor[string]()
+	b := multicast.New[string]()
 
 	stopped := make(chan struct{})
 	_, err := b.Subscribe(ctx, func(ctx context.Context, id uint64, msg string) error {

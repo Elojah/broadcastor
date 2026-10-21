@@ -1,4 +1,4 @@
-package broadcastor_test
+package multicast_test
 
 import (
 	"context"
@@ -7,8 +7,8 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/elojah/broadcastor/v2/message"
-	"github.com/elojah/broadcastor/v2/subscriber"
+	"github.com/elojah/multicast/message"
+	"github.com/elojah/multicast/subscriber"
 )
 
 // A filtered message never reaches the subscriber: Broadcast neither waits for it, stuck as it is, nor counts it, and
@@ -17,7 +17,7 @@ func TestSubscriberWithFilter(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newBroadcastor[int](t)
+		b := newGroup[int](t)
 		stuck := &recorder[int]{hold: make(chan struct{})}
 		id := subscribe(t, b, stuck.handle, subscriber.WithFilter(even), subscriber.WithTimeout[int](time.Second),
 			subscriber.WithErrorHandler[int](func(_ context.Context, err error) {
@@ -58,7 +58,7 @@ func TestSubscriberWithFilter_Several(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newBroadcastor[int](t)
+		b := newGroup[int](t)
 		seen := &recorder[int]{}
 		r := &recorder[int]{}
 		id := subscribe(t, b, r.handle,
@@ -91,7 +91,7 @@ func TestMessageWithSubscriberFilter(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newBroadcastor[int](t)
+		b := newGroup[int](t)
 		stuck := &recorder[int]{hold: make(chan struct{})}
 		stuckID := subscribe(t, b, stuck.handle, subscriber.WithTimeout[int](time.Second),
 			subscriber.WithErrorHandler[int](func(_ context.Context, err error) {
@@ -132,7 +132,7 @@ func TestMessageWithSubscriberFilter_BeforeSubscriberFilter(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newBroadcastor[int](t)
+		b := newGroup[int](t)
 		seen := &recorder[int]{}
 		r := &recorder[int]{}
 		id := subscribe(t, b, r.handle, subscriber.WithFilter(func(msg int) bool {
@@ -163,7 +163,7 @@ func TestMessageWithSubscriberFilter_Several(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newBroadcastor[int](t)
+		b := newGroup[int](t)
 		first, firstID := record(t, b)
 		second, secondID := record(t, b)
 		third, thirdID := record(t, b)

@@ -15,9 +15,9 @@ import (
 	"math"
 	"time"
 
-	"github.com/elojah/broadcastor/v2"
-	"github.com/elojah/broadcastor/v2/middleware"
-	"github.com/elojah/broadcastor/v2/subscriber"
+	"github.com/elojah/multicast"
+	"github.com/elojah/multicast/middleware"
+	"github.com/elojah/multicast/subscriber"
 )
 
 var (
@@ -28,7 +28,7 @@ var (
 
 func main() {
 	ctx := context.Background()
-	b := broadcastor.NewBroadcastor[int]()
+	b := multicast.New[int]()
 	n := &network{dialling: make(chan struct{}), up: make(chan struct{})}
 	closeLink := subscribeForwarder(ctx, b, n)
 
@@ -49,7 +49,7 @@ func main() {
 
 // subscribeForwarder subscribes the forwarder, which sends each message over its link. It returns a func that closes the
 // last link once the forwarder is done.
-func subscribeForwarder(ctx context.Context, b *broadcastor.Broadcastor[int], n *network) func() {
+func subscribeForwarder(ctx context.Context, b *multicast.Group[int], n *network) func() {
 	// Only the forwarder's goroutine uses it, in handle and redial, and the returned func once done has the ID, so it
 	// needs no lock.
 	l := n.dial()

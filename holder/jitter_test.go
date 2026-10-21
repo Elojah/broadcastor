@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/elojah/broadcastor/v2/holder"
-	"github.com/elojah/broadcastor/v2/message"
+	"github.com/elojah/multicast/holder"
+	"github.com/elojah/multicast/message"
 )
 
 // Jitter holds each message for d from when it came, and once one is due, releases it after the messages held

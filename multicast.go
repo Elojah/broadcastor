@@ -1,4 +1,4 @@
-package broadcastor
+package multicast
 
 import (
 	"cmp"
@@ -8,14 +8,14 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/elojah/broadcastor/v2/message"
-	"github.com/elojah/broadcastor/v2/pkg/gate"
-	"github.com/elojah/broadcastor/v2/subscriber"
+	"github.com/elojah/multicast/message"
+	"github.com/elojah/multicast/pkg/gate"
+	"github.com/elojah/multicast/subscriber"
 )
 
-// Broadcastor hands each message to every subscriber. Create one with NewBroadcastor. It is safe for concurrent use,
-// from handle included.
-type Broadcastor[T any] struct {
+// Group hands each message to every subscriber. Create one with New. It is safe for concurrent use, from handle
+// included.
+type Group[T any] struct {
 	subscribers sync.Map // [uint64]*subscriber.Subscriber[T]
 
 	// gate makes Close wait for any add under way, so Close refuses or sees each subscriber.
@@ -37,12 +37,12 @@ type Broadcastor[T any] struct {
 	defaults []func() []subscriber.Option[T]
 }
 
-// Option configures a Broadcastor, when passed to NewBroadcastor.
-type Option[T any] func(b *Broadcastor[T])
+// Option configures a Group, when passed to New.
+type Option[T any] func(b *Group[T])
 
-// NewBroadcastor returns an empty Broadcastor.
-func NewBroadcastor[T any](options ...Option[T]) *Broadcastor[T] {
-	b := &Broadcastor[T]{stopped: make(chan struct{})}
+// New returns an empty Group.
+func New[T any](options ...Option[T]) *Group[T] {
+	b := &Group[T]{stopped: make(chan struct{})}
 	b.running.Store(1)
 	for _, option := range options {
 		option(b)
@@ -56,7 +56,7 @@ func NewBroadcastor[T any](options ...Option[T]) *Broadcastor[T] {
 // error handler a Broadcast runs, waits for good, and one from handle until the Broadcast waiting on that subscriber
 // gives up.
 func WithSerial[T any]() Option[T] {
-	return func(b *Broadcastor[T]) {
+	return func(b *Group[T]) {
 		b.turn = make(chan struct{}, 1)
 	}
 }
@@ -66,7 +66,7 @@ func WithSerial[T any]() Option[T] {
 // build runs on each Subscribe and SubscribeSeq, so that each subscriber gets its own filter or holder. Several run in
 // order, and a nil build is ignored.
 func WithDefaultSubscriberOptions[T any](build func() []subscriber.Option[T]) Option[T] {
-	return func(b *Broadcastor[T]) {
+	return func(b *Group[T]) {
 		if build != nil {
 			b.defaults = append(b.defaults, build)
 		}
@@ -75,13 +75,13 @@ func WithDefaultSubscriberOptions[T any](build func() []subscriber.Option[T]) Op
 
 // Subscribe adds a subscriber and returns its ID. Its goroutine calls handle for each message, one at a time, with the
 // ID so that handle can unsubscribe itself. A Broadcast under way may or may not reach it. IDs count up from 1 in each
-// Broadcastor, so 0 is never one.
+// Group, so 0 is never one.
 //
 // ctx is the subscription's lifetime, unless subscriber.WithDetachedContext: once it is done, the subscriber is
 // unsubscribed. handle gets ctx, unless the message has its own (message.WithContext).
 //
 // It returns ErrClosed after Close.
-func (b *Broadcastor[T]) Subscribe(ctx context.Context, handle func(ctx context.Context, id uint64, msg T) error, options ...subscriber.Option[T]) (uint64, error) {
+func (b *Group[T]) Subscribe(ctx context.Context, handle func(ctx context.Context, id uint64, msg T) error, options ...subscriber.Option[T]) (uint64, error) {
 	s, err := b.add(ctx, options)
 	if err != nil {
 		return 0, err
@@ -100,7 +100,7 @@ func (b *Broadcastor[T]) Subscribe(ctx context.Context, handle func(ctx context.
 // reports what was taken but not yielded as a *subscriber.ClosedError. seq can be ranged over once.
 //
 // It returns ErrClosed after Close.
-func (b *Broadcastor[T]) SubscribeSeq(ctx context.Context, options ...subscriber.Option[T]) (uint64, iter.Seq2[T, func(error)], error) {
+func (b *Group[T]) SubscribeSeq(ctx context.Context, options ...subscriber.Option[T]) (uint64, iter.Seq2[T, func(error)], error) {
 	s, err := b.add(ctx, options)
 	if err != nil {
 		return 0, nil, err
@@ -113,7 +113,7 @@ func (b *Broadcastor[T]) SubscribeSeq(ctx context.Context, options ...subscriber
 // Unsubscribe removes the subscriber, or returns a *SubscriberNotFoundError. It never waits, so handle can call it:
 // the subscriber may still handle what it took, and a Broadcast waiting on it gives up with a
 // *subscriber.ClosedError. options override subscriber.WithUnsubscribeOptions. ctx is unused.
-func (b *Broadcastor[T]) Unsubscribe(ctx context.Context, id uint64, options ...subscriber.UnsubscribeOption) error {
+func (b *Group[T]) Unsubscribe(ctx context.Context, id uint64, options ...subscriber.UnsubscribeOption) error {
 	if !b.remove(id, options...) {
 		return &SubscriberNotFoundError{SubscriberID: id}
 	}
@@ -123,7 +123,7 @@ func (b *Broadcastor[T]) Unsubscribe(ctx context.Context, id uint64, options ...
 
 // Close unsubscribes every subscriber, after which Subscribe and SubscribeSeq return ErrClosed. It never waits for a
 // subscriber, so handle can call it. Every call after the first returns ErrClosed.
-func (b *Broadcastor[T]) Close() error {
+func (b *Group[T]) Close() error {
 	closed := b.gate.Close()
 
 	// On every call, so no subscriber is left once any Close returns.
@@ -150,7 +150,7 @@ func (b *Broadcastor[T]) Close() error {
 //
 // Called from handle or an error handler, or with a SubscribeSeq loop never ranged, it waits until ctx is done. A
 // Broadcast racing it may still report a *subscriber.ClosedError after it returns.
-func (b *Broadcastor[T]) Shutdown(ctx context.Context) error {
+func (b *Group[T]) Shutdown(ctx context.Context) error {
 	err := b.Close()
 
 	// Checked first, since select picks at random among ready cases.
@@ -174,7 +174,7 @@ func (b *Broadcastor[T]) Shutdown(ctx context.Context) error {
 // By default it waits for each subscriber in turn, and gives up on one once ctx is done or the message's timeout runs
 // out, reporting why. A ready subscriber takes msg even then. ctx never reaches handle or the error handlers, but
 // async sends keep using it after Broadcast returns.
-func (b *Broadcastor[T]) Broadcast(ctx context.Context, msg T, options ...message.Option[T]) int {
+func (b *Group[T]) Broadcast(ctx context.Context, msg T, options ...message.Option[T]) int {
 	config := message.NewConfig(options...)
 
 	return b.each(config, func(s *subscriber.Subscriber[T]) (bool, <-chan bool) {
@@ -189,7 +189,7 @@ func (b *Broadcastor[T]) Broadcast(ctx context.Context, msg T, options ...messag
 //
 // Every subscriber reads batch, at once and after an async BroadcastBatch returns, so batch must not change once
 // passed. An empty or nil batch is not sent.
-func (b *Broadcastor[T]) BroadcastBatch(ctx context.Context, batch message.Batch[T], options ...message.Option[T]) int {
+func (b *Group[T]) BroadcastBatch(ctx context.Context, batch message.Batch[T], options ...message.Option[T]) int {
 	if batch == nil || batch.Len() == 0 {
 		return 0
 	}
@@ -202,7 +202,7 @@ func (b *Broadcastor[T]) BroadcastBatch(ctx context.Context, batch message.Batch
 
 // Stats returns a snapshot of every subscriber's counters, in subscription order. An unsubscribed subscriber is left
 // out, even while it still handles what it took. It never waits, so handle can call it.
-func (b *Broadcastor[T]) Stats() []subscriber.Stats {
+func (b *Group[T]) Stats() []subscriber.Stats {
 	var stats []subscriber.Stats
 	b.subscribers.Range(func(_, value any) bool {
 		if s, ok := value.(*subscriber.Subscriber[T]); ok {
@@ -220,7 +220,7 @@ func (b *Broadcastor[T]) Stats() []subscriber.Stats {
 }
 
 // add creates and stores a subscriber, or returns ErrClosed. Nothing reads its channel yet.
-func (b *Broadcastor[T]) add(ctx context.Context, options []subscriber.Option[T]) (*subscriber.Subscriber[T], error) {
+func (b *Group[T]) add(ctx context.Context, options []subscriber.Option[T]) (*subscriber.Subscriber[T], error) {
 	// Before Enter, since build may call Subscribe or Close.
 	if len(b.defaults) > 0 {
 		all := make([][]subscriber.Option[T], 0, len(b.defaults)+1)
@@ -251,7 +251,7 @@ func (b *Broadcastor[T]) add(ctx context.Context, options []subscriber.Option[T]
 
 // each delivers to every subscriber config picks, and returns how many took it, waiting for each parallel send. With
 // WithSerial, it first waits for its turn.
-func (b *Broadcastor[T]) each(config message.Config, deliver func(s *subscriber.Subscriber[T]) (bool, <-chan bool)) int {
+func (b *Group[T]) each(config message.Config, deliver func(s *subscriber.Subscriber[T]) (bool, <-chan bool)) int {
 	if b.turn != nil {
 		b.turn <- struct{}{}
 		// Deferred, so that a filter's panic gives the turn back.
@@ -291,7 +291,7 @@ func (b *Broadcastor[T]) each(config message.Config, deliver func(s *subscriber.
 
 // remove deletes the subscriber and unsubscribes it, or returns false if there is none. Only the deleter unsubscribes,
 // so racing removals do it once.
-func (b *Broadcastor[T]) remove(id uint64, options ...subscriber.UnsubscribeOption) bool {
+func (b *Group[T]) remove(id uint64, options ...subscriber.UnsubscribeOption) bool {
 	v, _ := b.subscribers.LoadAndDelete(id)
 	s, ok := v.(*subscriber.Subscriber[T])
 	if !ok {
@@ -303,7 +303,7 @@ func (b *Broadcastor[T]) remove(id uint64, options ...subscriber.UnsubscribeOpti
 }
 
 // countOut drops running by one, and closes stopped at 0. Subscribers call it once done (subscriber.Subscriber.Attach).
-func (b *Broadcastor[T]) countOut() {
+func (b *Group[T]) countOut() {
 	if b.running.Add(-1) == 0 {
 		close(b.stopped)
 	}

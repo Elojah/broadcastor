@@ -1,4 +1,4 @@
-package broadcastor_test
+package multicast_test
 
 import (
 	"bytes"
@@ -18,10 +18,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/elojah/broadcastor/v2"
-	"github.com/elojah/broadcastor/v2/holder"
-	"github.com/elojah/broadcastor/v2/message"
-	"github.com/elojah/broadcastor/v2/subscriber"
+	"github.com/elojah/multicast"
+	"github.com/elojah/multicast/holder"
+	"github.com/elojah/multicast/message"
+	"github.com/elojah/multicast/subscriber"
 )
 
 const (
@@ -42,7 +42,7 @@ const (
 	// stressReplay bounds what a subscriber replays: negative numbers, from -1 down.
 	stressReplay = 8
 	// stressLabel is the pprof label every goroutine of a round carries, the library's included.
-	stressLabel = "broadcastor_stress"
+	stressLabel = "multicast_stress"
 )
 
 var (
@@ -57,7 +57,7 @@ var (
 var stressLabels atomic.Uint64
 
 // TestStress interleaves every method at random from several goroutines, in real time so that timeouts race sends, over
-// rounds with a Broadcastor each. It checks that nothing panics, every goroutine returns once closed, no subscriber
+// rounds with a Group each. It checks that nothing panics, every goroutine returns once closed, no subscriber
 // gets a message twice, a subscriber gets every message broadcast while subscribed and none outside, batched or not,
 // its replay comes first, Stats add up once idle, done gets the ID once after handle's last call, and nothing is
 // handled, reported or sent on done after Shutdown.
@@ -78,7 +78,7 @@ func TestStress(t *testing.T) {
 // runStress runs one round, then checks it once every goroutine it started has returned.
 func runStress(t *testing.T, closeEarly, quiet bool) {
 	t.Helper()
-	s := &stress{b: newBroadcastor[int](t), closeEarly: closeEarly, quiet: quiet, label: strconv.FormatUint(stressLabels.Add(1), 10)}
+	s := &stress{b: newGroup[int](t), closeEarly: closeEarly, quiet: quiet, label: strconv.FormatUint(stressLabels.Add(1), 10)}
 	// Every goroutine f starts carries the label, and so do theirs, the library's included.
 	pprof.Do(t.Context(), pprof.Labels(stressLabel, s.label), func(ctx context.Context) { s.run(ctx, t) })
 	s.waitGoroutines(t)
@@ -91,7 +91,7 @@ func runStress(t *testing.T, closeEarly, quiet bool) {
 
 // stress is one round of TestStress.
 type stress struct {
-	b          *broadcastor.Broadcastor[int]
+	b          *multicast.Group[int]
 	closeEarly bool
 	// quiet makes run check Stats once idle, before shutting down, unless closeEarly.
 	quiet bool
@@ -205,7 +205,7 @@ func (s *stress) run(ctx context.Context, t *testing.T) {
 		s.checkStats(t)
 	}
 	switch err := s.shutdown(ctx, t); {
-	case s.closeEarly && !errors.Is(err, broadcastor.ErrClosed):
+	case s.closeEarly && !errors.Is(err, multicast.ErrClosed):
 		t.Errorf("Shutdown after Close = %v, want ErrClosed", err)
 	case !s.closeEarly && err != nil:
 		t.Errorf("Shutdown = %v, want nil", err)
@@ -257,7 +257,7 @@ func (s *stress) broadcaster(ctx context.Context, t *testing.T) {
 	s.broadcasts = append(s.broadcasts, broadcasts...)
 }
 
-// churn starts and ends subscriptions stressOps times, keeping at most stressLive at once, and closes the Broadcastor
+// churn starts and ends subscriptions stressOps times, keeping at most stressLive at once, and closes the Group
 // at op closeAt, if it is one.
 func (s *stress) churn(ctx context.Context, t *testing.T, closeAt int) {
 	t.Helper()
@@ -281,7 +281,7 @@ func (s *stress) churn(ctx context.Context, t *testing.T, closeAt int) {
 	}
 }
 
-// subscribe subscribes with Subscribe or SubscribeSeq and random options. It returns nil once the Broadcastor is
+// subscribe subscribes with Subscribe or SubscribeSeq and random options. It returns nil once the Group is
 // closed.
 func (s *stress) subscribe(ctx context.Context, t *testing.T) *stressSub {
 	t.Helper()
@@ -340,7 +340,7 @@ func (s *stress) subscribe(ctx context.Context, t *testing.T) *stressSub {
 	if err != nil {
 		cancel()
 		// Close takes its tick before closing, so a Subscribe it refused sees it.
-		if !errors.Is(err, broadcastor.ErrClosed) || s.closing.Load() == 0 {
+		if !errors.Is(err, multicast.ErrClosed) || s.closing.Load() == 0 {
 			t.Errorf("subscribing = %v, want nil, or ErrClosed once closed", err)
 		}
 
@@ -382,7 +382,7 @@ func (s *stress) end(ctx context.Context, t *testing.T, sub *stressSub) {
 	}
 }
 
-// close closes the Broadcastor, and records the ticks around the first Close.
+// close closes the Group, and records the ticks around the first Close.
 func (s *stress) close() error {
 	s.closing.CompareAndSwap(0, s.clock.Add(1))
 	err := s.b.Close()

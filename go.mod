@@ -1,3 +1,3 @@
-module github.com/elojah/broadcastor/v2
+module github.com/elojah/multicast
 
 go 1.26.1

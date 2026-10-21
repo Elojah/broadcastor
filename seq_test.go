@@ -1,4 +1,4 @@
-package broadcastor_test
+package multicast_test
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"testing"
 	"testing/synctest"
 
-	"github.com/elojah/broadcastor/v2/subscriber"
+	"github.com/elojah/multicast/subscriber"
 )
 
 // SubscribeSeq yields every message the subscriber takes, in order, and breaking out of the loop unsubscribes it.
@@ -15,7 +15,7 @@ func TestSubscribeSeq(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newBroadcastor[int](t)
+		b := newGroup[int](t)
 		_, seq := subscribeSeq(t, b)
 
 		go func() {
@@ -49,7 +49,7 @@ func TestSubscribeSeq_BreakReportsUnyielded(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		type key struct{}
 		ctx := context.WithValue(subscribeCtx(t), key{}, "seq")
-		b := newBroadcastor[int](t)
+		b := newGroup[int](t)
 		closed := &recorder[int]{}
 		id, seq, err := b.SubscribeSeq(ctx, subscriber.WithBuffer[int](2),
 			subscriber.WithErrorHandler[int](func(ctx context.Context, err error) {
@@ -104,7 +104,7 @@ func TestSubscribeSeq_ContextDone(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
-		b := newBroadcastor[int](t)
+		b := newGroup[int](t)
 		_, seq, err := b.SubscribeSeq(ctx)
 		if err != nil {
 			t.Fatalf("SubscribeSeq: %v", err)
@@ -139,7 +139,7 @@ func TestSubscribeSeq_ContextDoneFirst(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
-		b := newBroadcastor[int](t)
+		b := newGroup[int](t)
 		errs := &recorder[error]{}
 		_, seq, err := b.SubscribeSeq(ctx, subscriber.WithBuffer[int](1),
 			subscriber.WithErrorHandler[int](func(_ context.Context, err error) {
@@ -167,7 +167,7 @@ func TestSubscribeSeq_Fail(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newBroadcastor[int](t)
+		b := newGroup[int](t)
 		failures := &recorder[int]{}
 		id, seq := subscribeSeq(t, b, subscriber.WithErrorHandler[int](recordFailures(t, failures)))
 
@@ -205,7 +205,7 @@ func TestSubscribeSeq_RangeOnce(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newBroadcastor[int](t)
+		b := newGroup[int](t)
 		_, seq := subscribeSeq(t, b)
 
 		done := make(chan struct{})
@@ -237,7 +237,7 @@ func TestSubscribeSeq_Panic(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newBroadcastor[int](t)
+		b := newGroup[int](t)
 		closed := &recorder[int]{}
 		_, seq := subscribeSeq(t, b, subscriber.WithErrorHandler[int](recordClosed(t, closed)))
 

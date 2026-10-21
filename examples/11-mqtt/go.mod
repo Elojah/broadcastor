@@ -1,10 +1,10 @@
-module github.com/elojah/broadcastor/examples/11-mqtt
+module github.com/elojah/multicast/examples/11-mqtt
 
 go 1.26.1
 
 require (
 	github.com/eclipse/paho.mqtt.golang v1.5.1
-	github.com/elojah/broadcastor/v2 v2.0.0
+	github.com/elojah/multicast v0.1.0
 	github.com/mochi-mqtt/server/v2 v2.7.9
 )
 
@@ -16,4 +16,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/elojah/broadcastor/v2 => ../..
+replace github.com/elojah/multicast => ../..

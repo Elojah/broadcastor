@@ -8,8 +8,8 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/elojah/broadcastor/v2/middleware"
-	"github.com/elojah/broadcastor/v2/subscriber"
+	"github.com/elojah/multicast/middleware"
+	"github.com/elojah/multicast/subscriber"
 )
 
 // Tests of Retry's waits run in a synctest bubble, whose fake clock makes the time between two calls exactly the wait.

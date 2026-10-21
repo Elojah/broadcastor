@@ -18,14 +18,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/elojah/broadcastor/v2"
-	"github.com/elojah/broadcastor/v2/message"
-	"github.com/elojah/broadcastor/v2/subscriber"
+	"github.com/elojah/multicast"
+	"github.com/elojah/multicast/message"
+	"github.com/elojah/multicast/subscriber"
 )
 
 func main() {
 	ctx := context.Background()
-	b := broadcastor.NewBroadcastor[int]()
+	b := multicast.New[int]()
 
 	release := make(chan struct{})
 	var handled sync.WaitGroup

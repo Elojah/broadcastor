@@ -1,23 +1,23 @@
 <p align="center">
-  <img src="assets/logo.png" alt="broadcastor" width="180">
+  <img src="assets/logo.png" alt="multicast" width="180">
 </p>
 
-# broadcastor
+# multicast
 
-[![CI](https://github.com/Elojah/broadcastor/actions/workflows/ci.yml/badge.svg)](https://github.com/Elojah/broadcastor/actions/workflows/ci.yml)
-[![Go Reference](https://pkg.go.dev/badge/github.com/elojah/broadcastor/v2.svg)](https://pkg.go.dev/github.com/elojah/broadcastor/v2)
+[![CI](https://github.com/Elojah/multicast/actions/workflows/ci.yml/badge.svg)](https://github.com/Elojah/multicast/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/elojah/multicast.svg)](https://pkg.go.dev/github.com/elojah/multicast)
 
 A generic in-process fan-out for Go: one `Broadcast` hands a message to every subscriber, and each subscriber handles
 its messages one at a time, in its own goroutine. No dependencies, and it runs on TinyGo.
 
 ```sh
-go get github.com/elojah/broadcastor/v2
+go get github.com/elojah/multicast
 ```
 
 ## Quick start
 
 ```go
-b := broadcastor.NewBroadcastor[string]()
+b := multicast.New[string]()
 
 id, err := b.Subscribe(ctx, func(ctx context.Context, id uint64, msg string) error {
  fmt.Println(id, "got", msg)
@@ -46,13 +46,13 @@ for msg, fail := range seq {
 
 | Package | Holds |
 | --- | --- |
-| [`broadcastor`](https://pkg.go.dev/github.com/elojah/broadcastor/v2) | `Broadcastor`, `WithSerial`, `WithDefaultSubscriberOptions`. |
-| [`subscriber`](https://pkg.go.dev/github.com/elojah/broadcastor/v2/subscriber) | Subscriber options, error types, `Stats`, `Holder`. |
-| [`message`](https://pkg.go.dev/github.com/elojah/broadcastor/v2/message) | `Broadcast` options, and `Batch` with `Slice` and `Map`. |
-| [`middleware`](https://pkg.go.dev/github.com/elojah/broadcastor/v2/middleware) | `Recover`, `History`, `MaxAge`, `WrapError`, `Retry`. |
-| [`store`](https://pkg.go.dev/github.com/elojah/broadcastor/v2/store) | Queues for dead letters: `Ring` in memory, `File` on disk, `Drain`, `Enqueue`, `Filter`. |
-| [`holder`](https://pkg.go.dev/github.com/elojah/broadcastor/v2/holder) | Holders: `Reduce`, `NewLatest`, `Reorder`, `Jitter`, `Batch`. |
-| [`filter`](https://pkg.go.dev/github.com/elojah/broadcastor/v2/filter) | Stateful filters: `Changed`, `Every`, per key with `WithKey`, with `WithHeartbeat` and `WithHeartbeatCount`. |
+| [`multicast`](https://pkg.go.dev/github.com/elojah/multicast) | `Group`, `WithSerial`, `WithDefaultSubscriberOptions`. |
+| [`subscriber`](https://pkg.go.dev/github.com/elojah/multicast/subscriber) | Subscriber options, error types, `Stats`, `Holder`. |
+| [`message`](https://pkg.go.dev/github.com/elojah/multicast/message) | `Broadcast` options, and `Batch` with `Slice` and `Map`. |
+| [`middleware`](https://pkg.go.dev/github.com/elojah/multicast/middleware) | `Recover`, `History`, `MaxAge`, `WrapError`, `Retry`. |
+| [`store`](https://pkg.go.dev/github.com/elojah/multicast/store) | Queues for dead letters: `Ring` in memory, `File` on disk, `Drain`, `Enqueue`, `Filter`. |
+| [`holder`](https://pkg.go.dev/github.com/elojah/multicast/holder) | Holders: `Reduce`, `NewLatest`, `Reorder`, `Jitter`, `Batch`. |
+| [`filter`](https://pkg.go.dev/github.com/elojah/multicast/filter) | Stateful filters: `Changed`, `Every`, per key with `WithKey`, with `WithHeartbeat` and `WithHeartbeatCount`. |
 
 ## Delivery
 
@@ -71,7 +71,7 @@ Delivery is at most once, in broadcast order from one goroutine, except async. `
 once its ctx is done or the message's timeout runs out (`message.WithTimeout`, `subscriber.WithTimeout`), and the error
 handlers learn why. `subscriber.WithAsyncLimit(n)` bounds the async sends waiting on a subscriber.
 
-`broadcastor.NewBroadcastor(broadcastor.WithSerial[T]())` makes each `Broadcast` wait for the one under way to return,
+`multicast.New(multicast.WithSerial[T]())` makes each `Broadcast` wait for the one under way to return,
 so that messages from every goroutine reach every subscriber in the same order, async sends aside.
 
 `subscriber.WithFilter(keep)` skips what `keep` rejects before any send. `message.WithSubscriberFilter(keep)` hands one
@@ -90,11 +90,11 @@ id, err = sensors.Subscribe(ctx, trend, subscriber.WithFilter(filter.Changed(
 )))
 ```
 
-`broadcastor.WithDefaultSubscriberOptions(build)` gives each subscriber the options `build` returns, before its
+`multicast.WithDefaultSubscriberOptions(build)` gives each subscriber the options `build` returns, before its
 `Subscribe`'s own, which override them. `build` runs for each subscriber, so that each gets its own filter:
 
 ```go
-sensors := broadcastor.NewBroadcastor(broadcastor.WithDefaultSubscriberOptions(func() []subscriber.Option[reading] {
+sensors := multicast.New(multicast.WithDefaultSubscriberOptions(func() []subscriber.Option[reading] {
 	return []subscriber.Option[reading]{
 		subscriber.WithBuffer[reading](16),
 		subscriber.WithFilter(filter.Every[reading](time.Second, filter.WithKey(func(r reading) string { return r.Sensor }))),

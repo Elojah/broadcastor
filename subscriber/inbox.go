@@ -3,7 +3,7 @@ package subscriber
 import (
 	"sync/atomic"
 
-	"github.com/elojah/broadcastor/v2/message"
+	"github.com/elojah/multicast/message"
 )
 
 // inbox is the subscriber's channel. It counts the subscription's reference, which stop drops, and one per send, which

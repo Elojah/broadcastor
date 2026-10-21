@@ -1,4 +1,4 @@
-package broadcastor_test
+package multicast_test
 
 import (
 	"context"
@@ -13,9 +13,9 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/elojah/broadcastor/v2/holder"
-	"github.com/elojah/broadcastor/v2/message"
-	"github.com/elojah/broadcastor/v2/subscriber"
+	"github.com/elojah/multicast/holder"
+	"github.com/elojah/multicast/message"
+	"github.com/elojah/multicast/subscriber"
 )
 
 // A subscriber hands a batch whole to its batch handler, through the batch middlewares, and each single message to
@@ -24,7 +24,7 @@ func TestBroadcastBatch(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newBroadcastor[int](t)
+		b := newGroup[int](t)
 		unrolled, wrapped := &recorder[int]{}, &recorder[int]{}
 		unrolledID := subscribe(t, b, unrolled.handle, subscriber.WithMiddleware(recordMiddleware(wrapped)))
 		singles, batches := &recorder[int]{}, &batchRecorder{}
@@ -84,7 +84,7 @@ func TestBroadcastBatch_Lost(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newBroadcastor[int](t)
+		b := newGroup[int](t)
 		handled := &recorder[int]{hold: make(chan struct{})}
 		var subscriberErrs, batchErrs []string
 		store := &recordStore{}
@@ -134,7 +134,7 @@ func TestSubscriberWithBatchHandler_Errors(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newBroadcastor[int](t)
+		b := newGroup[int](t)
 		type key struct{}
 		var handledWith any
 		var subscriberErrs, batchErrs []error
@@ -182,7 +182,7 @@ func TestBroadcastBatch_Filter(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newBroadcastor[int](t)
+		b := newGroup[int](t)
 		var filtered atomic.Int64
 		keepEven := subscriber.WithFilter(func(msg int) bool {
 			filtered.Add(1)
@@ -238,7 +238,7 @@ func TestBroadcastBatch_Map(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newBroadcastor[int](t)
+		b := newGroup[int](t)
 		var whole, part []message.Batch[int]
 		subscribe(t, b, (&recorder[int]{}).handle, subscriber.WithBatchHandler(
 			func(_ context.Context, _ uint64, batch message.Batch[int]) error {
@@ -291,7 +291,7 @@ func TestBroadcastBatch_Discard(t *testing.T) {
 		t.Parallel()
 
 		synctest.Test(t, func(t *testing.T) {
-			b := newBroadcastor[int](t)
+			b := newGroup[int](t)
 			handled := &recorder[int]{hold: make(chan struct{})}
 			var errs []string
 			id := subscribe(t, b, handled.handle, subscriber.WithBuffer[int](1),
@@ -320,7 +320,7 @@ func TestBroadcastBatch_Discard(t *testing.T) {
 		t.Parallel()
 
 		synctest.Test(t, func(t *testing.T) {
-			b := newBroadcastor[int](t)
+			b := newGroup[int](t)
 			handled, closed := &recorder[int]{}, &recorder[int]{}
 			subscribe(t, b, func(ctx context.Context, id uint64, msg int) error {
 				handled.record(msg)
@@ -349,7 +349,7 @@ func TestSubscriberWithHolder_Batch(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newBroadcastor[int](t)
+		b := newGroup[int](t)
 		singles, batches := &recorder[int]{}, &batchRecorder{}
 		id := subscribe(t, b, singles.handle, subscriber.WithHolder(holder.NewBatch[int](holdFor, 3)),
 			subscriber.WithBatchHandler(batches.handle))

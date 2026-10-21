@@ -12,9 +12,9 @@ import (
 	"log"
 	"time"
 
-	"github.com/elojah/broadcastor/v2"
-	"github.com/elojah/broadcastor/v2/holder"
-	"github.com/elojah/broadcastor/v2/subscriber"
+	"github.com/elojah/multicast"
+	"github.com/elojah/multicast/holder"
+	"github.com/elojah/multicast/subscriber"
 )
 
 // window is far longer than a burst takes to come.
@@ -47,7 +47,7 @@ func latestBySensor(held []reading, next reading) []reading {
 
 func main() {
 	ctx := context.Background()
-	b := broadcastor.NewBroadcastor[reading]()
+	b := multicast.New[reading]()
 	// Each handle sends on it once it has printed, since the two subscribers run concurrently.
 	shown := make(chan struct{}, 16)
 
@@ -80,7 +80,7 @@ func main() {
 	}
 }
 
-func subscribe(ctx context.Context, b *broadcastor.Broadcastor[reading], h subscriber.Holder[reading], handle subscriber.Handler[reading]) {
+func subscribe(ctx context.Context, b *multicast.Group[reading], h subscriber.Holder[reading], handle subscriber.Handler[reading]) {
 	if _, err := b.Subscribe(ctx, handle, subscriber.WithHolder(h)); err != nil {
 		log.Fatal(err)
 	}

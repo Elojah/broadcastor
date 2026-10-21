@@ -1,4 +1,4 @@
-package broadcastor_test
+package multicast_test
 
 import (
 	"context"
@@ -8,9 +8,9 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/elojah/broadcastor/v2/holder"
-	"github.com/elojah/broadcastor/v2/message"
-	"github.com/elojah/broadcastor/v2/subscriber"
+	"github.com/elojah/multicast/holder"
+	"github.com/elojah/multicast/message"
+	"github.com/elojah/multicast/subscriber"
 )
 
 const holdFor = time.Second
@@ -36,7 +36,7 @@ func TestSubscriberWithHolder(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newBroadcastor[int](t)
+		b := newGroup[int](t)
 		r := &recorder[int]{}
 		wrapped := &recorder[int]{}
 		id := subscribe(t, b, r.handle, subscriber.WithHolder(byTens(holdFor)),
@@ -75,7 +75,7 @@ func TestSubscriberWithHolder_Shutdown(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newBroadcastor[int](t)
+		b := newGroup[int](t)
 		r := &recorder[int]{}
 		done := make(chan uint64, 1)
 		id := subscribe(t, b, r.handle, subscriber.WithHolder(byTens(time.Hour)), subscriber.WithDone[int](t.Context(), done))
@@ -104,7 +104,7 @@ func TestSubscriberWithHolder_Discard(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newBroadcastor[int](t)
+		b := newGroup[int](t)
 		r := &recorder[int]{}
 		errs := &recorder[error]{}
 		id := subscribe(t, b, r.handle, subscriber.WithHolder(byTens(time.Hour)),
@@ -132,7 +132,7 @@ func TestSubscriberWithHolder_Evict(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newBroadcastor[int](t)
+		b := newGroup[int](t)
 		r := &recorder[int]{}
 		errs := &recorder[error]{}
 		subscribe(t, b, r.handle, subscriber.WithHolder[int](&capped{n: 1, d: time.Hour}),

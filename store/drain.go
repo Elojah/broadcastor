@@ -3,7 +3,7 @@ package store
 import (
 	"context"
 
-	"github.com/elojah/broadcastor/v2/subscriber"
+	"github.com/elojah/multicast/subscriber"
 )
 
 // Drain hands each entry of q to handle, in order, then acks it, until ctx is done or q fails. A failed entry goes to

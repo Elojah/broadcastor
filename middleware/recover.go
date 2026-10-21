@@ -4,7 +4,7 @@ import (
 	"context"
 	"runtime/debug"
 
-	"github.com/elojah/broadcastor/v2/subscriber"
+	"github.com/elojah/multicast/subscriber"
 )
 
 // Recover turns a panic in the handler it wraps into a *subscriber.PanicError, and the subscriber goes on. Panics in

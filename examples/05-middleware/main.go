@@ -14,9 +14,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/elojah/broadcastor/v2"
-	"github.com/elojah/broadcastor/v2/middleware"
-	"github.com/elojah/broadcastor/v2/subscriber"
+	"github.com/elojah/multicast"
+	"github.com/elojah/multicast/middleware"
+	"github.com/elojah/multicast/subscriber"
 )
 
 var (
@@ -44,7 +44,7 @@ func logAttempts() subscriber.Middleware[string] {
 
 func main() {
 	ctx := context.Background()
-	b := broadcastor.NewBroadcastor[string]()
+	b := multicast.New[string]()
 
 	// How many more times each job fails before it succeeds. Only the subscriber's goroutine uses it.
 	failures := map[string]int{"send-email": 1, "resize-image": 0, "charge-card": 5}

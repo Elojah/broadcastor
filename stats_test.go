@@ -1,4 +1,4 @@
-package broadcastor_test
+package multicast_test
 
 import (
 	"context"
@@ -9,9 +9,9 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/elojah/broadcastor/v2"
-	"github.com/elojah/broadcastor/v2/message"
-	"github.com/elojah/broadcastor/v2/subscriber"
+	"github.com/elojah/multicast"
+	"github.com/elojah/multicast/message"
+	"github.com/elojah/multicast/subscriber"
 )
 
 // Each counter counts what it says, while the subscriber is still subscribed.
@@ -22,12 +22,12 @@ func TestStats(t *testing.T) {
 		name string
 		// run subscribes to b and broadcasts 1, 2 and 3. It returns the subscriber's ID, and what lets its handle return
 		// if it holds on to 1.
-		run  func(t *testing.T, b *broadcastor.Broadcastor[int]) (uint64, func())
+		run  func(t *testing.T, b *multicast.Group[int]) (uint64, func())
 		want subscriber.Stats
 		// released is what the Stats are once released, if run holds.
 		released subscriber.Stats
 	}{
-		{"Handled", func(t *testing.T, b *broadcastor.Broadcastor[int]) (uint64, func()) {
+		{"Handled", func(t *testing.T, b *multicast.Group[int]) (uint64, func()) {
 			t.Helper()
 			id := subscribe(t, b, func(context.Context, uint64, int) error {
 				time.Sleep(time.Second)
@@ -41,7 +41,7 @@ func TestStats(t *testing.T) {
 
 			return id, nil
 		}, subscriber.Stats{Delivered: 3, Handled: 3, HandleTime: 3 * time.Second}, subscriber.Stats{}},
-		{"Failed", func(t *testing.T, b *broadcastor.Broadcastor[int]) (uint64, func()) {
+		{"Failed", func(t *testing.T, b *multicast.Group[int]) (uint64, func()) {
 			t.Helper()
 			failed := &recorder[uint64]{}
 			var id uint64
@@ -65,7 +65,7 @@ func TestStats(t *testing.T) {
 
 			return id, nil
 		}, subscriber.Stats{Delivered: 3, Handled: 1, Failed: 2}, subscriber.Stats{}},
-		{"TimedOut", func(t *testing.T, b *broadcastor.Broadcastor[int]) (uint64, func()) {
+		{"TimedOut", func(t *testing.T, b *multicast.Group[int]) (uint64, func()) {
 			t.Helper()
 			stuck := &recorder[int]{hold: make(chan struct{})}
 			id := subscribe(t, b, stuck.handle, subscriber.WithTimeout[int](time.Second))
@@ -78,7 +78,7 @@ func TestStats(t *testing.T) {
 			subscriber.Stats{Delivered: 1, TimedOut: 2, Handling: 2 * time.Second},
 			subscriber.Stats{Delivered: 1, Handled: 1, TimedOut: 2, HandleTime: 2 * time.Second},
 		},
-		{"Dropped", func(t *testing.T, b *broadcastor.Broadcastor[int]) (uint64, func()) {
+		{"Dropped", func(t *testing.T, b *multicast.Group[int]) (uint64, func()) {
 			t.Helper()
 			stuck := &recorder[int]{hold: make(chan struct{})}
 			id := subscribe(t, b, stuck.handle)
@@ -91,7 +91,7 @@ func TestStats(t *testing.T) {
 			subscriber.Stats{Delivered: 1, Dropped: 2},
 			subscriber.Stats{Delivered: 1, Handled: 1, Dropped: 2},
 		},
-		{"Handling", func(t *testing.T, b *broadcastor.Broadcastor[int]) (uint64, func()) {
+		{"Handling", func(t *testing.T, b *multicast.Group[int]) (uint64, func()) {
 			t.Helper()
 			stuck := &recorder[int]{hold: make(chan struct{})}
 			id := subscribe(t, b, stuck.handle)
@@ -103,7 +103,7 @@ func TestStats(t *testing.T) {
 			subscriber.Stats{Delivered: 1, Handling: time.Second},
 			subscriber.Stats{Delivered: 1, Handled: 1, HandleTime: time.Second},
 		},
-		{"Sending", func(t *testing.T, b *broadcastor.Broadcastor[int]) (uint64, func()) {
+		{"Sending", func(t *testing.T, b *multicast.Group[int]) (uint64, func()) {
 			t.Helper()
 			stuck := &recorder[int]{hold: make(chan struct{})}
 			id := subscribe(t, b, stuck.handle)
@@ -116,7 +116,7 @@ func TestStats(t *testing.T) {
 			subscriber.Stats{Sending: 2, Delivered: 1},
 			subscriber.Stats{Delivered: 3, Handled: 3},
 		},
-		{"Queued", func(t *testing.T, b *broadcastor.Broadcastor[int]) (uint64, func()) {
+		{"Queued", func(t *testing.T, b *multicast.Group[int]) (uint64, func()) {
 			t.Helper()
 			stuck := &recorder[int]{hold: make(chan struct{})}
 			id := subscribe(t, b, stuck.handle, subscriber.WithBuffer[int](2))
@@ -134,7 +134,7 @@ func TestStats(t *testing.T) {
 			t.Parallel()
 
 			synctest.Test(t, func(t *testing.T) {
-				b := newBroadcastor[int](t)
+				b := newGroup[int](t)
 				id, release := tt.run(t, b)
 				synctest.Wait()
 				checkStats(t, b, id, tt.want)
@@ -157,7 +157,7 @@ func TestStats_AddUp(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newBroadcastor[int](t)
+		b := newGroup[int](t)
 		var handleErrs, seqErrs atomic.Uint64
 		options := func(errs *atomic.Uint64) []subscriber.Option[int] {
 			return []subscriber.Option[int]{
@@ -237,7 +237,7 @@ func TestStats_AddUp(t *testing.T) {
 }
 
 // statsOf returns the Stats of subscriber id. It may be called from any goroutine.
-func statsOf[T any](t *testing.T, b *broadcastor.Broadcastor[T], id uint64) subscriber.Stats {
+func statsOf[T any](t *testing.T, b *multicast.Group[T], id uint64) subscriber.Stats {
 	t.Helper()
 	for _, s := range b.Stats() {
 		if s.SubscriberID == id {
@@ -250,7 +250,7 @@ func statsOf[T any](t *testing.T, b *broadcastor.Broadcastor[T], id uint64) subs
 }
 
 // checkStats checks that subscriber id has the Stats want, but for its ID.
-func checkStats[T any](t *testing.T, b *broadcastor.Broadcastor[T], id uint64, want subscriber.Stats) {
+func checkStats[T any](t *testing.T, b *multicast.Group[T], id uint64, want subscriber.Stats) {
 	t.Helper()
 	want.SubscriberID = id
 	if got := statsOf(t, b, id); got != want {

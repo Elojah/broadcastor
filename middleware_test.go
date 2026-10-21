@@ -1,4 +1,4 @@
-package broadcastor_test
+package multicast_test
 
 import (
 	"context"
@@ -9,8 +9,8 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/elojah/broadcastor/v2/middleware"
-	"github.com/elojah/broadcastor/v2/subscriber"
+	"github.com/elojah/multicast/middleware"
+	"github.com/elojah/multicast/subscriber"
 )
 
 // Middlewares wrap handle in order, the first one outermost, across several options, and nil ones are skipped.
@@ -20,7 +20,7 @@ func TestSubscriberWithMiddleware(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		type key struct{}
 		ctx := context.WithValue(subscribeCtx(t), key{}, "subscribe")
-		b := newBroadcastor[int](t)
+		b := newGroup[int](t)
 		calls := &recorder[string]{}
 		ids := &recorder[uint64]{}
 		trace := func(name string) subscriber.Middleware[int] {
@@ -71,7 +71,7 @@ func TestSubscriberWithMiddleware_Recover(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newBroadcastor[int](t)
+		b := newGroup[int](t)
 		handled := &recorder[int]{}
 		errs := &recorder[error]{}
 		panicOnOne := func(next subscriber.Handler[int]) subscriber.Handler[int] {
@@ -133,7 +133,7 @@ func TestSubscriberWithMiddleware_RetryContextDone(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
-		b := newBroadcastor[int](t)
+		b := newGroup[int](t)
 		handled := &recorder[int]{}
 		failures := &recorder[int]{}
 		_, err := b.Subscribe(ctx, func(_ context.Context, _ uint64, msg int) error {
@@ -176,7 +176,7 @@ func TestSubscriberWithMiddleware_History(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newBroadcastor[int](t)
+		b := newGroup[int](t)
 		history := &recordStore{}
 		id := subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
 			switch msg {
@@ -219,7 +219,7 @@ func TestSubscriberWithMiddleware_SubscribeSeq(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newBroadcastor[int](t)
+		b := newGroup[int](t)
 		results := &recorder[string]{}
 		spy := func(next subscriber.Handler[int]) subscriber.Handler[int] {
 			return func(ctx context.Context, id uint64, msg int) error {

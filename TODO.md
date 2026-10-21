@@ -26,7 +26,7 @@ reliability fix with a test that fails without it. The API follows semver: a bre
 - [ ] Write the delivery guarantees in `doc.go` as a contract, with a test for each, store and forward included (at
   least once).
 - [ ] Run the examples on TinyGo's `cortex-m-qemu` target in `make tinygo-run`. CI then needs `qemu-system-arm`.
-- [ ] Only once someone needs it: an observer hook on the counters, for a `broadcastor/otel` module.
+- [ ] Only once someone needs it: an observer hook on the counters, for a `multicast/otel` module.
 
 ## v3
 
@@ -38,8 +38,8 @@ Breaking changes, kept for a major version.
 
 ## Out of scope
 
-- Topics and wildcards: a topic field with `WithFilter`, or one `Broadcastor` per topic, does it.
-- Priority lanes: two `Broadcastor`s, one for alarms and one for telemetry, do it.
+- Topics and wildcards: a topic field with `WithFilter`, or one `Group` per topic, does it.
+- Priority lanes: two `Group`s, one for alarms and one for telemetry, do it.
 - Competing consumers: a `handle` feeding a pool of workers does it.
 - MQTT, Redis or NATS clients in the library: they go in example modules.
 

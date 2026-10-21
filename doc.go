@@ -1,7 +1,7 @@
-// Package broadcastor is an in-process fan-out: Broadcast hands a message to every subscriber, and each subscriber
+// Package multicast is an in-process fan-out: Broadcast hands a message to every subscriber, and each subscriber
 // handles its messages one at a time, in its own goroutine.
 //
-//	b := broadcastor.NewBroadcastor[string]()
+//	b := multicast.New[string]()
 //	id, err := b.Subscribe(ctx, func(ctx context.Context, _ uint64, msg string) error {
 //		fmt.Println(msg)
 //		return nil
@@ -50,4 +50,4 @@
 // Every error about a message goes to the error handlers, or is discarded: handle's as is, a missed message's as one of
 // package subscriber's error types, each matching a sentinel with errors.Is. subscriber.WithDeadLetters also stores
 // every message the subscriber loses.
-package broadcastor
+package multicast

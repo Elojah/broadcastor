@@ -13,14 +13,14 @@ import (
 	"math"
 	"time"
 
-	"github.com/elojah/broadcastor/v2"
-	"github.com/elojah/broadcastor/v2/filter"
-	"github.com/elojah/broadcastor/v2/subscriber"
+	"github.com/elojah/multicast"
+	"github.com/elojah/multicast/filter"
+	"github.com/elojah/multicast/subscriber"
 )
 
 func main() {
 	ctx := context.Background()
-	b := broadcastor.NewBroadcastor[float64]()
+	b := multicast.New[float64]()
 	// Each handle sends what it got, since the two subscribers run concurrently.
 	got := make(chan string, 16)
 

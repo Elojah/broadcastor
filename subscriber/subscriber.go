@@ -1,5 +1,5 @@
 // Package subscriber holds the subscriber options, Handler and Middleware, Store, Stats, the errors about messages, and
-// the Subscriber a Broadcastor manages.
+// the Subscriber a Group manages.
 package subscriber
 
 import (
@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Subscriber is one subscription of a Broadcastor. Only Consume reads its channel.
+// Subscriber is one subscription of a Group. Only Consume reads its channel.
 type Subscriber[T any] struct {
 	id     uint64
 	config config[T]
@@ -17,10 +17,10 @@ type Subscriber[T any] struct {
 	// ctx is for every message without one of its own. Set by Attach.
 	ctx context.Context //nolint:containedctx // the subscription's, which outlives every call
 
-	// remove removes the subscriber from its Broadcastor, and reports whether this call did. Set by Attach.
+	// remove removes the subscriber from its Group, and reports whether this call did. Set by Attach.
 	remove func(options ...UnsubscribeOption) bool
 
-	// finished counts the subscriber out of its Broadcastor. Set by Attach.
+	// finished counts the subscriber out of its Group. Set by Attach.
 	finished func()
 
 	// stopContextLifetime cancels the AfterFunc set by Attach.
@@ -49,7 +49,7 @@ func (s *Subscriber[T]) ID() uint64 {
 	return s.id
 }
 
-// Attach sets the subscriber's ctx, and its Broadcastor's remove, called once ctx is done, when a Seq loop ends and to
+// Attach sets the subscriber's ctx, and its Group's remove, called once ctx is done, when a Seq loop ends and to
 // evict, and finished, called once the subscriber is done, which must not block. It must be called once, first, and
 // returns the subscriber's ctx: context.WithoutCancel(ctx) with WithDetachedContext.
 func (s *Subscriber[T]) Attach(ctx context.Context, remove func(options ...UnsubscribeOption) bool, finished func()) context.Context {

@@ -1,4 +1,4 @@
-package broadcastor_test
+package multicast_test
 
 import (
 	"context"
@@ -11,8 +11,8 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/elojah/broadcastor/v2/message"
-	"github.com/elojah/broadcastor/v2/subscriber"
+	"github.com/elojah/multicast/message"
+	"github.com/elojah/multicast/subscriber"
 )
 
 // The first error evict returns true for unsubscribes the subscriber: it is reported as a *subscriber.EvictedError
@@ -21,7 +21,7 @@ func TestSubscriberWithEvict(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newBroadcastor[int](t)
+		b := newGroup[int](t)
 		stuck := &recorder[int]{hold: make(chan struct{})}
 		errs := &recorder[error]{}
 		id := subscribe(t, b, stuck.handle, subscriber.WithTimeout[int](time.Second), subscriber.WithEvict[int](isTimeout),
@@ -64,7 +64,7 @@ func TestSubscriberWithEvict_Dropped(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newBroadcastor[int](t)
+		b := newGroup[int](t)
 		stuck := &recorder[int]{hold: make(chan struct{})}
 		losses := &recorder[string]{}
 		evict := &recorder[string]{}
@@ -98,7 +98,7 @@ func TestSubscriberWithEvict_HandleError(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newBroadcastor[int](t)
+		b := newGroup[int](t)
 		handled := &recorder[int]{}
 		losses := &recorder[string]{}
 		proceed := make(chan struct{})
@@ -134,7 +134,7 @@ func TestSubscriberWithEvict_Once(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newBroadcastor[int](t)
+		b := newGroup[int](t)
 		stuck := &recorder[int]{hold: make(chan struct{})}
 		losses := &recorder[string]{}
 		const broadcasters = 4
@@ -174,7 +174,7 @@ func TestSubscriberWithEvict_SubscribeSeqPanic(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newBroadcastor[int](t)
+		b := newGroup[int](t)
 		losses := &recorder[string]{}
 		_, seq := subscribeSeq(t, b, subscriber.WithEvict[int](func(err error) bool {
 			t.Errorf("evict got %v, want no call", err)

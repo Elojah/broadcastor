@@ -1,12 +1,12 @@
 # CLAUDE.md
 
-`github.com/elojah/broadcastor/v2`, a generic in-process fan-out. Go 1.26.1, no dependency. Behaviour is in godoc and
+`github.com/elojah/multicast`, a generic in-process fan-out. Go 1.26.1, no dependency. Behaviour is in godoc and
 the README, plans in TODO.md.
 
 ## Layout
 
-- Imports go `broadcastor` → `subscriber` → `message`. `middleware` and `store` import `subscriber`, never
-  `broadcastor`. `holder` imports only `message`, `filter` nothing from the library.
+- Imports go `multicast` → `subscriber` → `message`. `middleware` and `store` import `subscriber`, never
+  `multicast`. `holder` imports only `message`, `filter` nothing from the library.
 - In `subscriber`, `deliver.go` runs in the `Broadcast`'s goroutine, `consume.go` and `holder.go` in the
   subscriber's, `report.go` in either. `inbox` owns the channel and its references, `counters` every counter.
 - `examples/11-mqtt` and `12-modbus` are modules of their own (`replace ../..`), to keep their dependencies out of
@@ -29,7 +29,7 @@ Lint is `default: all` minus a list, tests included: mind `nlreturn`, `parallelt
 
 - Comments are short: invariants, non-obvious whys, the public contract. State each fact once, where it belongs.
 - Options have no prefix: `subscriber.WithBuffer`, `message.WithAsync`.
-- `Subscriber` exports only what `Broadcastor` calls, so its invariants hold whatever a caller does.
+- `Subscriber` exports only what `Group` calls, so its invariants hold whatever a caller does.
 - Errors are typed structs with a `SubscriberID` and an `Is` matching one sentinel, so `errors.Is` works without `T`.
 
 ## Invariants
@@ -40,7 +40,7 @@ A change to channels, removal or error reporting must keep these and pass `make 
   refuses at 0, so a `Broadcast` racing removal skips the subscriber with a `ClosedError`.
 - Nothing waits for a `Broadcast` but, with `WithSerial`, the next `Broadcast`, since `handle` may unsubscribe or
   `Close` while one waits on it. `Unsubscribe` closes `done` to free it, and `Shutdown` waits only on `Consume`.
-- Every removal goes through `Broadcastor.remove` (`LoadAndDelete`, then `Subscriber.Unsubscribe`), so racing
+- Every removal goes through `Group.remove` (`LoadAndDelete`, then `Subscriber.Unsubscribe`), so racing
   removals act once, and an eviction is reported once, by the error whose `remove` succeeded.
 - `discarding` is set before `inbox.stop`, which may close `ch` at once.
 - Only `Consume`'s goroutine reads `ch` and calls the holder. `SubscribeSeq` relays each message from it to the loop.
@@ -66,9 +66,9 @@ A change to channels, removal or error reporting must keep these and pass `make 
 
 ## Tests
 
-- Root tests (`broadcastor_test`) cover `subscriber` and `message` through a `Broadcastor`. Name a test after its
+- Root tests (`multicast_test`) cover `subscriber` and `message` through a `Group`. Name a test after its
   option, package included: `TestSubscriberWithBuffer`, `TestMessageWithAsync`.
-- Most run in a `synctest` bubble: create the Broadcastor with `newBroadcastor(t)`, subscribe with `subscribeCtx(t)`,
+- Most run in a `synctest` bubble: create the Group with `newGroup(t)`, subscribe with `subscribeCtx(t)`,
   range every `SubscribeSeq`, and bound waits with `deadlockTimeout`. A goroutine blocked on a mutex hangs a bubble, so
   `pkg/gate`'s tests run in real time, like `TestStress`.
 - Each example has an `Example()` needing no external service, whose output must not depend on scheduling: synchronise

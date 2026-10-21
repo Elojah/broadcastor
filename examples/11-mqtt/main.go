@@ -21,16 +21,16 @@ import (
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 
-	"github.com/elojah/broadcastor/v2"
-	"github.com/elojah/broadcastor/v2/message"
-	"github.com/elojah/broadcastor/v2/middleware"
-	"github.com/elojah/broadcastor/v2/store"
-	"github.com/elojah/broadcastor/v2/subscriber"
+	"github.com/elojah/multicast"
+	"github.com/elojah/multicast/message"
+	"github.com/elojah/multicast/middleware"
+	"github.com/elojah/multicast/store"
+	"github.com/elojah/multicast/subscriber"
 )
 
 // Each sensor publishes to prefix + its name + suffix.
 const (
-	prefix = "broadcastor/examples/mqtt/sensors/"
+	prefix = "multicast/examples/mqtt/sensors/"
 	suffix = "/temperature"
 	qos    = 1
 
@@ -66,13 +66,13 @@ func run(addr string) {
 	ctx := context.Background()
 	readings := []reading{at(0, 20), at(1, 31), at(2, 22), at(3, 33)}
 
-	b := broadcastor.NewBroadcastor[reading]()
+	b := multicast.New[reading]()
 	local, outbox := store.NewRing[reading](1024), store.NewRing[reading](1024)
 	subscribe(ctx, b, local, outbox)
 	up := make(chan struct{})
 	drained := uplink(ctx, outbox, up, len(readings))
 
-	gateway := mqtt.NewClient(mqtt.NewClientOptions().AddBroker("tcp://" + addr).SetClientID("broadcastor-example-gateway"))
+	gateway := mqtt.NewClient(mqtt.NewClientOptions().AddBroker("tcp://" + addr).SetClientID("multicast-example-gateway"))
 	wait(gateway.Connect())
 	var received sync.WaitGroup
 	received.Add(len(readings))
@@ -87,7 +87,7 @@ func run(addr string) {
 		b.Broadcast(ctx, r, message.WithNonBlocking[reading]())
 	}))
 
-	sensor := mqtt.NewClient(mqtt.NewClientOptions().AddBroker("tcp://" + addr).SetClientID("broadcastor-example-sensor"))
+	sensor := mqtt.NewClient(mqtt.NewClientOptions().AddBroker("tcp://" + addr).SetClientID("multicast-example-sensor"))
 	wait(sensor.Connect())
 	for _, r := range readings {
 		payload, err := json.Marshal(r)
@@ -118,7 +118,7 @@ func run(addr string) {
 
 // subscribe adds the rule, the local store and the uplink, each with a buffer, since the gateway broadcasts without
 // waiting: a reading that finds a buffer full is lost, as a *subscriber.DroppedError.
-func subscribe(ctx context.Context, b *broadcastor.Broadcastor[reading], local, outbox *store.Ring[reading]) {
+func subscribe(ctx context.Context, b *multicast.Group[reading], local, outbox *store.Ring[reading]) {
 	options := []subscriber.Option[reading]{
 		subscriber.WithBuffer[reading](64),
 		subscriber.WithErrorHandler[reading](func(_ context.Context, err error) { log.Println(err) }),

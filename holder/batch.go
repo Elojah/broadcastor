@@ -3,7 +3,7 @@ package holder
 import (
 	"time"
 
-	"github.com/elojah/broadcastor/v2/message"
+	"github.com/elojah/multicast/message"
 )
 
 // Batch is a subscriber.Holder that gathers the messages of a window into one batch, in order, and releases it once the

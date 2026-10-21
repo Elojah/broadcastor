@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/elojah/broadcastor/v2/middleware"
-	"github.com/elojah/broadcastor/v2/subscriber"
+	"github.com/elojah/multicast/middleware"
+	"github.com/elojah/multicast/subscriber"
 )
 
 var errHandle = errors.New("handle failed")

@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/elojah/broadcastor/v2/subscriber"
+	"github.com/elojah/multicast/subscriber"
 )
 
 // MaxAge returns a *subscriber.ExpiredError instead of handing the wrapped handler a message older than d. at returns

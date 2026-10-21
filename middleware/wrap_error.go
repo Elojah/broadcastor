@@ -3,7 +3,7 @@ package middleware
 import (
 	"context"
 
-	"github.com/elojah/broadcastor/v2/subscriber"
+	"github.com/elojah/multicast/subscriber"
 )
 
 // WrapError wraps every error in a *subscriber.HandleError naming the subscriber and the message, which a message's

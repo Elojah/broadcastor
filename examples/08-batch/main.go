@@ -1,4 +1,4 @@
-// Broadcastor.BroadcastBatch hands several messages at once, with one Config. A poll reads every sensor at once, and
+// Group.BroadcastBatch hands several messages at once, with one Config. A poll reads every sensor at once, and
 // broadcasts the readings as one batch, while a handheld probe sends its readings one at a time. The display has no
 // batch handler, so it gets each reading of a batch alone. The uplink, billed per request, gathers whatever it takes
 // into batches of three (holder.NewBatch), and sends each batch as one request from its batch handler
@@ -14,10 +14,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/elojah/broadcastor/v2"
-	"github.com/elojah/broadcastor/v2/holder"
-	"github.com/elojah/broadcastor/v2/message"
-	"github.com/elojah/broadcastor/v2/subscriber"
+	"github.com/elojah/multicast"
+	"github.com/elojah/multicast/holder"
+	"github.com/elojah/multicast/message"
+	"github.com/elojah/multicast/subscriber"
 )
 
 type reading struct {
@@ -31,7 +31,7 @@ func (r reading) String() string {
 
 func main() {
 	ctx := context.Background()
-	b := broadcastor.NewBroadcastor[reading]()
+	b := multicast.New[reading]()
 
 	if _, err := b.Subscribe(ctx, func(_ context.Context, _ uint64, r reading) error {
 		fmt.Println("display:", r)

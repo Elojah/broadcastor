@@ -6,11 +6,11 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/elojah/broadcastor/v2/message"
+	"github.com/elojah/multicast/message"
 )
 
 // Sentinels matched by the error types below with errors.Is, which does not need T. The errors the library makes
-// about a whole batch (Broadcastor.BroadcastBatch) hold it in Batch, Message being zero.
+// about a whole batch (Group.BroadcastBatch) hold it in Batch, Message being zero.
 var (
 	ErrClosed  = errors.New("subscriber closed")
 	ErrTimeout = errors.New("timeout")

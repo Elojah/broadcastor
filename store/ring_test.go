@@ -9,8 +9,8 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/elojah/broadcastor/v2/store"
-	"github.com/elojah/broadcastor/v2/subscriber"
+	"github.com/elojah/multicast/store"
+	"github.com/elojah/multicast/subscriber"
 )
 
 var _ store.Queue[int] = (*store.Ring[int])(nil)

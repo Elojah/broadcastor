@@ -5,7 +5,7 @@ import (
 	"iter"
 	"time"
 
-	"github.com/elojah/broadcastor/v2/message"
+	"github.com/elojah/multicast/message"
 )
 
 // Option configures a subscriber, when passed to Subscribe or SubscribeSeq.
@@ -79,7 +79,7 @@ func WithMiddleware[T any](middlewares ...Middleware[T]) Option[T] {
 	}
 }
 
-// WithBatchHandler hands each batch the subscriber takes (Broadcastor.BroadcastBatch, or a holder's, such as
+// WithBatchHandler hands each batch the subscriber takes (Group.BroadcastBatch, or a holder's, such as
 // holder.NewBatch) to handle, wrapped in middlewares, the first one outermost, rather than each of its values to handle
 // or the loop body, through WithMiddleware's. handle gets the ctx its values would, and its error counts every value
 // as failed but is reported once. With SubscribeSeq, handle runs in the subscriber's goroutine, not the loop's. A nil

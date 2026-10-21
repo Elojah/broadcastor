@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/elojah/broadcastor/v2/pkg/gate"
+	"github.com/elojah/multicast/pkg/gate"
 )
 
 // deadlockTimeout bounds every wait, so a deadlock fails instead of hanging. In real time, since a goroutine blocked on

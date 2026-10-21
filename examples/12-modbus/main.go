@@ -16,12 +16,12 @@ import (
 
 	"github.com/simonvetter/modbus"
 
-	"github.com/elojah/broadcastor/v2"
-	"github.com/elojah/broadcastor/v2/filter"
-	"github.com/elojah/broadcastor/v2/message"
-	"github.com/elojah/broadcastor/v2/middleware"
-	"github.com/elojah/broadcastor/v2/store"
-	"github.com/elojah/broadcastor/v2/subscriber"
+	"github.com/elojah/multicast"
+	"github.com/elojah/multicast/filter"
+	"github.com/elojah/multicast/message"
+	"github.com/elojah/multicast/middleware"
+	"github.com/elojah/multicast/store"
+	"github.com/elojah/multicast/subscriber"
 )
 
 const (
@@ -60,7 +60,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	b := broadcastor.NewBroadcastor[reading]()
+	b := multicast.New[reading]()
 	closeRule := subscribeRule(ctx, b, addr)
 	trend := store.NewRing[reading](1024)
 	subscribeTrend(ctx, b, trend)
@@ -102,7 +102,7 @@ func connect(addr string) (*modbus.ModbusClient, error) {
 
 // subscribeRule subscribes the fan rule, which writes the fan's coil over its own connection, and opens a new one after
 // a timeout. It returns a func that closes the last connection once the rule is done.
-func subscribeRule(ctx context.Context, b *broadcastor.Broadcastor[reading], addr string) func() {
+func subscribeRule(ctx context.Context, b *multicast.Group[reading], addr string) func() {
 	// Only the rule's goroutine uses it in handle, and the returned func once done has the ID, so it needs no lock. nil
 	// once closed, until the next attempt.
 	client, err := connect(addr)
@@ -171,7 +171,7 @@ func subscribeRule(ctx context.Context, b *broadcastor.Broadcastor[reading], add
 }
 
 // subscribeTrend adds the trend, standing in for a time series database.
-func subscribeTrend(ctx context.Context, b *broadcastor.Broadcastor[reading], trend *store.Ring[reading]) {
+func subscribeTrend(ctx context.Context, b *multicast.Group[reading], trend *store.Ring[reading]) {
 	_, err := b.Subscribe(ctx, store.Enqueue[reading](trend),
 		subscriber.WithFilter(filter.Changed(func(prev, next reading) bool {
 			return max(prev.Tenths, next.Tenths)-min(prev.Tenths, next.Tenths) >= deadband
@@ -185,7 +185,7 @@ func subscribeTrend(ctx context.Context, b *broadcastor.Broadcastor[reading], tr
 
 // poll broadcasts a reading of the temperature every pollEvery. A gateway would poll until SIGTERM, here n times, as
 // many as the PLC has readings.
-func poll(ctx context.Context, b *broadcastor.Broadcastor[reading], client *modbus.ModbusClient, n int) {
+func poll(ctx context.Context, b *multicast.Group[reading], client *modbus.ModbusClient, n int) {
 	ticker := time.NewTicker(pollEvery)
 	defer ticker.Stop()
 	for i := 1; i <= n; i++ {
