@@ -16,19 +16,19 @@ var errEmpty = errors.New("empty message")
 
 func main() {
 	ctx := context.Background()
-	b := multicast.New[string]()
+	g := multicast.New[string]()
 
-	_, seq, err := b.SubscribeSeq(ctx, subscriber.WithErrorHandler[string](func(_ context.Context, err error) {
+	_, seq, err := g.SubscribeSeq(ctx, subscriber.WithErrorHandler[string](func(_ context.Context, err error) {
 		fmt.Println("failed:", err)
 	}))
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	// Each Broadcast waits for the loop to take its message, as it would for handle.
+	// Each Publish waits for the loop to take its message, as it would for handle.
 	go func() {
 		for _, msg := range []string{"hello", "", "world", "stop"} {
-			b.Broadcast(ctx, msg)
+			g.Publish(ctx, msg)
 		}
 	}()
 
@@ -44,5 +44,5 @@ func main() {
 		}
 	}
 
-	fmt.Println("handed to", b.Broadcast(ctx, "anyone?"), "subscribers")
+	fmt.Println("handed to", g.Publish(ctx, "anyone?"), "subscribers")
 }

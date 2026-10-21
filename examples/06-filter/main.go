@@ -1,9 +1,9 @@
-// subscriber.WithFilter skips messages before Broadcast sends them, so the subscriber never wakes up for them. A
-// thermometer broadcasts a reading every second, mostly the same. The display shows one only once it has moved by half
+// subscriber.WithFilter skips messages before Publish sends them, so the subscriber never wakes up for them. A
+// thermometer publishes a reading every second, mostly the same. The display shows one only once it has moved by half
 // a degree from the last shown (filter.Changed, a deadband), and the uplink sends at most one an hour (filter.Every),
 // so only the first here.
 //
-// Broadcast returns how many subscribers took each reading, skipped ones excluded.
+// Publish returns how many subscribers took each reading, skipped ones excluded.
 package main
 
 import (
@@ -20,11 +20,11 @@ import (
 
 func main() {
 	ctx := context.Background()
-	b := multicast.New[float64]()
+	g := multicast.New[float64]()
 	// Each handle sends what it got, since the two subscribers run concurrently.
 	got := make(chan string, 16)
 
-	_, err := b.Subscribe(ctx, func(_ context.Context, _ uint64, celsius float64) error {
+	_, err := g.Subscribe(ctx, func(_ context.Context, _ uint64, celsius float64) error {
 		got <- fmt.Sprintf("display: %.1f degrees", celsius)
 
 		return nil
@@ -33,7 +33,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	_, err = b.Subscribe(ctx, func(_ context.Context, _ uint64, celsius float64) error {
+	_, err = g.Subscribe(ctx, func(_ context.Context, _ uint64, celsius float64) error {
 		got <- fmt.Sprintf("uplink: %.1f degrees", celsius)
 
 		return nil
@@ -45,14 +45,14 @@ func main() {
 	readings := []float64{20.0, 20.1, 20.2, 20.6, 20.4, 19.9, 20.0}
 	taken := 0
 	for _, celsius := range readings {
-		taken += b.Broadcast(ctx, celsius)
+		taken += g.Publish(ctx, celsius)
 	}
 	for range taken {
 		fmt.Println(<-got)
 	}
 	fmt.Println(len(readings), "readings, handed over", taken, "times")
 
-	if err := b.Close(); err != nil {
+	if err := g.Close(); err != nil {
 		log.Fatal(err)
 	}
 }

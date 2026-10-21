@@ -35,7 +35,7 @@ type RetryPolicy struct {
 // Retry calls the handler with policy.Do, so again after an error, but never retries subscriber.ErrClosed, which an
 // ended SubscribeSeq loop returns.
 //
-// It waits in the subscriber's goroutine, holding up the subscriber and any Broadcast waiting on it. Unsubscribe does
+// It waits in the subscriber's goroutine, holding up the subscriber and any Publish waiting on it. Unsubscribe does
 // not end a wait: ctx does. A panic passes through, but an inner Recover's *subscriber.PanicError is retried.
 func Retry[T any](policy RetryPolicy) subscriber.Middleware[T] {
 	isRetryable := policy.IsRetryable

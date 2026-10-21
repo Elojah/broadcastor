@@ -1,6 +1,6 @@
 // Package middleware holds ready-made subscriber.Middleware for subscriber.WithMiddleware, in the recommended order:
 //
-//	id, err := b.Subscribe(ctx, handle, subscriber.WithMiddleware(
+//	id, err := g.Subscribe(ctx, handle, subscriber.WithMiddleware(
 //		middleware.Recover[string](),
 //		middleware.History[string](history),
 //		middleware.MaxAge[string](time.Minute, sentAt),

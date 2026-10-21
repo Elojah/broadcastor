@@ -2,7 +2,7 @@ package message
 
 import "iter"
 
-// Batch holds values that BroadcastBatch hands to each subscriber at once, with one Config. Slice and Map are two.
+// Batch holds values that PublishBatch hands to each subscriber at once, with one Config. Slice and Map are two.
 // Every subscriber reads the same batch, possibly at once, so All and Len must be safe for concurrent use.
 type Batch[T any] interface {
 	// Add adds msg.

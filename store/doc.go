@@ -2,7 +2,7 @@
 // messages are read back from:
 //
 //	lost := store.NewRing[string](1024)
-//	id, err := b.Subscribe(ctx, handle, subscriber.WithDeadLetters[string](lost))
+//	id, err := g.Subscribe(ctx, handle, subscriber.WithDeadLetters[string](lost))
 //	...
 //	entry, err := lost.Next(ctx)
 //	...

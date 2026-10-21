@@ -60,15 +60,15 @@ func main() {
 		log.Fatal(err)
 	}
 
-	b := multicast.New[reading]()
-	closeRule := subscribeRule(ctx, b, addr)
+	g := multicast.New[reading]()
+	closeRule := subscribeRule(ctx, g, addr)
 	trend := store.NewRing[reading](1024)
-	subscribeTrend(ctx, b, trend)
-	poll(ctx, b, poller, len(readings))
+	subscribeTrend(ctx, g, trend)
+	poll(ctx, g, poller, len(readings))
 
 	shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	if err := b.Shutdown(shutdownCtx); err != nil {
+	if err := g.Shutdown(shutdownCtx); err != nil {
 		log.Fatal(err)
 	}
 	closeRule()
@@ -102,7 +102,7 @@ func connect(addr string) (*modbus.ModbusClient, error) {
 
 // subscribeRule subscribes the fan rule, which writes the fan's coil over its own connection, and opens a new one after
 // a timeout. It returns a func that closes the last connection once the rule is done.
-func subscribeRule(ctx context.Context, b *multicast.Group[reading], addr string) func() {
+func subscribeRule(ctx context.Context, g *multicast.Group[reading], addr string) func() {
 	// Only the rule's goroutine uses it in handle, and the returned func once done has the ID, so it needs no lock. nil
 	// once closed, until the next attempt.
 	client, err := connect(addr)
@@ -141,7 +141,7 @@ func subscribeRule(ctx context.Context, b *multicast.Group[reading], addr string
 	})
 	// Room for the rule's ID, since Shutdown waits for the send.
 	done := make(chan uint64, 1)
-	_, err = b.Subscribe(ctx, handle,
+	_, err = g.Subscribe(ctx, handle,
 		// In parallel, so that the trend never waits for the rule.
 		subscriber.WithDefaultMessageOptions(message.WithParallel[reading](), message.WithTimeout[reading](pollEvery)),
 		// A reading that switches the fan waits there while the rule reconnects.
@@ -171,8 +171,8 @@ func subscribeRule(ctx context.Context, b *multicast.Group[reading], addr string
 }
 
 // subscribeTrend adds the trend, standing in for a time series database.
-func subscribeTrend(ctx context.Context, b *multicast.Group[reading], trend *store.Ring[reading]) {
-	_, err := b.Subscribe(ctx, store.Enqueue[reading](trend),
+func subscribeTrend(ctx context.Context, g *multicast.Group[reading], trend *store.Ring[reading]) {
+	_, err := g.Subscribe(ctx, store.Enqueue[reading](trend),
 		subscriber.WithFilter(filter.Changed(func(prev, next reading) bool {
 			return max(prev.Tenths, next.Tenths)-min(prev.Tenths, next.Tenths) >= deadband
 		})),
@@ -183,9 +183,9 @@ func subscribeTrend(ctx context.Context, b *multicast.Group[reading], trend *sto
 	}
 }
 
-// poll broadcasts a reading of the temperature every pollEvery. A gateway would poll until SIGTERM, here n times, as
+// poll publishes a reading of the temperature every pollEvery. A gateway would poll until SIGTERM, here n times, as
 // many as the PLC has readings.
-func poll(ctx context.Context, b *multicast.Group[reading], client *modbus.ModbusClient, n int) {
+func poll(ctx context.Context, g *multicast.Group[reading], client *modbus.ModbusClient, n int) {
 	ticker := time.NewTicker(pollEvery)
 	defer ticker.Stop()
 	for i := 1; i <= n; i++ {
@@ -197,7 +197,7 @@ func poll(ctx context.Context, b *multicast.Group[reading], client *modbus.Modbu
 
 			continue
 		}
-		b.Broadcast(ctx, reading{Poll: i, Tenths: tenths})
+		g.Publish(ctx, reading{Poll: i, Tenths: tenths})
 	}
 }
 

@@ -2,7 +2,7 @@
 // retryable error, waiting 10ms then 20ms. logAttempts, our own, prints each failed attempt, and middleware.WrapError
 // wraps the last error.
 //
-// Middlewares run in the subscriber's goroutine, so the output is in message order, and Broadcast waits while Retry
+// Middlewares run in the subscriber's goroutine, so the output is in message order, and Publish waits while Retry
 // does.
 package main
 
@@ -44,14 +44,14 @@ func logAttempts() subscriber.Middleware[string] {
 
 func main() {
 	ctx := context.Background()
-	b := multicast.New[string]()
+	g := multicast.New[string]()
 
 	// How many more times each job fails before it succeeds. Only the subscriber's goroutine uses it.
 	failures := map[string]int{"send-email": 1, "resize-image": 0, "charge-card": 5}
 
 	// Every message is either handled or reported.
 	var done sync.WaitGroup
-	id, err := b.Subscribe(ctx, func(_ context.Context, _ uint64, job string) error {
+	id, err := g.Subscribe(ctx, func(_ context.Context, _ uint64, job string) error {
 		left, known := failures[job]
 		if !known {
 			return errUnknownJob
@@ -91,11 +91,11 @@ func main() {
 
 	for _, job := range []string{"send-email", "resize-image", "charge-card", "print-invoice"} {
 		done.Add(1)
-		b.Broadcast(ctx, job)
+		g.Publish(ctx, job)
 	}
 	done.Wait()
 
-	if err := b.Unsubscribe(ctx, id); err != nil {
+	if err := g.Unsubscribe(ctx, id); err != nil {
 		log.Fatal(err)
 	}
 }

@@ -1,5 +1,5 @@
-// One subscriber gets every message, in broadcast order. handle gets the subscriber's ID, so it can unsubscribe
-// itself, since Unsubscribe never waits. Broadcast then hands the message to nobody.
+// One subscriber gets every message, in publish order. handle gets the subscriber's ID, so it can unsubscribe
+// itself, since Unsubscribe never waits. Publish then hands the message to nobody.
 package main
 
 import (
@@ -12,26 +12,26 @@ import (
 
 func main() {
 	ctx := context.Background()
-	b := multicast.New[string]()
+	g := multicast.New[string]()
 
 	stopped := make(chan struct{})
-	_, err := b.Subscribe(ctx, func(ctx context.Context, id uint64, msg string) error {
+	_, err := g.Subscribe(ctx, func(ctx context.Context, id uint64, msg string) error {
 		fmt.Println("got", msg)
 		if msg != "stop" {
 			return nil
 		}
 		defer close(stopped)
 
-		return b.Unsubscribe(ctx, id)
+		return g.Unsubscribe(ctx, id)
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	for _, msg := range []string{"hello", "world", "stop"} {
-		b.Broadcast(ctx, msg)
+		g.Publish(ctx, msg)
 	}
-	// Broadcast returns once the subscriber has taken the message, not handled it.
+	// Publish returns once the subscriber has taken the message, not handled it.
 	<-stopped
-	fmt.Println("handed to", b.Broadcast(ctx, "anyone?"), "subscribers")
+	fmt.Println("handed to", g.Publish(ctx, "anyone?"), "subscribers")
 }

@@ -70,7 +70,7 @@ func main() {
 	}
 }
 
-// runAlerts subscribes the alerts, which first page what they lost, then broadcasts readings, and shuts down once each
+// runAlerts subscribes the alerts, which first page what they lost, then publishes readings, and shuts down once each
 // is handled or lost. Paging fails while pagerDown.
 func runAlerts(dir string, pagerDown bool, readings ...reading) {
 	ctx := context.Background()
@@ -81,8 +81,8 @@ func runAlerts(dir string, pagerDown bool, readings ...reading) {
 		log.Fatal(err)
 	}
 
-	b := multicast.New[reading]()
-	_, err = b.Subscribe(ctx, func(_ context.Context, _ uint64, r reading) error {
+	g := multicast.New[reading]()
+	_, err = g.Subscribe(ctx, func(_ context.Context, _ uint64, r reading) error {
 		if r.Celsius <= 30 {
 			return nil
 		}
@@ -95,7 +95,7 @@ func runAlerts(dir string, pagerDown bool, readings ...reading) {
 
 		return nil
 	},
-		// Before any reading broadcast here. Each is acked once handled, or lost again and back in lost.
+		// Before any reading published here. Each is acked once handled, or lost again and back in lost.
 		subscriber.WithReplay(lost.Replay(ctx)),
 		subscriber.WithDeadLetters[reading](lost),
 		// handle prints the others.
@@ -110,11 +110,11 @@ func runAlerts(dir string, pagerDown bool, readings ...reading) {
 	}
 
 	for _, r := range readings {
-		b.Broadcast(ctx, r)
+		g.Publish(ctx, r)
 	}
 	shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	if err := b.Shutdown(shutdownCtx); err != nil {
+	if err := g.Shutdown(shutdownCtx); err != nil {
 		log.Fatal(err)
 	}
 	fmt.Println("lost and not paged yet:", lost.Len())

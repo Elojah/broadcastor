@@ -25,13 +25,13 @@ import (
 )
 
 const (
-	stressRounds       = 10
-	stressBroadcasters = 4
-	stressChurners     = 4
-	// stressOps is how many Broadcasts or BroadcastBatches each broadcaster makes, and subscriptions each churner
+	stressRounds     = 10
+	stressPublishers = 4
+	stressChurners   = 4
+	// stressOps is how many Publish or PublishBatch calls each publisher makes, and subscriptions each churner
 	// starts or ends, per round.
 	stressOps = 200
-	// stressBatch bounds the values of a BroadcastBatch, and of a holder.NewBatch's batches.
+	// stressBatch bounds the values of a PublishBatch, and of a holder.NewBatch's batches.
 	stressBatch = 3
 	// stressLive bounds each churner's live subscriptions.
 	stressLive = 8
@@ -48,7 +48,7 @@ const (
 var (
 	errAfterShutdown = errors.New("handled or reported once Shutdown had returned")
 	errAfterDone     = errors.New("handled once done had the ID")
-	errReplayLate    = errors.New("replayed after a broadcast message")
+	errReplayLate    = errors.New("replayed after a published message")
 	errEvictClosed   = errors.New("evict got a *subscriber.ClosedError")
 	errHeldDue       = errors.New("held while a message held was due")
 )
@@ -58,14 +58,14 @@ var stressLabels atomic.Uint64
 
 // TestStress interleaves every method at random from several goroutines, in real time so that timeouts race sends, over
 // rounds with a Group each. It checks that nothing panics, every goroutine returns once closed, no subscriber
-// gets a message twice, a subscriber gets every message broadcast while subscribed and none outside, batched or not,
+// gets a message twice, a subscriber gets every message published while subscribed and none outside, batched or not,
 // its replay comes first, Stats add up once idle, done gets the ID once after handle's last call, and nothing is
 // handled, reported or sent on done after Shutdown.
 func TestStress(t *testing.T) {
 	t.Parallel()
 
 	for round := range stressRounds {
-		// Half the rounds close mid-run. The others shut down once the broadcasters and churners are done: half once
+		// Half the rounds close mid-run. The others shut down once the publishers and churners are done: half once
 		// idle, after checking Stats, half at once.
 		closeEarly, quiet := round%2 == 1, round%4 == 0
 		runStress(t, closeEarly, quiet)
@@ -78,7 +78,7 @@ func TestStress(t *testing.T) {
 // runStress runs one round, then checks it once every goroutine it started has returned.
 func runStress(t *testing.T, closeEarly, quiet bool) {
 	t.Helper()
-	s := &stress{b: newGroup[int](t), closeEarly: closeEarly, quiet: quiet, label: strconv.FormatUint(stressLabels.Add(1), 10)}
+	s := &stress{g: newGroup[int](t), closeEarly: closeEarly, quiet: quiet, label: strconv.FormatUint(stressLabels.Add(1), 10)}
 	// Every goroutine f starts carries the label, and so do theirs, the library's included.
 	pprof.Do(t.Context(), pprof.Labels(stressLabel, s.label), func(ctx context.Context) { s.run(ctx, t) })
 	s.waitGoroutines(t)
@@ -91,7 +91,7 @@ func runStress(t *testing.T, closeEarly, quiet bool) {
 
 // stress is one round of TestStress.
 type stress struct {
-	b          *multicast.Group[int]
+	g          *multicast.Group[int]
 	closeEarly bool
 	// quiet makes run check Stats once idle, before shutting down, unless closeEarly.
 	quiet bool
@@ -101,7 +101,7 @@ type stress struct {
 	// clock orders what the goroutines do: its atomics are sequentially consistent, so a tick taken after another
 	// happened after it.
 	clock atomic.Int64
-	// next is the last number broadcast.
+	// next is the last number published.
 	next atomic.Int64
 	// closing and closed are the ticks before the first Close and after it returned, 0 until then.
 	closing, closed atomic.Int64
@@ -111,13 +111,13 @@ type stress struct {
 	// loops are the SubscribeSeq loops.
 	loops sync.WaitGroup
 
-	mu         sync.Mutex
-	broadcasts []stressBroadcast
-	subs       []*stressSub
+	mu        sync.Mutex
+	publishes []stressPublish
+	subs      []*stressSub
 }
 
-// stressBroadcast is the Broadcast of number, between the ticks start and end.
-type stressBroadcast struct {
+// stressPublish is the Publish of number, between the ticks start and end.
+type stressPublish struct {
 	number     int
 	start, end int64
 }
@@ -159,7 +159,7 @@ type stressSub struct {
 	// replay is how many numbers the subscriber replays, and yielded those yield returned true for.
 	replay  int
 	yielded []int
-	// live is set once handle got a broadcast message, after which it may not get a replayed one.
+	// live is set once handle got a published message, after which it may not get a replayed one.
 	live bool
 	// twice holds the numbers the subscriber got again, or that handle failed for again.
 	twice      []int
@@ -176,16 +176,16 @@ const (
 	stressDropped
 )
 
-// run starts the broadcasters and churners, checks Stats once they are done if quiet and not closed early, then shuts
+// run starts the publishers and churners, checks Stats once they are done if quiet and not closed early, then shuts
 // down.
 func (s *stress) run(ctx context.Context, t *testing.T) {
 	t.Helper()
 	var workers sync.WaitGroup
 	start := make(chan struct{})
-	for range stressBroadcasters {
+	for range stressPublishers {
 		workers.Go(func() {
 			<-start
-			s.broadcaster(ctx, t)
+			s.publisher(ctx, t)
 		})
 	}
 	for i := range stressChurners {
@@ -199,7 +199,7 @@ func (s *stress) run(ctx context.Context, t *testing.T) {
 		})
 	}
 	close(start)
-	s.wait(t, &workers, "broadcasters and churners")
+	s.wait(t, &workers, "publishers and churners")
 
 	if s.quiet && !s.closeEarly {
 		s.checkStats(t)
@@ -211,16 +211,16 @@ func (s *stress) run(ctx context.Context, t *testing.T) {
 		t.Errorf("Shutdown = %v, want nil", err)
 	}
 	s.wait(t, &s.loops, "SubscribeSeq loops")
-	if stats := s.b.Stats(); len(stats) != 0 {
+	if stats := s.g.Stats(); len(stats) != 0 {
 		t.Errorf("Stats after Close are for %d subscribers, want none", len(stats))
 	}
 }
 
-// broadcaster broadcasts stressOps times unique numbers, alone or in a batch, each time with a random delivery and
+// publisher publishes stressOps times unique numbers, alone or in a batch, each time with a random delivery and
 // timeout.
-func (s *stress) broadcaster(ctx context.Context, t *testing.T) {
+func (s *stress) publisher(ctx context.Context, t *testing.T) {
 	t.Helper()
-	broadcasts := make([]stressBroadcast, 0, stressOps)
+	publishes := make([]stressPublish, 0, stressOps)
 	for range stressOps {
 		size := 1
 		if randN(3) == 0 {
@@ -231,22 +231,22 @@ func (s *stress) broadcaster(ctx context.Context, t *testing.T) {
 		for n := last - size + 1; n <= last; n++ {
 			batch.Add(n)
 		}
-		broadcastCtx, cancel, options := stressMessage(ctx)
+		publishCtx, cancel, options := stressMessage(ctx)
 		start := s.clock.Add(1)
 		p := recovered(func() {
 			if size == 1 {
-				s.b.Broadcast(broadcastCtx, last, options...)
+				s.g.Publish(publishCtx, last, options...)
 			} else {
-				s.b.BroadcastBatch(broadcastCtx, &batch, options...)
+				s.g.PublishBatch(publishCtx, &batch, options...)
 			}
 		})
 		end := s.clock.Add(1)
 		cancel()
 		if p != nil {
-			t.Errorf("broadcasting %v panicked: %v", batch, p)
+			t.Errorf("publishing %v panicked: %v", batch, p)
 		}
 		for _, n := range batch {
-			broadcasts = append(broadcasts, stressBroadcast{number: n, start: start, end: end})
+			publishes = append(publishes, stressPublish{number: n, start: start, end: end})
 		}
 		// So that workers take turns with GOMAXPROCS 1 too.
 		runtime.Gosched()
@@ -254,7 +254,7 @@ func (s *stress) broadcaster(ctx context.Context, t *testing.T) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.broadcasts = append(s.broadcasts, broadcasts...)
+	s.publishes = append(s.publishes, publishes...)
 }
 
 // churn starts and ends subscriptions stressOps times, keeping at most stressLive at once, and closes the Group
@@ -332,9 +332,9 @@ func (s *stress) subscribe(ctx context.Context, t *testing.T) *stressSub {
 	)
 	sub.subscribing = s.clock.Add(1)
 	if sub.seq {
-		sub.id, seq, err = s.b.SubscribeSeq(ctx, options...)
+		sub.id, seq, err = s.g.SubscribeSeq(ctx, options...)
 	} else {
-		sub.id, err = s.b.Subscribe(ctx, s.handle(sub), options...)
+		sub.id, err = s.g.Subscribe(ctx, s.handle(sub), options...)
 	}
 	sub.subscribed = s.clock.Add(1)
 	if err != nil {
@@ -385,7 +385,7 @@ func (s *stress) end(ctx context.Context, t *testing.T, sub *stressSub) {
 // close closes the Group, and records the ticks around the first Close.
 func (s *stress) close() error {
 	s.closing.CompareAndSwap(0, s.clock.Add(1))
-	err := s.b.Close()
+	err := s.g.Close()
 	s.closed.CompareAndSwap(0, s.clock.Add(1))
 
 	return err
@@ -399,7 +399,7 @@ func (s *stress) shutdown(ctx context.Context, t *testing.T) error {
 	defer cancel()
 
 	s.closing.CompareAndSwap(0, s.clock.Add(1))
-	err := s.b.Shutdown(ctx)
+	err := s.g.Shutdown(ctx)
 	s.closed.CompareAndSwap(0, s.clock.Add(1))
 	s.shut.Store(true)
 	s.mu.Lock()
@@ -417,7 +417,7 @@ func (s *stress) shutdown(ctx context.Context, t *testing.T) error {
 // unsubscribe unsubscribes sub, whose ID is id, and records the ticks around it. Once closed, sub may be gone already.
 func (s *stress) unsubscribe(ctx context.Context, sub *stressSub, id uint64, options ...subscriber.UnsubscribeOption) error {
 	earliest(&sub.leaving, s.clock.Add(1))
-	err := s.b.Unsubscribe(ctx, id, options...)
+	err := s.g.Unsubscribe(ctx, id, options...)
 	switch {
 	case err == nil:
 		earliest(&sub.gone, s.clock.Add(1))
@@ -512,7 +512,7 @@ func (s *stress) checkStats(t *testing.T) {
 
 	deadline := time.Now().Add(deadlockTimeout)
 	for {
-		mismatch := statsMismatch(s.b.Stats(), subs)
+		mismatch := statsMismatch(s.g.Stats(), subs)
 		if mismatch == "" {
 			return
 		}
@@ -529,16 +529,16 @@ func (s *stress) checkStats(t *testing.T) {
 func (s *stress) check(t *testing.T) {
 	t.Helper()
 	const reported = 5
-	byNumber := make(map[int]stressBroadcast, len(s.broadcasts))
-	for _, b := range s.broadcasts {
-		byNumber[b.number] = b
+	byNumber := make(map[int]stressPublish, len(s.publishes))
+	for _, p := range s.publishes {
+		byNumber[p.number] = p
 	}
 	// Every round closes, so both are set.
 	closing, closed := s.closing.Load(), s.closed.Load()
 
 	failing := 0
 	for i, sub := range s.subs {
-		problems := sub.problems(s.broadcasts, byNumber, closing, closed)
+		problems := sub.problems(s.publishes, byNumber, closing, closed)
 		if len(problems) == 0 {
 			continue
 		}
@@ -744,7 +744,7 @@ func (sub *stressSub) evict(numbers []int) {
 	}
 }
 
-// checkShut records n as unexpected if Shutdown has returned already. Every Broadcast has returned by then, so nothing
+// checkShut records n as unexpected if Shutdown has returned already. Every Publish has returned by then, so nothing
 // else may report n.
 func (sub *stressSub) checkShut(n int) {
 	if sub.shut.Load() {
@@ -759,9 +759,9 @@ func (sub *stressSub) unexpect(err error) {
 	sub.unexpected = append(sub.unexpected, err)
 }
 
-// problems checks what the subscriber got against broadcasts, which byNumber indexes, given the ticks around the
+// problems checks what the subscriber got against publishes, which byNumber indexes, given the ticks around the
 // first Close.
-func (sub *stressSub) problems(broadcasts []stressBroadcast, byNumber map[int]stressBroadcast, closing, closed int64) []string {
+func (sub *stressSub) problems(publishes []stressPublish, byNumber map[int]stressPublish, closing, closed int64) []string {
 	sub.mu.Lock()
 	defer sub.mu.Unlock()
 	var problems []string
@@ -779,27 +779,27 @@ func (sub *stressSub) problems(broadcasts []stressBroadcast, byNumber map[int]st
 	}
 	problems = append(problems, sub.optionProblems()...)
 
-	// Every message broadcast entirely while it was subscribed, and none broadcast entirely outside that.
+	// Every message published entirely while it was subscribed, and none published entirely outside that.
 	leaving, gone := sub.left(byNumber, closing), min(tickOrNever(&sub.gone), closed)
 	var missing, extra []int
-	for _, b := range broadcasts {
-		if _, ok := sub.got[b.number]; !ok && b.start > sub.subscribed && b.end < leaving {
-			missing = append(missing, b.number)
+	for _, p := range publishes {
+		if _, ok := sub.got[p.number]; !ok && p.start > sub.subscribed && p.end < leaving {
+			missing = append(missing, p.number)
 		}
 	}
 	for n := range sub.got {
-		if b, ok := byNumber[n]; n > 0 && (!ok || b.end < sub.subscribing || b.start > gone) {
+		if p, ok := byNumber[n]; n > 0 && (!ok || p.end < sub.subscribing || p.start > gone) {
 			extra = append(extra, n)
 		}
 	}
 	if len(missing) != 0 {
 		slices.Sort(missing)
-		problems = append(problems, fmt.Sprintf("missed %d messages broadcast while it was subscribed: %v, the first %+v",
+		problems = append(problems, fmt.Sprintf("missed %d messages published while it was subscribed: %v, the first %+v",
 			len(missing), first(missing), byNumber[missing[0]]))
 	}
 	if len(extra) != 0 {
 		slices.Sort(extra)
-		problems = append(problems, fmt.Sprintf("got %d messages broadcast before it subscribed or after it was unsubscribed: %v, the first %+v",
+		problems = append(problems, fmt.Sprintf("got %d messages published before it subscribed or after it was unsubscribed: %v, the first %+v",
 			len(extra), first(extra), byNumber[extra[0]]))
 	}
 
@@ -824,18 +824,18 @@ func (sub *stressSub) problems(broadcasts []stressBroadcast, byNumber map[int]st
 }
 
 // left returns the earliest tick before something removed the subscriber, given the first Close's. sub.mu must be held.
-func (sub *stressSub) left(byNumber map[int]stressBroadcast, closing int64) int64 {
+func (sub *stressSub) left(byNumber map[int]stressPublish, closing int64) int64 {
 	leaving := min(tickOrNever(&sub.leaving), closing)
 	if sub.evictions == 0 {
 		return leaving
 	}
-	// Evicted by those messages' Broadcast or handle, once a Broadcast of one started, or by a replayed value.
+	// Evicted by those messages' Publish or handle, once a Publish of one started, or by a replayed value.
 	for _, n := range sub.evicted {
-		b, ok := byNumber[n]
+		p, ok := byNumber[n]
 		if !ok {
 			return min(leaving, sub.subscribing)
 		}
-		leaving = min(leaving, b.start)
+		leaving = min(leaving, p.start)
 	}
 
 	return leaving
@@ -935,7 +935,7 @@ func stressNumbers(msg int, batch message.Batch[int]) []int {
 	return slices.Collect(batch.All())
 }
 
-// stressMessage returns ctx and options for a Broadcast: a random delivery, and a timeout on the message, on ctx, or
+// stressMessage returns ctx and options for a Publish: a random delivery, and a timeout on the message, on ctx, or
 // none. cancel ends the ctx it returns.
 func stressMessage(ctx context.Context) (context.Context, context.CancelFunc, []message.Option[int]) {
 	deliveries := []message.Option[int]{
@@ -947,7 +947,7 @@ func stressMessage(ctx context.Context) (context.Context, context.CancelFunc, []
 	case 0:
 		options = append(options, message.WithTimeout[int](timeout))
 	case 1:
-		// Cancelled once Broadcast returns, so that async sends race it.
+		// Cancelled once Publish returns, so that async sends race it.
 		ctx, cancel := context.WithTimeout(ctx, timeout)
 
 		return ctx, cancel, options
@@ -956,7 +956,7 @@ func stressMessage(ctx context.Context) (context.Context, context.CancelFunc, []
 	return ctx, func() {}, options
 }
 
-// stressPause sleeps now and then, so that Broadcasts time out or drop messages.
+// stressPause sleeps now and then, so that Publish calls time out or drop messages.
 func stressPause() {
 	if randN(8) == 0 {
 		time.Sleep(time.Duration(randN(int(stressTimeout))))

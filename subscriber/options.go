@@ -47,7 +47,7 @@ type unsubscription struct {
 	discard bool
 }
 
-// WithBuffer sets the subscriber's buffer size: Broadcast waits for it only once the buffer is full. A batch takes one
+// WithBuffer sets the subscriber's buffer size: Publish waits for it only once the buffer is full. A batch takes one
 // place, whatever its size.
 func WithBuffer[T any](buffer int) Option[T] {
 	return func(config *config[T]) {
@@ -55,8 +55,8 @@ func WithBuffer[T any](buffer int) Option[T] {
 	}
 }
 
-// WithErrorHandler sets the handler for every error about the subscriber's messages: handle's, and why Broadcast could
-// not hand one over. It runs where the error happens, in the subscriber's goroutine or Broadcast's, and holds that up.
+// WithErrorHandler sets the handler for every error about the subscriber's messages: handle's, and why Publish could
+// not hand one over. It runs where the error happens, in the subscriber's goroutine or Publish's, and holds that up.
 // Without one, errors are discarded.
 func WithErrorHandler[T any](handler func(ctx context.Context, err error)) Option[T] {
 	return func(config *config[T]) {
@@ -79,7 +79,7 @@ func WithMiddleware[T any](middlewares ...Middleware[T]) Option[T] {
 	}
 }
 
-// WithBatchHandler hands each batch the subscriber takes (Group.BroadcastBatch, or a holder's, such as
+// WithBatchHandler hands each batch the subscriber takes (Group.PublishBatch, or a holder's, such as
 // holder.NewBatch) to handle, wrapped in middlewares, the first one outermost, rather than each of its values to handle
 // or the loop body, through WithMiddleware's. handle gets the ctx its values would, and its error counts every value
 // as failed but is reported once. With SubscribeSeq, handle runs in the subscriber's goroutine, not the loop's. A nil
@@ -99,7 +99,7 @@ func WithDetachedContext[T any]() Option[T] {
 	}
 }
 
-// WithDefaultMessageOptions sets default message options, which a Broadcast's own override.
+// WithDefaultMessageOptions sets default message options, which a Publish's own override.
 func WithDefaultMessageOptions[T any](options ...message.Option[T]) Option[T] {
 	return func(config *config[T]) {
 		for _, option := range options {
@@ -126,7 +126,7 @@ func WithTimeout[T any](timeout time.Duration) Option[T] {
 }
 
 // WithEvict unsubscribes the subscriber, with WithUnsubscribeDiscard, on the first error evict returns true for: a
-// *TimeoutError or *DroppedError, from Broadcast's goroutine, or a holder's *DroppedError or handle's error past every
+// *TimeoutError or *DroppedError, from Publish's goroutine, or a holder's *DroppedError or handle's error past every
 // middleware, from the subscriber's. evict may run concurrently, and never gets a *ClosedError. A nil evict never
 // evicts. The error handlers get the evicting error as an *EvictedError.
 func WithEvict[T any](evict func(err error) bool) Option[T] {
@@ -136,7 +136,7 @@ func WithEvict[T any](evict func(err error) bool) Option[T] {
 }
 
 // WithFilter skips every message keep rejects, before anything else, so the subscriber never wakes up for it, and it
-// is neither reported nor counted. keep runs in Broadcast's goroutine, so it may run concurrently. Several WithFilter
+// is neither reported nor counted. keep runs in Publish's goroutine, so it may run concurrently. Several WithFilter
 // run in order until one rejects. keep sees each value of a batch once: of a batch it keeps part of, the subscriber
 // takes a batch from message.Batch.New holding what it keeps. A nil keep is ignored.
 func WithFilter[T any](keep func(msg T) bool) Option[T] {
@@ -164,7 +164,7 @@ func WithAsyncLimit[T any](n int) Option[T] {
 
 // WithReplay makes the subscriber handle each value of replay, such as its dead letters from before a restart, before
 // any message. Each value is handled, reported and counted like a message, from the subscriber's goroutine, and a
-// Broadcast meanwhile waits as for a busy handle.
+// Publish meanwhile waits as for a busy handle.
 //
 // yield returns once the value is handled or reported, so replay can ack it then, and returns false once the
 // subscriber discards. A value lost again goes back to the dead letters, so a replay of them should yield only what

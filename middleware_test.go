@@ -20,7 +20,7 @@ func TestSubscriberWithMiddleware(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		type key struct{}
 		ctx := context.WithValue(subscribeCtx(t), key{}, "subscribe")
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		calls := &recorder[string]{}
 		ids := &recorder[uint64]{}
 		trace := func(name string) subscriber.Middleware[int] {
@@ -38,7 +38,7 @@ func TestSubscriberWithMiddleware(t *testing.T) {
 				}
 			}
 		}
-		id, err := b.Subscribe(ctx, func(_ context.Context, id uint64, msg int) error {
+		id, err := g.Subscribe(ctx, func(_ context.Context, id uint64, msg int) error {
 			ids.record(id)
 			calls.record(fmt.Sprintf("handle %d", msg))
 
@@ -51,8 +51,8 @@ func TestSubscriberWithMiddleware(t *testing.T) {
 			t.Fatalf("Subscribe: %v", err)
 		}
 
-		b.Broadcast(t.Context(), 1)
-		unsubscribe(t, b, id)
+		g.Publish(t.Context(), 1)
+		unsubscribe(t, g, id)
 		synctest.Wait()
 
 		want := []string{"a before 1", "b before 1", "c before 1", "handle 1", "c after 1", "b after 1", "a after 1"}
@@ -71,7 +71,7 @@ func TestSubscriberWithMiddleware_Recover(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		handled := &recorder[int]{}
 		errs := &recorder[error]{}
 		panicOnOne := func(next subscriber.Handler[int]) subscriber.Handler[int] {
@@ -83,7 +83,7 @@ func TestSubscriberWithMiddleware_Recover(t *testing.T) {
 				return next(ctx, id, msg)
 			}
 		}
-		id := subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
+		id := subscribe(t, g, func(_ context.Context, _ uint64, msg int) error {
 			handled.record(msg)
 			if msg == 2 {
 				panic(handleError(msg))
@@ -98,9 +98,9 @@ func TestSubscriberWithMiddleware_Recover(t *testing.T) {
 		)
 
 		for msg := 1; msg <= 3; msg++ {
-			b.Broadcast(t.Context(), msg)
+			g.Publish(t.Context(), msg)
 		}
-		unsubscribe(t, b, id)
+		unsubscribe(t, g, id)
 		synctest.Wait()
 
 		if got, want := handled.messages(), []int{2, 3}; !slices.Equal(got, want) {
@@ -133,10 +133,10 @@ func TestSubscriberWithMiddleware_RetryContextDone(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		handled := &recorder[int]{}
 		failures := &recorder[int]{}
-		_, err := b.Subscribe(ctx, func(_ context.Context, _ uint64, msg int) error {
+		_, err := g.Subscribe(ctx, func(_ context.Context, _ uint64, msg int) error {
 			handled.record(msg)
 
 			return handleError(msg)
@@ -149,7 +149,7 @@ func TestSubscriberWithMiddleware_RetryContextDone(t *testing.T) {
 		}
 
 		start := time.Now()
-		b.Broadcast(t.Context(), 1)
+		g.Publish(t.Context(), 1)
 		synctest.Wait()
 		cancel()
 		// Waits for the subscriber's goroutine to report, but lets no time pass: a Retry still waiting would not have.
@@ -164,8 +164,8 @@ func TestSubscriberWithMiddleware_RetryContextDone(t *testing.T) {
 		if elapsed := time.Since(start); elapsed != 0 {
 			t.Errorf("%v passed, want none", elapsed)
 		}
-		if n := b.Broadcast(t.Context(), 2); n != 0 {
-			t.Errorf("Broadcast after cancel reached %d subscribers, want 0", n)
+		if n := g.Publish(t.Context(), 2); n != 0 {
+			t.Errorf("Publish after cancel reached %d subscribers, want 0", n)
 		}
 	})
 }
@@ -176,9 +176,9 @@ func TestSubscriberWithMiddleware_History(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		history := &recordStore{}
-		id := subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
+		id := subscribe(t, g, func(_ context.Context, _ uint64, msg int) error {
 			switch msg {
 			case 2:
 				return handleError(msg)
@@ -193,9 +193,9 @@ func TestSubscriberWithMiddleware_History(t *testing.T) {
 		)
 
 		for msg := 1; msg <= 4; msg++ {
-			b.Broadcast(t.Context(), msg)
+			g.Publish(t.Context(), msg)
 		}
-		unsubscribe(t, b, id)
+		unsubscribe(t, g, id)
 		synctest.Wait()
 
 		records := history.messages()
@@ -219,7 +219,7 @@ func TestSubscriberWithMiddleware_SubscribeSeq(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		results := &recorder[string]{}
 		spy := func(next subscriber.Handler[int]) subscriber.Handler[int] {
 			return func(ctx context.Context, id uint64, msg int) error {
@@ -237,13 +237,13 @@ func TestSubscriberWithMiddleware_SubscribeSeq(t *testing.T) {
 			}
 		}
 		errs := &recorder[error]{}
-		_, seq := subscribeSeq(t, b,
+		_, seq := subscribeSeq(t, g,
 			subscriber.WithMiddleware(middleware.Retry[int](middleware.RetryPolicy{Attempts: 3}), spy),
 			subscriber.WithErrorHandler[int](func(_ context.Context, err error) { errs.record(err) }))
 
 		go func() {
-			b.Broadcast(t.Context(), 1)
-			b.Broadcast(t.Context(), 2)
+			g.Publish(t.Context(), 1)
+			g.Publish(t.Context(), 2)
 		}()
 		var got []int
 		for msg, fail := range seq {

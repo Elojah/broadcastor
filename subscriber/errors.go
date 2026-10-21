@@ -10,7 +10,7 @@ import (
 )
 
 // Sentinels matched by the error types below with errors.Is, which does not need T. The errors the library makes
-// about a whole batch (Group.BroadcastBatch) hold it in Batch, Message being zero.
+// about a whole batch (Group.PublishBatch) hold it in Batch, Message being zero.
 var (
 	ErrClosed  = errors.New("subscriber closed")
 	ErrTimeout = errors.New("timeout")
@@ -74,7 +74,7 @@ func (e *ExpiredError[T]) Is(target error) bool {
 	return target == ErrExpired
 }
 
-// TimeoutError is reported when Broadcast gives up on a subscriber: Err is the Broadcast ctx's error, or
+// TimeoutError is reported when Publish gives up on a subscriber: Err is the Publish ctx's error, or
 // context.DeadlineExceeded for the message's timeout. It matches ErrTimeout, and unwraps to Err.
 type TimeoutError[T any] struct {
 	SubscriberID uint64
@@ -95,7 +95,7 @@ func (e *TimeoutError[T]) Is(target error) bool {
 	return target == ErrTimeout
 }
 
-// DroppedError is reported when a non-blocking Broadcast finds the subscriber busy, an async one hits WithAsyncLimit,
+// DroppedError is reported when a non-blocking Publish finds the subscriber busy, an async one hits WithAsyncLimit,
 // or the subscriber's holder has no room (WithHolder). It matches ErrDropped.
 type DroppedError[T any] struct {
 	SubscriberID uint64
@@ -132,7 +132,7 @@ func (e *EvictedError[T]) Is(target error) bool {
 	return target == ErrEvicted
 }
 
-// ClosedError is reported for a message missed because the subscriber was unsubscribed: by a Broadcast under way, or
+// ClosedError is reported for a message missed because the subscriber was unsubscribed: by a Publish under way, or
 // discarded (WithUnsubscribeDiscard, or a SubscribeSeq loop that ended). It matches ErrClosed.
 type ClosedError[T any] struct {
 	SubscriberID uint64

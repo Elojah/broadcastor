@@ -36,10 +36,10 @@ func TestSubscriberWithHolder(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		r := &recorder[int]{}
 		wrapped := &recorder[int]{}
-		id := subscribe(t, b, r.handle, subscriber.WithHolder(byTens(holdFor)),
+		id := subscribe(t, g, r.handle, subscriber.WithHolder(byTens(holdFor)),
 			subscriber.WithMiddleware(func(next subscriber.Handler[int]) subscriber.Handler[int] {
 				return func(ctx context.Context, id uint64, msg int) error {
 					wrapped.record(msg)
@@ -49,13 +49,13 @@ func TestSubscriberWithHolder(t *testing.T) {
 			}))
 
 		for _, msg := range []int{11, 21, 12, 13} {
-			b.Broadcast(t.Context(), msg)
+			g.Publish(t.Context(), msg)
 		}
 		synctest.Wait()
 		if got := r.messages(); len(got) != 0 {
 			t.Errorf("handle got %v within the window, want nothing yet", got)
 		}
-		checkStats(t, b, id, subscriber.Stats{Delivered: 4, Held: 2, Merged: 2})
+		checkStats(t, g, id, subscriber.Stats{Delivered: 4, Held: 2, Merged: 2})
 
 		time.Sleep(holdFor)
 		synctest.Wait()
@@ -66,7 +66,7 @@ func TestSubscriberWithHolder(t *testing.T) {
 		if got := wrapped.messages(); !slices.Equal(got, want) {
 			t.Errorf("the middleware got %v, want %v", got, want)
 		}
-		checkStats(t, b, id, subscriber.Stats{Delivered: 4, Handled: 2, Merged: 2})
+		checkStats(t, g, id, subscriber.Stats{Delivered: 4, Handled: 2, Merged: 2})
 	})
 }
 
@@ -75,16 +75,16 @@ func TestSubscriberWithHolder_Shutdown(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		r := &recorder[int]{}
 		done := make(chan uint64, 1)
-		id := subscribe(t, b, r.handle, subscriber.WithHolder(byTens(time.Hour)), subscriber.WithDone[int](t.Context(), done))
+		id := subscribe(t, g, r.handle, subscriber.WithHolder(byTens(time.Hour)), subscriber.WithDone[int](t.Context(), done))
 		for _, msg := range []int{11, 21, 12} {
-			b.Broadcast(t.Context(), msg)
+			g.Publish(t.Context(), msg)
 		}
 
 		start := time.Now()
-		if err := waitShutdown(t, shutdown(t.Context(), b)); err != nil {
+		if err := waitShutdown(t, shutdown(t.Context(), g)); err != nil {
 			t.Fatalf("Shutdown = %v, want nil", err)
 		}
 		if elapsed := time.Since(start); elapsed != 0 {
@@ -104,16 +104,16 @@ func TestSubscriberWithHolder_Discard(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		r := &recorder[int]{}
 		errs := &recorder[error]{}
-		id := subscribe(t, b, r.handle, subscriber.WithHolder(byTens(time.Hour)),
+		id := subscribe(t, g, r.handle, subscriber.WithHolder(byTens(time.Hour)),
 			subscriber.WithErrorHandler[int](func(_ context.Context, err error) { errs.record(err) }))
 		for _, msg := range []int{11, 21, 12} {
-			b.Broadcast(t.Context(), msg)
+			g.Publish(t.Context(), msg)
 		}
 
-		if err := b.Unsubscribe(t.Context(), id, subscriber.WithUnsubscribeDiscard()); err != nil {
+		if err := g.Unsubscribe(t.Context(), id, subscriber.WithUnsubscribeDiscard()); err != nil {
 			t.Fatalf("Unsubscribe: %v", err)
 		}
 		synctest.Wait()
@@ -132,14 +132,14 @@ func TestSubscriberWithHolder_Evict(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		r := &recorder[int]{}
 		errs := &recorder[error]{}
-		subscribe(t, b, r.handle, subscriber.WithHolder[int](&capped{n: 1, d: time.Hour}),
+		subscribe(t, g, r.handle, subscriber.WithHolder[int](&capped{n: 1, d: time.Hour}),
 			subscriber.WithEvict[int](func(err error) bool { return errors.Is(err, subscriber.ErrDropped) }),
 			subscriber.WithErrorHandler[int](func(_ context.Context, err error) { errs.record(err) }))
-		b.Broadcast(t.Context(), 11)
-		b.Broadcast(t.Context(), 21)
+		g.Publish(t.Context(), 11)
+		g.Publish(t.Context(), 21)
 		synctest.Wait()
 
 		if got := r.messages(); len(got) != 0 {
@@ -149,7 +149,7 @@ func TestSubscriberWithHolder_Evict(t *testing.T) {
 		if want := []string{"21 evicted, dropped", "11 closed"}; !slices.Equal(got, want) {
 			t.Errorf("error handler got %v, want %v", got, want)
 		}
-		if stats := b.Stats(); len(stats) != 0 {
+		if stats := g.Stats(); len(stats) != 0 {
 			t.Errorf("Stats once evicted are for %d subscribers, want none", len(stats))
 		}
 	})

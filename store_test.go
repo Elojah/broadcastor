@@ -25,10 +25,10 @@ func TestSubscriberWithDeadLetters(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		events := &recorder[string]{}
 		stored := &recordStore{}
-		id := subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
+		id := subscribe(t, g, func(_ context.Context, _ uint64, msg int) error {
 			if msg%2 == 0 {
 				return handleError(msg)
 			}
@@ -47,9 +47,9 @@ func TestSubscriberWithDeadLetters(t *testing.T) {
 		)
 
 		for msg := 1; msg <= 4; msg++ {
-			b.Broadcast(t.Context(), msg)
+			g.Publish(t.Context(), msg)
 		}
-		unsubscribe(t, b, id)
+		unsubscribe(t, g, id)
 		synctest.Wait()
 
 		want := []string{
@@ -82,68 +82,68 @@ func TestSubscriberWithDeadLetters_Lost(t *testing.T) {
 		name string
 		want error
 		// lose makes a subscriber with the store option lose message 1, and returns its ID.
-		lose func(t *testing.T, b *multicast.Group[int], store subscriber.Option[int]) uint64
+		lose func(t *testing.T, g *multicast.Group[int], store subscriber.Option[int]) uint64
 	}{
-		{"handle", handleError(1), func(t *testing.T, b *multicast.Group[int], store subscriber.Option[int]) uint64 {
+		{"handle", handleError(1), func(t *testing.T, g *multicast.Group[int], store subscriber.Option[int]) uint64 {
 			t.Helper()
-			id := subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
+			id := subscribe(t, g, func(_ context.Context, _ uint64, msg int) error {
 				return handleError(msg)
 			}, store)
-			b.Broadcast(t.Context(), 1)
-			unsubscribe(t, b, id)
+			g.Publish(t.Context(), 1)
+			unsubscribe(t, g, id)
 
 			return id
 		}},
-		{"Panic", subscriber.ErrPanic, func(t *testing.T, b *multicast.Group[int], store subscriber.Option[int]) uint64 {
+		{"Panic", subscriber.ErrPanic, func(t *testing.T, g *multicast.Group[int], store subscriber.Option[int]) uint64 {
 			t.Helper()
-			id := subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
+			id := subscribe(t, g, func(_ context.Context, _ uint64, msg int) error {
 				panic(handleError(msg))
 			}, store, subscriber.WithMiddleware(middleware.Recover[int]()))
-			b.Broadcast(t.Context(), 1)
-			unsubscribe(t, b, id)
+			g.Publish(t.Context(), 1)
+			unsubscribe(t, g, id)
 
 			return id
 		}},
-		{"Timeout", subscriber.ErrTimeout, func(t *testing.T, b *multicast.Group[int], store subscriber.Option[int]) uint64 {
+		{"Timeout", subscriber.ErrTimeout, func(t *testing.T, g *multicast.Group[int], store subscriber.Option[int]) uint64 {
 			t.Helper()
 			stuck := &recorder[int]{hold: make(chan struct{})}
-			id := subscribe(t, b, stuck.handle, store)
-			b.Broadcast(t.Context(), 0) // stuck is now processing 0 and not reading
-			b.Broadcast(t.Context(), 1, message.WithTimeout[int](time.Second))
-			unsubscribe(t, b, id)
+			id := subscribe(t, g, stuck.handle, store)
+			g.Publish(t.Context(), 0) // stuck is now processing 0 and not reading
+			g.Publish(t.Context(), 1, message.WithTimeout[int](time.Second))
+			unsubscribe(t, g, id)
 			stuck.release()
 
 			return id
 		}},
-		{"Dropped", subscriber.ErrDropped, func(t *testing.T, b *multicast.Group[int], store subscriber.Option[int]) uint64 {
+		{"Dropped", subscriber.ErrDropped, func(t *testing.T, g *multicast.Group[int], store subscriber.Option[int]) uint64 {
 			t.Helper()
 			stuck := &recorder[int]{hold: make(chan struct{})}
-			id := subscribe(t, b, stuck.handle, store)
-			b.Broadcast(t.Context(), 0) // stuck is now processing 0 and not reading
-			b.Broadcast(t.Context(), 1, message.WithNonBlocking[int]())
-			unsubscribe(t, b, id)
+			id := subscribe(t, g, stuck.handle, store)
+			g.Publish(t.Context(), 0) // stuck is now processing 0 and not reading
+			g.Publish(t.Context(), 1, message.WithNonBlocking[int]())
+			unsubscribe(t, g, id)
 			stuck.release()
 
 			return id
 		}},
-		{"UnsubscribeDiscard", subscriber.ErrClosed, func(t *testing.T, b *multicast.Group[int], store subscriber.Option[int]) uint64 {
+		{"UnsubscribeDiscard", subscriber.ErrClosed, func(t *testing.T, g *multicast.Group[int], store subscriber.Option[int]) uint64 {
 			t.Helper()
 			stuck := &recorder[int]{hold: make(chan struct{})}
-			id := subscribe(t, b, stuck.handle, store, subscriber.WithBuffer[int](1))
-			b.Broadcast(t.Context(), 0) // stuck holds on to 0, and 1 fills the buffer
-			b.Broadcast(t.Context(), 1)
-			if err := b.Unsubscribe(t.Context(), id, subscriber.WithUnsubscribeDiscard()); err != nil {
+			id := subscribe(t, g, stuck.handle, store, subscriber.WithBuffer[int](1))
+			g.Publish(t.Context(), 0) // stuck holds on to 0, and 1 fills the buffer
+			g.Publish(t.Context(), 1)
+			if err := g.Unsubscribe(t.Context(), id, subscriber.WithUnsubscribeDiscard()); err != nil {
 				t.Fatalf("Unsubscribe: %v", err)
 			}
 			stuck.release()
 
 			return id
 		}},
-		{"SubscribeSeq", subscriber.ErrClosed, func(t *testing.T, b *multicast.Group[int], store subscriber.Option[int]) uint64 {
+		{"SubscribeSeq", subscriber.ErrClosed, func(t *testing.T, g *multicast.Group[int], store subscriber.Option[int]) uint64 {
 			t.Helper()
-			id, seq := subscribeSeq(t, b, subscriber.WithBuffer[int](2), store)
-			b.Broadcast(t.Context(), 0)
-			b.Broadcast(t.Context(), 1)
+			id, seq := subscribeSeq(t, g, subscriber.WithBuffer[int](2), store)
+			g.Publish(t.Context(), 0)
+			g.Publish(t.Context(), 1)
 			for range seq {
 				break // 1 is left in the buffer
 			}
@@ -155,9 +155,9 @@ func TestSubscriberWithDeadLetters_Lost(t *testing.T) {
 			t.Parallel()
 
 			synctest.Test(t, func(t *testing.T) {
-				b := newGroup[int](t)
+				g := newGroup[int](t)
 				stored := &recordStore{}
-				id := tt.lose(t, b, subscriber.WithDeadLetters[int](stored))
+				id := tt.lose(t, g, subscriber.WithDeadLetters[int](stored))
 				synctest.Wait()
 
 				records := stored.messages()
@@ -178,12 +178,12 @@ func TestSubscriberWithDeadLetters_PutFails(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		stored := &recordStore{err: errPut}
 		failures := &recorder[int]{}
 		recordFailure := recordFailures(t, failures)
 		errs := &recorder[error]{}
-		id := subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
+		id := subscribe(t, g, func(_ context.Context, _ uint64, msg int) error {
 			return handleError(msg)
 		},
 			subscriber.WithDeadLetters[int](stored),
@@ -193,9 +193,9 @@ func TestSubscriberWithDeadLetters_PutFails(t *testing.T) {
 			}),
 		)
 
-		b.Broadcast(t.Context(), 1)
-		b.Broadcast(t.Context(), 2)
-		unsubscribe(t, b, id)
+		g.Publish(t.Context(), 1)
+		g.Publish(t.Context(), 2)
+		unsubscribe(t, g, id)
 		synctest.Wait()
 
 		if got, want := failures.messages(), []int{1, 2}; !slices.Equal(got, want) {
@@ -229,10 +229,10 @@ func TestSubscriberWithDeadLetters_Context(t *testing.T) {
 		type key struct{}
 		ctx, cancel := context.WithCancel(context.WithValue(subscribeCtx(t), key{}, "subscribe"))
 		messageCtx, cancelMessage := context.WithCancel(context.WithValue(t.Context(), key{}, "message"))
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		handled := &recorder[int]{hold: make(chan struct{})}
 		puts := &recorder[string]{}
-		_, err := b.Subscribe(ctx, handled.handle, subscriber.WithBuffer[int](2),
+		_, err := g.Subscribe(ctx, handled.handle, subscriber.WithBuffer[int](2),
 			subscriber.WithUnsubscribeOptions[int](subscriber.WithUnsubscribeDiscard()),
 			subscriber.WithDeadLetters[int](storeFunc(func(ctx context.Context, r subscriber.Record[int]) error {
 				puts.record(fmt.Sprintf("%d: %v, %v", r.Message, ctx.Value(key{}), ctx.Err()))
@@ -244,9 +244,9 @@ func TestSubscriberWithDeadLetters_Context(t *testing.T) {
 		}
 
 		// handle holds on to 0, and 1 and 2 fill the buffer.
-		b.Broadcast(t.Context(), 0)
-		b.Broadcast(t.Context(), 1)
-		b.Broadcast(t.Context(), 2, message.WithContext[int](messageCtx))
+		g.Publish(t.Context(), 0)
+		g.Publish(t.Context(), 1)
+		g.Publish(t.Context(), 2, message.WithContext[int](messageCtx))
 		cancelMessage()
 		cancel()
 		synctest.Wait()
@@ -267,7 +267,7 @@ func TestSubscriberWithDeadLetters_ExactlyOnce(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		stored := &recordStore{}
 		options := []subscriber.Option[int]{
 			subscriber.WithBuffer[int](1),
@@ -275,7 +275,7 @@ func TestSubscriberWithDeadLetters_ExactlyOnce(t *testing.T) {
 			subscriber.WithUnsubscribeOptions[int](subscriber.WithUnsubscribeDiscard()),
 		}
 		handled := &recorder[int]{}
-		handleID := subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
+		handleID := subscribe(t, g, func(_ context.Context, _ uint64, msg int) error {
 			time.Sleep(time.Millisecond)
 			if msg%3 == 0 {
 				return handleError(msg)
@@ -285,7 +285,7 @@ func TestSubscriberWithDeadLetters_ExactlyOnce(t *testing.T) {
 			return nil
 		}, options...)
 		yielded := &recorder[int]{}
-		seqID, seq := subscribeSeq(t, b, options...)
+		seqID, seq := subscribeSeq(t, g, options...)
 		loopDone := make(chan struct{})
 		go func() {
 			defer close(loopDone)
@@ -295,28 +295,28 @@ func TestSubscriberWithDeadLetters_ExactlyOnce(t *testing.T) {
 			}
 		}()
 
-		const broadcasters, perBroadcaster = 4, 50
+		const publishers, perPublisher = 4, 50
 		deliveries := []message.Option[int]{
 			message.WithSync[int](), message.WithParallel[int](), message.WithAsync[int](), message.WithNonBlocking[int](),
 		}
 		var wg sync.WaitGroup
-		for g := range broadcasters {
+		for j := range publishers {
 			wg.Go(func() {
-				for i := range perBroadcaster {
-					b.Broadcast(t.Context(), g*perBroadcaster+i, deliveries[i%len(deliveries)],
+				for i := range perPublisher {
+					g.Publish(t.Context(), j*perPublisher+i, deliveries[i%len(deliveries)],
 						message.WithTimeout[int](time.Millisecond))
 				}
 			})
 		}
-		waitGroup(t, &wg, "broadcasters")
-		if err := b.Close(); err != nil {
+		waitGroup(t, &wg, "publishers")
+		if err := g.Close(); err != nil {
 			t.Fatalf("Close: %v", err)
 		}
 		waitClosed(t, loopDone, "SubscribeSeq loop ended by Close")
 		time.Sleep(time.Millisecond) // until handle is done with the message it took, which synctest.Wait does not wait for
 		synctest.Wait()
 
-		all := make([]int, broadcasters*perBroadcaster)
+		all := make([]int, publishers*perPublisher)
 		for i := range all {
 			all[i] = i
 		}
@@ -370,13 +370,13 @@ func (f storeFunc) Put(ctx context.Context, r subscriber.Record[int]) error {
 	return f(ctx, r)
 }
 
-// The replay comes before any Broadcast, in order, through the middlewares, error handlers and dead letters, with the
+// The replay comes before any Publish, in order, through the middlewares, error handlers and dead letters, with the
 // default message options, each value counted like a message and acked once handled or reported.
 func TestSubscriberWithReplay(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		events := &recorder[string]{}
 		middleware := func(next subscriber.Handler[int]) subscriber.Handler[int] {
 			return func(ctx context.Context, id uint64, msg int) error {
@@ -385,7 +385,7 @@ func TestSubscriberWithReplay(t *testing.T) {
 				return next(ctx, id, msg)
 			}
 		}
-		id := subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
+		id := subscribe(t, g, func(_ context.Context, _ uint64, msg int) error {
 			if msg%2 == 0 {
 				return handleError(msg)
 			}
@@ -406,8 +406,8 @@ func TestSubscriberWithReplay(t *testing.T) {
 		)
 
 		// It waits until the subscriber has replayed 1 to 3, and counts none of them.
-		if n := b.Broadcast(t.Context(), 4); n != 1 {
-			t.Errorf("Broadcast handed 4 to %d subscribers, want 1", n)
+		if n := g.Publish(t.Context(), 4); n != 1 {
+			t.Errorf("Publish handed 4 to %d subscribers, want 1", n)
 		}
 		synctest.Wait()
 		want := []string{
@@ -419,9 +419,9 @@ func TestSubscriberWithReplay(t *testing.T) {
 		if got := events.messages(); !slices.Equal(got, want) {
 			t.Errorf("got %q, want %q", got, want)
 		}
-		checkStats(t, b, id, subscriber.Stats{Delivered: 4, Handled: 2, Failed: 2})
+		checkStats(t, g, id, subscriber.Stats{Delivered: 4, Handled: 2, Failed: 2})
 
-		unsubscribe(t, b, id)
+		unsubscribe(t, g, id)
 		synctest.Wait()
 	})
 }
@@ -433,20 +433,20 @@ func TestSubscriberWithReplay_Unsubscribe(t *testing.T) {
 
 	for _, tt := range []struct {
 		name   string
-		remove func(t *testing.T, b *multicast.Group[int], id uint64) <-chan error
+		remove func(t *testing.T, g *multicast.Group[int], id uint64) <-chan error
 		want   []string
 	}{
-		{"Discard", func(t *testing.T, b *multicast.Group[int], id uint64) <-chan error {
+		{"Discard", func(t *testing.T, g *multicast.Group[int], id uint64) <-chan error {
 			t.Helper()
-			if err := b.Unsubscribe(t.Context(), id, subscriber.WithUnsubscribeDiscard()); err != nil {
+			if err := g.Unsubscribe(t.Context(), id, subscriber.WithUnsubscribeDiscard()); err != nil {
 				t.Fatalf("Unsubscribe: %v", err)
 			}
 
 			return nil
 		}, []string{"handled 1", "acked 1", "stopped at 2"}},
-		{"Shutdown", func(t *testing.T, b *multicast.Group[int], _ uint64) <-chan error {
+		{"Shutdown", func(t *testing.T, g *multicast.Group[int], _ uint64) <-chan error {
 			t.Helper()
-			errs := shutdown(t.Context(), b)
+			errs := shutdown(t.Context(), g)
 			checkWaiting(t, errs, "the subscriber replays")
 
 			return errs
@@ -456,10 +456,10 @@ func TestSubscriberWithReplay_Unsubscribe(t *testing.T) {
 			t.Parallel()
 
 			synctest.Test(t, func(t *testing.T) {
-				b := newGroup[int](t)
+				g := newGroup[int](t)
 				events := &recorder[string]{}
 				hold := make(chan struct{})
-				id := subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
+				id := subscribe(t, g, func(_ context.Context, _ uint64, msg int) error {
 					events.record(fmt.Sprintf("handled %d", msg))
 					<-hold
 
@@ -470,7 +470,7 @@ func TestSubscriberWithReplay_Unsubscribe(t *testing.T) {
 				)
 
 				synctest.Wait() // handle holds on to 1
-				errs := tt.remove(t, b, id)
+				errs := tt.remove(t, g, id)
 				close(hold)
 				if errs != nil {
 					if err := waitShutdown(t, errs); err != nil {

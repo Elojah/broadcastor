@@ -1,12 +1,12 @@
 // Package filter holds filters for subscriber.WithFilter, for readings that repeat themselves:
 //
-//	id, err := b.Subscribe(ctx, handle, subscriber.WithFilter(filter.Changed(func(prev, next float64) bool {
+//	id, err := g.Subscribe(ctx, handle, subscriber.WithFilter(filter.Changed(func(prev, next float64) bool {
 //		return math.Abs(next-prev) >= 0.5
 //	})))
 //
 // Each filter keeps state, so give each subscriber its own, and WithKey keeps it per key, such as a sensor ID.
-// Concurrent Broadcasts may call it in any order, so the last value it passed is the last to reach it, not necessarily
-// the last broadcast.
+// Concurrent Publish calls may call it in any order, so the last value it passed is the last to reach it, not
+// necessarily the last published.
 package filter
 
 import (

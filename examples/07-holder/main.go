@@ -47,17 +47,17 @@ func latestBySensor(held []reading, next reading) []reading {
 
 func main() {
 	ctx := context.Background()
-	b := multicast.New[reading]()
+	g := multicast.New[reading]()
 	// Each handle sends on it once it has printed, since the two subscribers run concurrently.
 	shown := make(chan struct{}, 16)
 
-	subscribe(ctx, b, holder.NewLatest[reading](window), func(_ context.Context, _ uint64, r reading) error {
+	subscribe(ctx, g, holder.NewLatest[reading](window), func(_ context.Context, _ uint64, r reading) error {
 		fmt.Printf("display: %s at %.1f°C\n", r.Sensor, r.Celsius)
 		shown <- struct{}{}
 
 		return nil
 	})
-	subscribe(ctx, b, holder.NewReduce(window, latestBySensor), func(_ context.Context, _ uint64, r reading) error {
+	subscribe(ctx, g, holder.NewReduce(window, latestBySensor), func(_ context.Context, _ uint64, r reading) error {
 		fmt.Printf("uplink: %s at %.1f°C, latest of %d\n", r.Sensor, r.Celsius, r.Count)
 		shown <- struct{}{}
 
@@ -65,7 +65,7 @@ func main() {
 	})
 
 	for _, r := range []reading{read("north", 20.1), read("south", 18.0), read("north", 20.3), read("north", 20.2), read("south", 18.4)} {
-		b.Broadcast(ctx, r)
+		g.Publish(ctx, r)
 	}
 	// The windows end: one reading on the display, one per sensor on the uplink.
 	for range 3 {
@@ -73,15 +73,15 @@ func main() {
 	}
 
 	for _, r := range []reading{read("north", 21.0), read("north", 21.5)} {
-		b.Broadcast(ctx, r)
+		g.Publish(ctx, r)
 	}
-	if err := b.Shutdown(ctx); err != nil {
+	if err := g.Shutdown(ctx); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func subscribe(ctx context.Context, b *multicast.Group[reading], h subscriber.Holder[reading], handle subscriber.Handler[reading]) {
-	if _, err := b.Subscribe(ctx, handle, subscriber.WithHolder(h)); err != nil {
+func subscribe(ctx context.Context, g *multicast.Group[reading], h subscriber.Holder[reading], handle subscriber.Handler[reading]) {
+	if _, err := g.Subscribe(ctx, handle, subscriber.WithHolder(h)); err != nil {
 		log.Fatal(err)
 	}
 }

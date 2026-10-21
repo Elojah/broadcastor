@@ -1,5 +1,5 @@
-// Group.BroadcastBatch hands several messages at once, with one Config. A poll reads every sensor at once, and
-// broadcasts the readings as one batch, while a handheld probe sends its readings one at a time. The display has no
+// Group.PublishBatch hands several messages at once, with one Config. A poll reads every sensor at once, and
+// publishes the readings as one batch, while a handheld probe sends its readings one at a time. The display has no
 // batch handler, so it gets each reading of a batch alone. The uplink, billed per request, gathers whatever it takes
 // into batches of three (holder.NewBatch), and sends each batch as one request from its batch handler
 // (subscriber.WithBatchHandler).
@@ -31,9 +31,9 @@ func (r reading) String() string {
 
 func main() {
 	ctx := context.Background()
-	b := multicast.New[reading]()
+	g := multicast.New[reading]()
 
-	if _, err := b.Subscribe(ctx, func(_ context.Context, _ uint64, r reading) error {
+	if _, err := g.Subscribe(ctx, func(_ context.Context, _ uint64, r reading) error {
 		fmt.Println("display:", r)
 
 		return nil
@@ -51,7 +51,7 @@ func main() {
 
 		return nil
 	}
-	if _, err := b.Subscribe(ctx, func(_ context.Context, _ uint64, r reading) error {
+	if _, err := g.Subscribe(ctx, func(_ context.Context, _ uint64, r reading) error {
 		fmt.Println("uplink: alone", r)
 
 		return nil
@@ -59,12 +59,12 @@ func main() {
 		log.Fatal(err)
 	}
 
-	b.BroadcastBatch(ctx, &message.Slice[reading]{{"north", 20.1}, {"south", 18.0}, {"east", 19.5}})
+	g.PublishBatch(ctx, &message.Slice[reading]{{"north", 20.1}, {"south", 18.0}, {"east", 19.5}})
 	for _, celsius := range []float64{17.2, 17.4, 17.9, 18.1} {
-		b.Broadcast(ctx, reading{"probe", celsius})
+		g.Publish(ctx, reading{"probe", celsius})
 	}
 
-	if err := b.Shutdown(ctx); err != nil {
+	if err := g.Shutdown(ctx); err != nil {
 		log.Fatal(err)
 	}
 }

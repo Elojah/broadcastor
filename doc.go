@@ -1,36 +1,36 @@
-// Package multicast is an in-process fan-out: Broadcast hands a message to every subscriber, and each subscriber
+// Package multicast is an in-process fan-out: Publish hands a message to every subscriber, and each subscriber
 // handles its messages one at a time, in its own goroutine.
 //
-//	b := multicast.New[string]()
-//	id, err := b.Subscribe(ctx, func(ctx context.Context, _ uint64, msg string) error {
+//	g := multicast.New[string]()
+//	id, err := g.Subscribe(ctx, func(ctx context.Context, _ uint64, msg string) error {
 //		fmt.Println(msg)
 //		return nil
 //	})
 //	...
-//	b.Broadcast(ctx, "hello")
+//	g.Publish(ctx, "hello")
 //	...
-//	err = b.Unsubscribe(ctx, id)
+//	err = g.Unsubscribe(ctx, id)
 //
 // SubscribeSeq returns an iterator instead, whose loop body replaces handle:
 //
-//	_, seq, err := b.SubscribeSeq(ctx)
+//	_, seq, err := g.SubscribeSeq(ctx)
 //	...
 //	for msg, fail := range seq {
 //		fail(save(msg))
 //	}
 //
-// BroadcastBatch hands several messages at once, with one Config: a subscriber's batch handler
+// PublishBatch hands several messages at once, with one Config: a subscriber's batch handler
 // (subscriber.WithBatchHandler) gets the batch whole, and handle otherwise gets each message alone.
 //
-// Subscriber options are in package subscriber, and WithDefaultSubscriberOptions gives every subscriber some. Broadcast
+// Subscriber options are in package subscriber, and WithDefaultSubscriberOptions gives every subscriber some. Publish
 // options are in package message. Packages middleware, store and filter hold ready-made middlewares, stores and filters.
 //
 // # Delivery
 //
-// Delivery is at most once. By default Broadcast waits for each subscriber in turn, until it takes the message, the
-// Broadcast ctx is done or the message's timeout runs out. subscriber.WithBuffer, message.WithParallel,
-// message.WithAsync and message.WithNonBlocking wait less. Messages broadcast from one goroutine arrive in order,
-// except with message.WithAsync. With WithSerial, Broadcasts take turns, so messages from every goroutine arrive at
+// Delivery is at most once. By default Publish waits for each subscriber in turn, until it takes the message, the
+// Publish ctx is done or the message's timeout runs out. subscriber.WithBuffer, message.WithParallel,
+// message.WithAsync and message.WithNonBlocking wait less. Messages published from one goroutine arrive in order,
+// except with message.WithAsync. With WithSerial, Publish calls take turns, so messages from every goroutine arrive at
 // every subscriber in the same order, async sends aside.
 //
 // # Lifecycle
@@ -42,8 +42,8 @@
 // # Contexts
 //
 // The Subscribe ctx is the subscription's lifetime, and what handle and the error handlers get, unless
-// message.WithContext replaces it for one message. The Broadcast ctx only bounds the wait, but async sends keep using
-// it after Broadcast returns.
+// message.WithContext replaces it for one message. The Publish ctx only bounds the wait, but async sends keep using
+// it after Publish returns.
 //
 // # Errors
 //

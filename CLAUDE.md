@@ -7,7 +7,7 @@ the README, plans in TODO.md.
 
 - Imports go `multicast` → `subscriber` → `message`. `middleware` and `store` import `subscriber`, never
   `multicast`. `holder` imports only `message`, `filter` nothing from the library.
-- In `subscriber`, `deliver.go` runs in the `Broadcast`'s goroutine, `consume.go` and `holder.go` in the
+- In `subscriber`, `deliver.go` runs in the `Publish`'s goroutine, `consume.go` and `holder.go` in the
   subscriber's, `report.go` in either. `inbox` owns the channel and its references, `counters` every counter.
 - `examples/11-mqtt` and `12-modbus` are modules of their own (`replace ../..`), to keep their dependencies out of
   go.mod. `go test ./...` skips them, `make` covers them.
@@ -37,8 +37,8 @@ Lint is `default: all` minus a list, tests included: mind `nlreturn`, `parallelt
 A change to channels, removal or error reporting must keep these and pass `make stress`.
 
 - Only `inbox.release` closes `ch`, on the last reference: the subscription holds one, each send another. `acquire`
-  refuses at 0, so a `Broadcast` racing removal skips the subscriber with a `ClosedError`.
-- Nothing waits for a `Broadcast` but, with `WithSerial`, the next `Broadcast`, since `handle` may unsubscribe or
+  refuses at 0, so a `Publish` racing removal skips the subscriber with a `ClosedError`.
+- Nothing waits for a `Publish` but, with `WithSerial`, the next `Publish`, since `handle` may unsubscribe or
   `Close` while one waits on it. `Unsubscribe` closes `done` to free it, and `Shutdown` waits only on `Consume`.
 - Every removal goes through `Group.remove` (`LoadAndDelete`, then `Subscriber.Unsubscribe`), so racing
   removals act once, and an eviction is reported once, by the error whose `remove` succeeded.
@@ -48,8 +48,8 @@ A change to channels, removal or error reporting must keep these and pass `make 
   subscriber.
 - A batch is one send, one reference, one place in `ch` and one report, but `Stats` count its values.
 - No error path the library owns may block. Only `report` calls the error handlers and `Store.Put`, outside the
-  middleware chain, with the message's ctx or the subscriber's, never the `Broadcast`'s.
-- Each message a `Broadcast` picks a subscriber up for is counted once, in `Handled`, `Failed`, `TimedOut`, `Dropped`
+  middleware chain, with the message's ctx or the subscriber's, never the `Publish`'s.
+- Each message a `Publish` picks a subscriber up for is counted once, in `Handled`, `Failed`, `TimedOut`, `Dropped`
   or `Merged`, before `report` (`TestStats_AddUp`).
 - `store.File`'s positions only grow, and its sentinel table (`store/segment.go`) is part of the format: append only.
 
@@ -57,8 +57,8 @@ A change to channels, removal or error reporting must keep these and pass `make 
 
 - The hot path stays flat: `send` tries a send before its select, which would lock the ctx's channel, keeps its selects
   in `Subscriber.send`, and `counters` take the time rather than read the clock. Measure with `make benchcmp`.
-- A `Broadcast` without options allocates nothing in sync, buffered and non-blocking modes (`TestBroadcast_Allocs`).
-- Async sends keep the `Broadcast` ctx after it returns, so that sends piling up behind a stuck subscriber can be
+- A `Publish` without options allocates nothing in sync, buffered and non-blocking modes (`TestPublish_Allocs`).
+- Async sends keep the `Publish` ctx after it returns, so that sends piling up behind a stuck subscriber can be
   cancelled.
 - Connections are the user's: a subscriber reconnects in place, from `handle` or its middlewares. No middleware is
   built in.
@@ -73,4 +73,4 @@ A change to channels, removal or error reporting must keep these and pass `make 
   `pkg/gate`'s tests run in real time, like `TestStress`.
 - Each example has an `Example()` needing no external service, whose output must not depend on scheduling: synchronise
   with channels, never sleep. `make tinygo-run` diffs it with `tinygo run`'s.
-- The throughput benchmarks wait once, after the last `Broadcast`, so they loop over `b.N`, not `b.Loop`.
+- The throughput benchmarks wait once, after the last `Publish`, so they loop over `b.N`, not `b.Loop`.

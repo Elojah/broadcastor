@@ -15,27 +15,27 @@ import (
 	"github.com/elojah/multicast/subscriber"
 )
 
-// Once its ctx is done, a subscriber is unsubscribed: Broadcast no longer reaches it, and its goroutine ends.
+// Once its ctx is done, a subscriber is unsubscribed: Publish no longer reaches it, and its goroutine ends.
 func TestSubscribe_ContextDone(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		handled := &recorder[int]{}
-		id, err := b.Subscribe(ctx, handled.handle)
+		id, err := g.Subscribe(ctx, handled.handle)
 		if err != nil {
 			t.Fatalf("Subscribe: %v", err)
 		}
 
-		b.Broadcast(t.Context(), 1)
+		g.Publish(t.Context(), 1)
 		cancel()
 		synctest.Wait()
 
-		if n := b.Broadcast(t.Context(), 2); n != 0 {
-			t.Errorf("Broadcast once ctx is done handed the message to %d subscribers, want 0", n)
+		if n := g.Publish(t.Context(), 2); n != 0 {
+			t.Errorf("Publish once ctx is done handed the message to %d subscribers, want 0", n)
 		}
-		if err := b.Unsubscribe(t.Context(), id); !isNotFound(err) {
+		if err := g.Unsubscribe(t.Context(), id); !isNotFound(err) {
 			t.Errorf("Unsubscribe once ctx is done = %v, want a *SubscriberNotFoundError", err)
 		}
 		synctest.Wait()
@@ -52,15 +52,15 @@ func TestSubscribe_ContextDoneFirst(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		handled := &recorder[int]{}
-		if _, err := b.Subscribe(ctx, handled.handle); err != nil {
+		if _, err := g.Subscribe(ctx, handled.handle); err != nil {
 			t.Fatalf("Subscribe: %v", err)
 		}
 		synctest.Wait()
 
-		if n := b.Broadcast(t.Context(), 1); n != 0 {
-			t.Errorf("Broadcast handed the message to %d subscribers, want 0", n)
+		if n := g.Publish(t.Context(), 1); n != 0 {
+			t.Errorf("Publish handed the message to %d subscribers, want 0", n)
 		}
 		synctest.Wait()
 		if got := handled.messages(); len(got) != 0 {
@@ -75,15 +75,15 @@ func TestSubscribe_ContextNoLeak(t *testing.T) {
 
 	for _, tt := range []struct {
 		name  string
-		close func(t *testing.T, b *multicast.Group[int], id uint64)
+		close func(t *testing.T, g *multicast.Group[int], id uint64)
 	}{
-		{"Unsubscribe", func(t *testing.T, b *multicast.Group[int], id uint64) {
+		{"Unsubscribe", func(t *testing.T, g *multicast.Group[int], id uint64) {
 			t.Helper()
-			unsubscribe(t, b, id)
+			unsubscribe(t, g, id)
 		}},
-		{"Close", func(t *testing.T, b *multicast.Group[int], _ uint64) {
+		{"Close", func(t *testing.T, g *multicast.Group[int], _ uint64) {
 			t.Helper()
-			if err := b.Close(); err != nil {
+			if err := g.Close(); err != nil {
 				t.Fatalf("Close: %v", err)
 			}
 		}},
@@ -93,15 +93,15 @@ func TestSubscribe_ContextNoLeak(t *testing.T) {
 
 			synctest.Test(t, func(t *testing.T) {
 				ctx := neverDone{Context: context.Background(), done: make(chan struct{})}
-				b := newGroup[int](t)
+				g := newGroup[int](t)
 				handled := &recorder[int]{}
-				id, err := b.Subscribe(ctx, handled.handle)
+				id, err := g.Subscribe(ctx, handled.handle)
 				if err != nil {
 					t.Fatalf("Subscribe: %v", err)
 				}
 
-				b.Broadcast(t.Context(), 1)
-				tt.close(t, b, id)
+				g.Publish(t.Context(), 1)
+				tt.close(t, g, id)
 				synctest.Wait()
 
 				if got, want := handled.messages(), []int{1}; !slices.Equal(got, want) {
@@ -120,9 +120,9 @@ func TestSubscriberWithDetachedContext(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		type key struct{}
 		ctx, cancel := context.WithCancel(context.WithValue(t.Context(), key{}, "subscribe"))
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		handled := &recorder[int]{}
-		id, err := b.Subscribe(ctx, func(ctx context.Context, id uint64, msg int) error {
+		id, err := g.Subscribe(ctx, func(ctx context.Context, id uint64, msg int) error {
 			if err := ctx.Err(); err != nil {
 				t.Errorf("handle got a done ctx: %v", err)
 			}
@@ -139,10 +139,10 @@ func TestSubscriberWithDetachedContext(t *testing.T) {
 		cancel()
 		synctest.Wait()
 
-		if n := b.Broadcast(t.Context(), 1); n != 1 {
-			t.Errorf("Broadcast once ctx is done handed the message to %d subscribers, want 1", n)
+		if n := g.Publish(t.Context(), 1); n != 1 {
+			t.Errorf("Publish once ctx is done handed the message to %d subscribers, want 1", n)
 		}
-		unsubscribe(t, b, id)
+		unsubscribe(t, g, id)
 		synctest.Wait()
 		if got, want := handled.messages(), []int{1}; !slices.Equal(got, want) {
 			t.Errorf("handle got %v, want %v", got, want)
@@ -150,7 +150,7 @@ func TestSubscriberWithDetachedContext(t *testing.T) {
 	})
 }
 
-// message.WithContext replaces the Subscribe ctx for one message, and a Broadcast overrides a default one, nil
+// message.WithContext replaces the Subscribe ctx for one message, and a Publish overrides a default one, nil
 // included.
 func TestMessageWithContext(t *testing.T) {
 	t.Parallel()
@@ -160,10 +160,10 @@ func TestMessageWithContext(t *testing.T) {
 		ctx := context.WithValue(subscribeCtx(t), key{}, "subscribe")
 		messageCtx := context.WithValue(t.Context(), key{}, "message")
 		defaultCtx := context.WithValue(t.Context(), key{}, "default")
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		subscribeRecording := func(options ...subscriber.Option[int]) (*recorder[string], uint64) {
 			values := &recorder[string]{}
-			id, err := b.Subscribe(ctx, func(ctx context.Context, _ uint64, _ int) error {
+			id, err := g.Subscribe(ctx, func(ctx context.Context, _ uint64, _ int) error {
 				v, _ := ctx.Value(key{}).(string)
 				values.record(v)
 
@@ -179,10 +179,10 @@ func TestMessageWithContext(t *testing.T) {
 		defaulted, defaultedID := subscribeRecording(
 			subscriber.WithDefaultMessageOptions(message.WithContext[int](defaultCtx)))
 
-		b.Broadcast(t.Context(), 1)
-		b.Broadcast(t.Context(), 2, message.WithContext[int](messageCtx))
-		b.Broadcast(t.Context(), 3, message.WithContext[int](nil)) //nolint:staticcheck // nil is how to override a default
-		unsubscribeAll(t, b, plainID, defaultedID)
+		g.Publish(t.Context(), 1)
+		g.Publish(t.Context(), 2, message.WithContext[int](messageCtx))
+		g.Publish(t.Context(), 3, message.WithContext[int](nil)) //nolint:staticcheck // nil is how to override a default
+		unsubscribeAll(t, g, plainID, defaultedID)
 		synctest.Wait()
 
 		if got, want := plain.messages(), []string{"subscribe", "message", "subscribe"}; !slices.Equal(got, want) {
@@ -203,53 +203,53 @@ func TestMessageWithContext_ErrorHandlers(t *testing.T) {
 		name string
 		want error
 		// fail makes a subscriber fail on message 1, sent with options, which give it its ctx and error handler.
-		fail func(t *testing.T, b *multicast.Group[int], errorHandler subscriber.Option[int], options ...message.Option[int])
+		fail func(t *testing.T, g *multicast.Group[int], errorHandler subscriber.Option[int], options ...message.Option[int])
 	}{
-		{"handle", handleError(1), func(t *testing.T, b *multicast.Group[int], errorHandler subscriber.Option[int], options ...message.Option[int]) {
+		{"handle", handleError(1), func(t *testing.T, g *multicast.Group[int], errorHandler subscriber.Option[int], options ...message.Option[int]) {
 			t.Helper()
-			id := subscribe(t, b, func(_ context.Context, _ uint64, msg int) error {
+			id := subscribe(t, g, func(_ context.Context, _ uint64, msg int) error {
 				return handleError(msg)
 			}, errorHandler)
-			b.Broadcast(t.Context(), 1, options...)
-			unsubscribe(t, b, id)
+			g.Publish(t.Context(), 1, options...)
+			unsubscribe(t, g, id)
 		}},
-		{"Timeout", subscriber.ErrTimeout, func(t *testing.T, b *multicast.Group[int], errorHandler subscriber.Option[int], options ...message.Option[int]) {
+		{"Timeout", subscriber.ErrTimeout, func(t *testing.T, g *multicast.Group[int], errorHandler subscriber.Option[int], options ...message.Option[int]) {
 			t.Helper()
 			stuck := &recorder[int]{hold: make(chan struct{})}
-			id := subscribe(t, b, stuck.handle, errorHandler)
-			b.Broadcast(t.Context(), 0) // stuck is now processing 0 and not reading
+			id := subscribe(t, g, stuck.handle, errorHandler)
+			g.Publish(t.Context(), 0) // stuck is now processing 0 and not reading
 			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 			defer cancel()
-			b.Broadcast(ctx, 1, options...)
-			unsubscribe(t, b, id)
+			g.Publish(ctx, 1, options...)
+			unsubscribe(t, g, id)
 			stuck.release()
 		}},
-		{"Dropped", subscriber.ErrDropped, func(t *testing.T, b *multicast.Group[int], errorHandler subscriber.Option[int], options ...message.Option[int]) {
+		{"Dropped", subscriber.ErrDropped, func(t *testing.T, g *multicast.Group[int], errorHandler subscriber.Option[int], options ...message.Option[int]) {
 			t.Helper()
 			stuck := &recorder[int]{hold: make(chan struct{})}
-			id := subscribe(t, b, stuck.handle, errorHandler,
+			id := subscribe(t, g, stuck.handle, errorHandler,
 				subscriber.WithDefaultMessageOptions(message.WithNonBlocking[int]()))
-			b.Broadcast(t.Context(), 0, message.WithSync[int]()) // stuck is now processing 0 and not reading
-			b.Broadcast(t.Context(), 1, options...)
-			unsubscribe(t, b, id)
+			g.Publish(t.Context(), 0, message.WithSync[int]()) // stuck is now processing 0 and not reading
+			g.Publish(t.Context(), 1, options...)
+			unsubscribe(t, g, id)
 			stuck.release()
 		}},
-		{"SubscribeSeq", subscriber.ErrClosed, func(t *testing.T, b *multicast.Group[int], errorHandler subscriber.Option[int], options ...message.Option[int]) {
+		{"SubscribeSeq", subscriber.ErrClosed, func(t *testing.T, g *multicast.Group[int], errorHandler subscriber.Option[int], options ...message.Option[int]) {
 			t.Helper()
-			_, seq := subscribeSeq(t, b, subscriber.WithBuffer[int](2), errorHandler)
-			b.Broadcast(t.Context(), 0)
-			b.Broadcast(t.Context(), 1, options...)
+			_, seq := subscribeSeq(t, g, subscriber.WithBuffer[int](2), errorHandler)
+			g.Publish(t.Context(), 0)
+			g.Publish(t.Context(), 1, options...)
 			for range seq {
 				break // after 0, leaving 1 unyielded
 			}
 		}},
-		{"WithUnsubscribeDiscard", subscriber.ErrClosed, func(t *testing.T, b *multicast.Group[int], errorHandler subscriber.Option[int], options ...message.Option[int]) {
+		{"WithUnsubscribeDiscard", subscriber.ErrClosed, func(t *testing.T, g *multicast.Group[int], errorHandler subscriber.Option[int], options ...message.Option[int]) {
 			t.Helper()
 			held := &recorder[int]{hold: make(chan struct{})}
-			id := subscribe(t, b, held.handle, subscriber.WithBuffer[int](1), errorHandler)
-			b.Broadcast(t.Context(), 0) // held holds on to 0, and 1 fills the buffer
-			b.Broadcast(t.Context(), 1, options...)
-			if err := b.Unsubscribe(t.Context(), id, subscriber.WithUnsubscribeDiscard()); err != nil {
+			id := subscribe(t, g, held.handle, subscriber.WithBuffer[int](1), errorHandler)
+			g.Publish(t.Context(), 0) // held holds on to 0, and 1 fills the buffer
+			g.Publish(t.Context(), 1, options...)
+			if err := g.Unsubscribe(t.Context(), id, subscriber.WithUnsubscribeDiscard()); err != nil {
 				t.Fatalf("Unsubscribe: %v", err)
 			}
 			held.release()
@@ -266,8 +266,8 @@ func TestMessageWithContext_ErrorHandlers(t *testing.T) {
 						got.record(fmt.Sprintf("%s: %t, ctx %s, done %v", who, errors.Is(err, tt.want), v, ctx.Err()))
 					}
 				}
-				b := newGroup[int](t)
-				tt.fail(t, b, subscriber.WithErrorHandler[int](errorHandler("subscriber")),
+				g := newGroup[int](t)
+				tt.fail(t, g, subscriber.WithErrorHandler[int](errorHandler("subscriber")),
 					message.WithContext[int](context.WithValue(t.Context(), key{}, "message")),
 					message.WithErrorHandler[int](errorHandler("message")))
 				synctest.Wait()
@@ -294,17 +294,17 @@ func (c neverDone) Done() <-chan struct{} {
 }
 
 // Once unsubscribed with WithUnsubscribeDiscard, the subscriber reports its buffer instead of handling it, and a
-// waiting Broadcast reports its message at once.
+// waiting Publish reports its message at once.
 func TestSubscriberWithUnsubscribeDiscard(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
 		type key struct{}
 		ctx := context.WithValue(subscribeCtx(t), key{}, "subscribe")
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		handled := &recorder[int]{hold: make(chan struct{})}
 		closed := &recorder[int]{}
-		id, err := b.Subscribe(ctx, handled.handle, subscriber.WithBuffer[int](2),
+		id, err := g.Subscribe(ctx, handled.handle, subscriber.WithBuffer[int](2),
 			subscriber.WithErrorHandler[int](func(ctx context.Context, err error) {
 				if v := ctx.Value(key{}); v != "subscribe" {
 					t.Errorf("error handler got a ctx with value %v, want the one passed to Subscribe", v)
@@ -315,21 +315,21 @@ func TestSubscriberWithUnsubscribeDiscard(t *testing.T) {
 			t.Fatalf("Subscribe: %v", err)
 		}
 
-		// handle holds on to 1, 2 and 3 fill the buffer, and the Broadcast of 4 waits.
+		// handle holds on to 1, 2 and 3 fill the buffer, and the Publish of 4 waits.
 		for msg := 1; msg <= 3; msg++ {
-			b.Broadcast(t.Context(), msg)
+			g.Publish(t.Context(), msg)
 		}
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			b.Broadcast(t.Context(), 4)
+			g.Publish(t.Context(), 4)
 		}()
 		synctest.Wait()
 
-		if err := b.Unsubscribe(t.Context(), id, subscriber.WithUnsubscribeDiscard()); err != nil {
+		if err := g.Unsubscribe(t.Context(), id, subscriber.WithUnsubscribeDiscard()); err != nil {
 			t.Fatalf("Unsubscribe: %v", err)
 		}
-		waitClosed(t, done, "Broadcast to a subscriber unsubscribed with WithUnsubscribeDiscard")
+		waitClosed(t, done, "Publish to a subscriber unsubscribed with WithUnsubscribeDiscard")
 		handled.release()
 		synctest.Wait()
 
@@ -347,10 +347,10 @@ func TestSubscriberWithUnsubscribeOptions(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		subscribeHeld := func(closed *recorder[int]) (*recorder[int], uint64) {
 			handled := &recorder[int]{hold: make(chan struct{})}
-			id := subscribe(t, b, handled.handle, subscriber.WithBuffer[int](2),
+			id := subscribe(t, g, handled.handle, subscriber.WithBuffer[int](2),
 				subscriber.WithErrorHandler[int](recordClosed(t, closed)),
 				subscriber.WithUnsubscribeOptions[int](subscriber.WithUnsubscribeDiscard()))
 
@@ -363,12 +363,12 @@ func TestSubscriberWithUnsubscribeOptions(t *testing.T) {
 
 		// Each subscriber holds on to 1, with 2 and 3 in its buffer.
 		for msg := 1; msg <= 3; msg++ {
-			b.Broadcast(t.Context(), msg)
+			g.Publish(t.Context(), msg)
 		}
-		if err := b.Unsubscribe(t.Context(), deliveredID, subscriber.WithUnsubscribeDeliver()); err != nil {
+		if err := g.Unsubscribe(t.Context(), deliveredID, subscriber.WithUnsubscribeDeliver()); err != nil {
 			t.Fatalf("Unsubscribe: %v", err)
 		}
-		if err := b.Close(); err != nil {
+		if err := g.Close(); err != nil {
 			t.Fatalf("Close: %v", err)
 		}
 		deliveredHandled.release()
@@ -391,30 +391,30 @@ func TestSubscriberWithUnsubscribeOptions(t *testing.T) {
 }
 
 // After WithUnsubscribeDiscard, a SubscribeSeq loop yields nothing more, and everything taken is reported, after the
-// message of a waiting Broadcast, which gives up at once.
+// message of a waiting Publish, which gives up at once.
 func TestSubscribeSeq_UnsubscribeDiscard(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		closed := &recorder[int]{}
-		id, seq := subscribeSeq(t, b, subscriber.WithBuffer[int](2),
+		id, seq := subscribeSeq(t, g, subscriber.WithBuffer[int](2),
 			subscriber.WithErrorHandler[int](recordClosed(t, closed)))
 
-		// Nothing reads before the loop starts: 1 and 2 fill the buffer, and the Broadcast of 3 waits.
-		b.Broadcast(t.Context(), 1)
-		b.Broadcast(t.Context(), 2)
+		// Nothing reads before the loop starts: 1 and 2 fill the buffer, and the Publish of 3 waits.
+		g.Publish(t.Context(), 1)
+		g.Publish(t.Context(), 2)
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			b.Broadcast(t.Context(), 3)
+			g.Publish(t.Context(), 3)
 		}()
 		synctest.Wait()
 
-		if err := b.Unsubscribe(t.Context(), id, subscriber.WithUnsubscribeDiscard()); err != nil {
+		if err := g.Unsubscribe(t.Context(), id, subscriber.WithUnsubscribeDiscard()); err != nil {
 			t.Fatalf("Unsubscribe: %v", err)
 		}
-		waitClosed(t, done, "Broadcast to a subscriber unsubscribed with WithUnsubscribeDiscard")
+		waitClosed(t, done, "Publish to a subscriber unsubscribed with WithUnsubscribeDiscard")
 		for msg := range seq {
 			t.Errorf("loop got %d, want nothing", msg)
 		}
@@ -450,22 +450,22 @@ func TestSubscriberWithDone(t *testing.T) {
 	for _, tt := range []struct {
 		name   string
 		evict  bool
-		remove func(t *testing.T, b *multicast.Group[int], id uint64, cancel context.CancelFunc)
+		remove func(t *testing.T, g *multicast.Group[int], id uint64, cancel context.CancelFunc)
 		want   []string
 	}{
-		{"Unsubscribe", false, func(t *testing.T, b *multicast.Group[int], id uint64, _ context.CancelFunc) {
+		{"Unsubscribe", false, func(t *testing.T, g *multicast.Group[int], id uint64, _ context.CancelFunc) {
 			t.Helper()
-			unsubscribe(t, b, id)
+			unsubscribe(t, g, id)
 		}, []string{"handled 1", "handled 2"}},
-		{"UnsubscribeDiscard", false, func(t *testing.T, b *multicast.Group[int], id uint64, _ context.CancelFunc) {
+		{"UnsubscribeDiscard", false, func(t *testing.T, g *multicast.Group[int], id uint64, _ context.CancelFunc) {
 			t.Helper()
-			if err := b.Unsubscribe(t.Context(), id, subscriber.WithUnsubscribeDiscard()); err != nil {
+			if err := g.Unsubscribe(t.Context(), id, subscriber.WithUnsubscribeDiscard()); err != nil {
 				t.Fatalf("Unsubscribe: %v", err)
 			}
 		}, []string{"handled 1", "2 closed"}},
-		{"Close", false, func(t *testing.T, b *multicast.Group[int], _ uint64, _ context.CancelFunc) {
+		{"Close", false, func(t *testing.T, g *multicast.Group[int], _ uint64, _ context.CancelFunc) {
 			t.Helper()
-			if err := b.Close(); err != nil {
+			if err := g.Close(); err != nil {
 				t.Fatalf("Close: %v", err)
 			}
 		}, []string{"handled 1", "handled 2"}},
@@ -474,16 +474,16 @@ func TestSubscriberWithDone(t *testing.T) {
 			cancel()
 		}, []string{"handled 1", "handled 2"}},
 		// 3 finds the buffer full and evicts the subscriber, which then discards 2.
-		{"Evicted", true, func(t *testing.T, b *multicast.Group[int], _ uint64, _ context.CancelFunc) {
+		{"Evicted", true, func(t *testing.T, g *multicast.Group[int], _ uint64, _ context.CancelFunc) {
 			t.Helper()
-			b.Broadcast(t.Context(), 3)
+			g.Publish(t.Context(), 3)
 		}, []string{"handled 1", "3 evicted, timed out", "2 closed"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
 			synctest.Test(t, func(t *testing.T) {
-				b := newGroup[int](t)
+				g := newGroup[int](t)
 				events := &recorder[string]{}
 				hold := make(chan struct{})
 				ctx, cancel := context.WithCancel(subscribeCtx(t))
@@ -500,7 +500,7 @@ func TestSubscriberWithDone(t *testing.T) {
 				if tt.evict {
 					options = append(options, subscriber.WithEvict[int](isTimeout), subscriber.WithTimeout[int](time.Second))
 				}
-				id, err := b.Subscribe(ctx, func(_ context.Context, _ uint64, msg int) error {
+				id, err := g.Subscribe(ctx, func(_ context.Context, _ uint64, msg int) error {
 					events.record(fmt.Sprintf("handled %d", msg))
 					<-hold
 
@@ -511,9 +511,9 @@ func TestSubscriberWithDone(t *testing.T) {
 				}
 
 				// handle holds on to 1, and 2 fills the buffer.
-				b.Broadcast(t.Context(), 1)
-				b.Broadcast(t.Context(), 2)
-				tt.remove(t, b, id, cancel)
+				g.Publish(t.Context(), 1)
+				g.Publish(t.Context(), 2)
+				tt.remove(t, g, id, cancel)
 				synctest.Wait()
 				for _, done := range dones {
 					if len(done) != 0 {
@@ -561,13 +561,13 @@ func TestSubscriberWithDone_Shutdown(t *testing.T) {
 			t.Parallel()
 
 			synctest.Test(t, func(t *testing.T) {
-				b := newGroup[int](t)
+				g := newGroup[int](t)
 				ctx, cancel := context.WithCancel(t.Context())
 				defer cancel()
 				done := make(chan uint64, tt.room)
-				id := subscribe(t, b, func(context.Context, uint64, int) error { return nil }, subscriber.WithDone[int](ctx, done))
+				id := subscribe(t, g, func(context.Context, uint64, int) error { return nil }, subscriber.WithDone[int](ctx, done))
 
-				errs := shutdown(t.Context(), b)
+				errs := shutdown(t.Context(), g)
 				var got []uint64
 				if tt.end != nil {
 					checkWaiting(t, errs, "nothing received the ID")
@@ -597,10 +597,10 @@ func TestSubscriberWithDone_SubscribeSeq(t *testing.T) {
 
 	for _, tt := range []struct {
 		name string
-		run  func(t *testing.T, b *multicast.Group[int], id uint64, seq iter.Seq2[int, func(error)], done <-chan uint64, events *recorder[string])
+		run  func(t *testing.T, g *multicast.Group[int], id uint64, seq iter.Seq2[int, func(error)], done <-chan uint64, events *recorder[string])
 		want []string
 	}{
-		{"Break", func(t *testing.T, b *multicast.Group[int], _ uint64, seq iter.Seq2[int, func(error)], done <-chan uint64, events *recorder[string]) {
+		{"Break", func(t *testing.T, g *multicast.Group[int], _ uint64, seq iter.Seq2[int, func(error)], done <-chan uint64, events *recorder[string]) {
 			t.Helper()
 			go func() {
 				for msg := range seq {
@@ -609,32 +609,32 @@ func TestSubscriberWithDone_SubscribeSeq(t *testing.T) {
 					break
 				}
 			}()
-			b.Broadcast(t.Context(), 1)
+			g.Publish(t.Context(), 1)
 		}, []string{"yielded 1, 0 done"}},
-		{"Unsubscribe", func(t *testing.T, b *multicast.Group[int], id uint64, seq iter.Seq2[int, func(error)], done <-chan uint64, events *recorder[string]) {
+		{"Unsubscribe", func(t *testing.T, g *multicast.Group[int], id uint64, seq iter.Seq2[int, func(error)], done <-chan uint64, events *recorder[string]) {
 			t.Helper()
 			go func() {
 				for msg := range seq {
 					events.record(fmt.Sprintf("yielded %d, %d done", msg, len(done)))
 				}
 			}()
-			b.Broadcast(t.Context(), 1)
-			unsubscribe(t, b, id)
+			g.Publish(t.Context(), 1)
+			unsubscribe(t, g, id)
 		}, []string{"yielded 1, 0 done"}},
-		{"NeverRanged", func(t *testing.T, b *multicast.Group[int], id uint64, _ iter.Seq2[int, func(error)], _ <-chan uint64, _ *recorder[string]) {
+		{"NeverRanged", func(t *testing.T, g *multicast.Group[int], id uint64, _ iter.Seq2[int, func(error)], _ <-chan uint64, _ *recorder[string]) {
 			t.Helper()
-			unsubscribe(t, b, id)
+			unsubscribe(t, g, id)
 		}, nil},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
 			synctest.Test(t, func(t *testing.T) {
-				b := newGroup[int](t)
+				g := newGroup[int](t)
 				events := &recorder[string]{}
 				done := make(chan uint64, 1)
-				id, seq := subscribeSeq(t, b, subscriber.WithDone[int](t.Context(), done))
-				tt.run(t, b, id, seq, done, events)
+				id, seq := subscribeSeq(t, g, subscriber.WithDone[int](t.Context(), done))
+				tt.run(t, g, id, seq, done, events)
 				synctest.Wait()
 				if got := events.messages(); !slices.Equal(got, tt.want) {
 					t.Errorf("got %q, want %q", got, tt.want)
@@ -660,11 +660,11 @@ func TestShutdown(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		release := make(chan struct{})
 		handled := &recorder[int]{hold: release}
-		subscribe(t, b, handled.handle, subscriber.WithBuffer[int](2))
-		_, seq := subscribeSeq(t, b, subscriber.WithBuffer[int](2))
+		subscribe(t, g, handled.handle, subscriber.WithBuffer[int](2))
+		_, seq := subscribeSeq(t, g, subscriber.WithBuffer[int](2))
 		yielded := &recorder[int]{}
 		go func() {
 			for msg := range seq {
@@ -675,9 +675,9 @@ func TestShutdown(t *testing.T) {
 
 		// handle and the loop hold on to 1, with 2 and 3 in their buffers.
 		for msg := 1; msg <= 3; msg++ {
-			b.Broadcast(t.Context(), msg)
+			g.Publish(t.Context(), msg)
 		}
-		errs := shutdown(t.Context(), b)
+		errs := shutdown(t.Context(), g)
 		checkWaiting(t, errs, "handle and the loop held message 1")
 		close(release)
 		if err := waitShutdown(t, errs); err != nil {
@@ -690,40 +690,40 @@ func TestShutdown(t *testing.T) {
 				t.Errorf("%s subscriber got %v once Shutdown returned, want %v", name, got, want)
 			}
 		}
-		if err := b.Shutdown(t.Context()); !errors.Is(err, multicast.ErrClosed) {
+		if err := g.Shutdown(t.Context()); !errors.Is(err, multicast.ErrClosed) {
 			t.Errorf("second Shutdown = %v, want ErrClosed", err)
 		}
-		if err := b.Close(); !errors.Is(err, multicast.ErrClosed) {
+		if err := g.Close(); !errors.Is(err, multicast.ErrClosed) {
 			t.Errorf("Close after Shutdown = %v, want ErrClosed", err)
 		}
-		if _, err := b.Subscribe(t.Context(), handled.handle); !errors.Is(err, multicast.ErrClosed) {
+		if _, err := g.Subscribe(t.Context(), handled.handle); !errors.Is(err, multicast.ErrClosed) {
 			t.Errorf("Subscribe after Shutdown = %v, want ErrClosed", err)
 		}
 	})
 }
 
-// Shutdown frees the Broadcasts waiting on a subscriber, sync and async, and returns once they have reported and handle
-// has returned.
-func TestShutdown_FreesBroadcast(t *testing.T) {
+// Shutdown frees the Publish calls waiting on a subscriber, sync and async, and returns once they have reported and
+// handle has returned.
+func TestShutdown_FreesPublish(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		handled := &recorder[int]{hold: make(chan struct{})}
 		closed := &recorder[int]{}
-		subscribe(t, b, handled.handle, subscriber.WithErrorHandler[int](recordClosed(t, closed)))
+		subscribe(t, g, handled.handle, subscriber.WithErrorHandler[int](recordClosed(t, closed)))
 
-		b.Broadcast(t.Context(), 1) // handle holds on to it
+		g.Publish(t.Context(), 1) // handle holds on to it
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			b.Broadcast(t.Context(), 2)
+			g.Publish(t.Context(), 2)
 		}()
-		b.Broadcast(t.Context(), 3, message.WithAsync[int]())
+		g.Publish(t.Context(), 3, message.WithAsync[int]())
 		synctest.Wait() // both sends wait on the subscriber
 
-		errs := shutdown(t.Context(), b)
-		waitClosed(t, done, "Broadcast of 2 once shut down")
+		errs := shutdown(t.Context(), g)
+		waitClosed(t, done, "Publish of 2 once shut down")
 		checkWaiting(t, errs, "handle held message 1")
 		handled.release()
 		if err := waitShutdown(t, errs); err != nil {
@@ -745,17 +745,17 @@ func TestShutdown_ContextDone(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newGroup[int](t)
-		handled, _ := hold(t, b)
-		b.Broadcast(t.Context(), 1)
+		g := newGroup[int](t)
+		handled, _ := hold(t, g)
+		g.Publish(t.Context(), 1)
 
 		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 		defer cancel()
-		if err := b.Shutdown(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		if err := g.Shutdown(ctx); !errors.Is(err, context.DeadlineExceeded) {
 			t.Errorf("Shutdown while handle hangs = %v, want %v", err, context.DeadlineExceeded)
 		}
 
-		errs := shutdown(t.Context(), b)
+		errs := shutdown(t.Context(), g)
 		checkWaiting(t, errs, "handle held message 1")
 		handled.release()
 		if err := waitShutdown(t, errs); !errors.Is(err, multicast.ErrClosed) {
@@ -770,13 +770,13 @@ func TestShutdown_SubscribeSeqNotRanged(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newGroup[int](t)
-		_, seq := subscribeSeq(t, b, subscriber.WithBuffer[int](1))
-		b.Broadcast(t.Context(), 1) // fills the buffer
+		g := newGroup[int](t)
+		_, seq := subscribeSeq(t, g, subscriber.WithBuffer[int](1))
+		g.Publish(t.Context(), 1) // fills the buffer
 
 		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 		defer cancel()
-		if err := b.Shutdown(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		if err := g.Shutdown(ctx); !errors.Is(err, context.DeadlineExceeded) {
 			t.Errorf("Shutdown before the loop started = %v, want %v", err, context.DeadlineExceeded)
 		}
 
@@ -784,7 +784,7 @@ func TestShutdown_SubscribeSeqNotRanged(t *testing.T) {
 		for msg := range seq {
 			yielded.record(msg)
 		}
-		if err := waitShutdown(t, shutdown(t.Context(), b)); !errors.Is(err, multicast.ErrClosed) {
+		if err := waitShutdown(t, shutdown(t.Context(), g)); !errors.Is(err, multicast.ErrClosed) {
 			t.Errorf("Shutdown once the loop ended = %v, want ErrClosed", err)
 		}
 		if got, want := yielded.messages(), []int{1}; !slices.Equal(got, want) {
@@ -793,10 +793,10 @@ func TestShutdown_SubscribeSeqNotRanged(t *testing.T) {
 	})
 }
 
-// shutdown calls b.Shutdown in a goroutine, and returns a channel that yields its error.
-func shutdown[T any](ctx context.Context, b *multicast.Group[T]) <-chan error {
+// shutdown calls g.Shutdown in a goroutine, and returns a channel that yields its error.
+func shutdown[T any](ctx context.Context, g *multicast.Group[T]) <-chan error {
 	errs := make(chan error, 1)
-	go func() { errs <- b.Shutdown(ctx) }()
+	go func() { errs <- g.Shutdown(ctx) }()
 
 	return errs
 }

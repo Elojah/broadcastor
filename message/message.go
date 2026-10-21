@@ -1,4 +1,4 @@
-// Package message holds the options passed to Broadcast and the Message they configure.
+// Package message holds the options passed to Publish and the Message they configure.
 package message
 
 import (
@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// Delivery is how Broadcast hands a message to a subscriber. The last option that sets it wins.
+// Delivery is how Publish hands a message to a subscriber. The last option that sets it wins.
 type Delivery uint8
 
 const (
@@ -20,7 +20,7 @@ const (
 	DeliveryNonBlocking
 )
 
-// Message is what one Broadcast sends to one subscriber: Value, or with BroadcastBatch, Batch.
+// Message is what one Publish sends to one subscriber: Value, or with PublishBatch, Batch.
 type Message[T any] struct {
 	Value T
 	// Batch is nil for a single value.
@@ -37,7 +37,7 @@ func (m Message[T]) Len() int {
 	return 1
 }
 
-// Config is how one Broadcast sends its message to one subscriber.
+// Config is how one Publish sends its message to one subscriber.
 type Config struct {
 	Delivery Delivery
 
@@ -52,10 +52,10 @@ type Config struct {
 	ErrorHandler func(ctx context.Context, err error)
 
 	// Context replaces the subscriber's ctx for this message. nil means none.
-	Context context.Context //nolint:containedctx // it travels with the message, which outlives Broadcast
+	Context context.Context //nolint:containedctx // it travels with the message, which outlives Publish
 
-	// SubscriberFilter picks, by ID, the subscribers Broadcast hands the message to. nil means every one. Only a
-	// Broadcast's own is read.
+	// SubscriberFilter picks, by ID, the subscribers Publish hands the message to. nil means every one. Only a
+	// Publish's own is read.
 	SubscriberFilter func(id uint64) bool
 }
 

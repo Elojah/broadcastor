@@ -1,12 +1,12 @@
-// How long Broadcast waits for a busy subscriber depends on the delivery. The subscriber takes 1 and waits in handle,
+// How long Publish waits for a busy subscriber depends on the delivery. The subscriber takes 1 and waits in handle,
 // with room for one more message in its buffer (subscriber.WithBuffer):
 //
-//   - 2 goes in the buffer, so Broadcast does not wait.
+//   - 2 goes in the buffer, so Publish does not wait.
 //   - 3 is non-blocking (message.WithNonBlocking): the buffer is full, so it is dropped.
-//   - 4 has a timeout (message.WithTimeout): Broadcast waits for room, then gives up.
-//   - 5 is async (message.WithAsync): Broadcast returns at once, and a goroutine sends it once there is room.
+//   - 4 has a timeout (message.WithTimeout): Publish waits for room, then gives up.
+//   - 5 is async (message.WithAsync): Publish returns at once, and a goroutine sends it once there is room.
 //
-// The error handler learns what was lost, from Broadcast's goroutine. handle waits for release, standing in for slow
+// The error handler learns what was lost, from Publish's goroutine. handle waits for release, standing in for slow
 // work.
 package main
 
@@ -25,11 +25,11 @@ import (
 
 func main() {
 	ctx := context.Background()
-	b := multicast.New[int]()
+	g := multicast.New[int]()
 
 	release := make(chan struct{})
 	var handled sync.WaitGroup
-	_, err := b.Subscribe(ctx, func(_ context.Context, _ uint64, n int) error {
+	_, err := g.Subscribe(ctx, func(_ context.Context, _ uint64, n int) error {
 		<-release
 		fmt.Println("handled", n)
 		handled.Done()
@@ -65,12 +65,12 @@ func main() {
 		{4, []message.Option[int]{message.WithTimeout[int](10 * time.Millisecond)}},
 		{5, []message.Option[int]{message.WithAsync[int]()}},
 	} {
-		fmt.Println(m.n, "handed to", b.Broadcast(ctx, m.n, m.options...), "subscribers")
+		fmt.Println(m.n, "handed to", g.Publish(ctx, m.n, m.options...), "subscribers")
 	}
 	close(release)
 	handled.Wait()
 
-	if err := b.Close(); err != nil {
+	if err := g.Close(); err != nil {
 		log.Fatal(err)
 	}
 }

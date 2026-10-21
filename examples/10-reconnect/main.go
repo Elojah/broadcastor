@@ -28,20 +28,20 @@ var (
 
 func main() {
 	ctx := context.Background()
-	b := multicast.New[int]()
+	g := multicast.New[int]()
 	n := &network{dialling: make(chan struct{}), up: make(chan struct{})}
-	closeLink := subscribeForwarder(ctx, b, n)
+	closeLink := subscribeForwarder(ctx, g, n)
 
 	for msg := 1; msg <= 3; msg++ {
-		b.Broadcast(ctx, msg)
+		g.Publish(ctx, msg)
 	}
 	<-n.dialling
 	for msg := 4; msg <= 5; msg++ {
-		fmt.Println(msg, "handed to", b.Broadcast(ctx, msg), "subscribers")
+		fmt.Println(msg, "handed to", g.Publish(ctx, msg), "subscribers")
 	}
 	close(n.up)
 
-	if err := b.Shutdown(ctx); err != nil {
+	if err := g.Shutdown(ctx); err != nil {
 		log.Fatal(err)
 	}
 	closeLink()
@@ -49,7 +49,7 @@ func main() {
 
 // subscribeForwarder subscribes the forwarder, which sends each message over its link. It returns a func that closes the
 // last link once the forwarder is done.
-func subscribeForwarder(ctx context.Context, b *multicast.Group[int], n *network) func() {
+func subscribeForwarder(ctx context.Context, g *multicast.Group[int], n *network) func() {
 	// Only the forwarder's goroutine uses it, in handle and redial, and the returned func once done has the ID, so it
 	// needs no lock.
 	l := n.dial()
@@ -65,7 +65,7 @@ func subscribeForwarder(ctx context.Context, b *multicast.Group[int], n *network
 
 	// Room for the forwarder's ID, since Shutdown waits for the send.
 	done := make(chan uint64, 1)
-	_, err := b.Subscribe(ctx, handle,
+	_, err := g.Subscribe(ctx, handle,
 		subscriber.WithMiddleware(
 			middleware.Retry[int](middleware.RetryPolicy{Attempts: 5, Delay: time.Millisecond}),
 			// Until the link is back up: the subscription's ctx bounds it.
@@ -74,7 +74,7 @@ func subscribeForwarder(ctx context.Context, b *multicast.Group[int], n *network
 			}),
 			disconnect[int](3),
 		),
-		// What Broadcast hands the forwarder while it reconnects waits there, in order.
+		// What Publish hands the forwarder while it reconnects waits there, in order.
 		subscriber.WithBuffer[int](8),
 		subscriber.WithDone[int](ctx, done),
 	)

@@ -7,7 +7,7 @@ reliability fix with a test that fails without it. The API follows semver: a bre
 ## Short-term
 
 - [ ] Measure what a subscriber costs in memory, idle and with `WithBuffer(n)`, under Go and TinyGo, for the README.
-- [ ] Document that `expvar.Publish("bus", expvar.Func(func() any { return b.Stats() }))` exposes `Stats`.
+- [ ] Document that `expvar.Publish("bus", expvar.Func(func() any { return g.Stats() }))` exposes `Stats`.
 
 ## Mid-term
 

@@ -22,11 +22,11 @@ var errNegative = errors.New("negative")
 
 func main() {
 	ctx := context.Background()
-	b := multicast.New[int]()
+	g := multicast.New[int]()
 
 	// Every message is either handled or reported.
 	var done sync.WaitGroup
-	id, err := b.Subscribe(ctx, func(_ context.Context, _ uint64, n int) error {
+	id, err := g.Subscribe(ctx, func(_ context.Context, _ uint64, n int) error {
 		switch {
 		case n < 0:
 			return errNegative
@@ -60,11 +60,11 @@ func main() {
 
 	for _, n := range []int{4, -2, 0, 5} {
 		done.Add(1)
-		b.Broadcast(ctx, n)
+		g.Publish(ctx, n)
 	}
 	done.Wait()
 
-	if err := b.Unsubscribe(ctx, id); err != nil {
+	if err := g.Unsubscribe(ctx, id); err != nil {
 		log.Fatal(err)
 	}
 }

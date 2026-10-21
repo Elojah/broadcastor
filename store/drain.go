@@ -37,7 +37,7 @@ func Drain[T any](
 }
 
 // Enqueue returns a handle that only puts each message in q, for Drain to hand on: the subscriber seldom holds
-// Broadcast up, and the real handle gets every message in order, from one goroutine. Put gets a ctx never done, and its
+// Publish up, and the real handle gets every message in order, from one goroutine. Put gets a ctx never done, and its
 // error is handle's.
 func Enqueue[T any](q subscriber.Store[T]) subscriber.Handler[T] {
 	return func(ctx context.Context, id uint64, msg T) error {

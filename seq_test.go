@@ -15,12 +15,12 @@ func TestSubscribeSeq(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newGroup[int](t)
-		_, seq := subscribeSeq(t, b)
+		g := newGroup[int](t)
+		_, seq := subscribeSeq(t, g)
 
 		go func() {
 			for msg := 1; msg <= 3; msg++ {
-				b.Broadcast(t.Context(), msg)
+				g.Publish(t.Context(), msg)
 			}
 		}()
 		var got []int
@@ -34,24 +34,24 @@ func TestSubscribeSeq(t *testing.T) {
 			t.Errorf("loop got %v, want %v", got, want)
 		}
 
-		if n := b.Broadcast(t.Context(), 4); n != 0 {
-			t.Errorf("Broadcast after the loop ended handed the message to %d subscribers, want 0", n)
+		if n := g.Publish(t.Context(), 4); n != 0 {
+			t.Errorf("Publish after the loop ended handed the message to %d subscribers, want 0", n)
 		}
 		synctest.Wait()
 	})
 }
 
 // After a break, what was taken but not yielded is reported as *subscriber.ClosedError with the SubscribeSeq ctx, and a
-// waiting Broadcast returns.
+// waiting Publish returns.
 func TestSubscribeSeq_BreakReportsUnyielded(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
 		type key struct{}
 		ctx := context.WithValue(subscribeCtx(t), key{}, "seq")
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		closed := &recorder[int]{}
-		id, seq, err := b.SubscribeSeq(ctx, subscriber.WithBuffer[int](2),
+		id, seq, err := g.SubscribeSeq(ctx, subscriber.WithBuffer[int](2),
 			subscriber.WithErrorHandler[int](func(ctx context.Context, err error) {
 				var closedErr *subscriber.ClosedError[int]
 				if !errors.As(err, &closedErr) || !errors.Is(err, subscriber.ErrClosed) {
@@ -68,13 +68,13 @@ func TestSubscribeSeq_BreakReportsUnyielded(t *testing.T) {
 			t.Fatalf("SubscribeSeq: %v", err)
 		}
 
-		// Nothing reads before the loop starts: 1 and 2 fill the buffer, and the Broadcast of 3 waits.
-		b.Broadcast(t.Context(), 1)
-		b.Broadcast(t.Context(), 2)
+		// Nothing reads before the loop starts: 1 and 2 fill the buffer, and the Publish of 3 waits.
+		g.Publish(t.Context(), 1)
+		g.Publish(t.Context(), 2)
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			b.Broadcast(t.Context(), 3)
+			g.Publish(t.Context(), 3)
 		}()
 		synctest.Wait()
 
@@ -85,14 +85,14 @@ func TestSubscribeSeq_BreakReportsUnyielded(t *testing.T) {
 
 			break
 		}
-		waitClosed(t, done, "Broadcast to a subscriber whose loop has ended")
+		waitClosed(t, done, "Publish to a subscriber whose loop has ended")
 		synctest.Wait()
 
-		// 3 is reported by the Broadcast, and 2 by the loop's discard, in either order.
+		// 3 is reported by the Publish, and 2 by the loop's discard, in either order.
 		if got, want := slices.Sorted(slices.Values(closed.messages())), []int{2, 3}; !slices.Equal(got, want) {
 			t.Errorf("error handler got *subscriber.ClosedError for messages %v, want %v", got, want)
 		}
-		if err := b.Unsubscribe(t.Context(), id); !isNotFound(err) {
+		if err := g.Unsubscribe(t.Context(), id); !isNotFound(err) {
 			t.Errorf("Unsubscribe after the loop ended = %v, want *SubscriberNotFoundError", err)
 		}
 	})
@@ -104,8 +104,8 @@ func TestSubscribeSeq_ContextDone(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
-		b := newGroup[int](t)
-		_, seq, err := b.SubscribeSeq(ctx)
+		g := newGroup[int](t)
+		_, seq, err := g.SubscribeSeq(ctx)
 		if err != nil {
 			t.Fatalf("SubscribeSeq: %v", err)
 		}
@@ -118,13 +118,13 @@ func TestSubscribeSeq_ContextDone(t *testing.T) {
 				got.record(msg)
 			}
 		}()
-		b.Broadcast(t.Context(), 1)
+		g.Publish(t.Context(), 1)
 		synctest.Wait() // the loop is waiting for its next message
 
 		cancel()
 		waitClosed(t, done, "the loop to end once ctx is done")
-		if n := b.Broadcast(t.Context(), 2); n != 0 {
-			t.Errorf("Broadcast after the loop ended handed the message to %d subscribers, want 0", n)
+		if n := g.Publish(t.Context(), 2); n != 0 {
+			t.Errorf("Publish after the loop ended handed the message to %d subscribers, want 0", n)
 		}
 		synctest.Wait()
 		if got, want := got.messages(), []int{1}; !slices.Equal(got, want) {
@@ -139,9 +139,9 @@ func TestSubscribeSeq_ContextDoneFirst(t *testing.T) {
 
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		errs := &recorder[error]{}
-		_, seq, err := b.SubscribeSeq(ctx, subscriber.WithBuffer[int](1),
+		_, seq, err := g.SubscribeSeq(ctx, subscriber.WithBuffer[int](1),
 			subscriber.WithErrorHandler[int](func(_ context.Context, err error) {
 				errs.record(err)
 			}))
@@ -149,7 +149,7 @@ func TestSubscribeSeq_ContextDoneFirst(t *testing.T) {
 			t.Fatalf("SubscribeSeq: %v", err)
 		}
 
-		b.Broadcast(t.Context(), 1)
+		g.Publish(t.Context(), 1)
 		cancel()
 		for msg := range seq {
 			t.Errorf("loop got %d, want nothing once ctx is done", msg)
@@ -167,9 +167,9 @@ func TestSubscribeSeq_Fail(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		failures := &recorder[int]{}
-		id, seq := subscribeSeq(t, b, subscriber.WithErrorHandler[int](recordFailures(t, failures)))
+		id, seq := subscribeSeq(t, g, subscriber.WithErrorHandler[int](recordFailures(t, failures)))
 
 		done := make(chan struct{})
 		go func() {
@@ -185,16 +185,16 @@ func TestSubscribeSeq_Fail(t *testing.T) {
 			}
 		}()
 		for msg := 1; msg <= 3; msg++ {
-			b.Broadcast(t.Context(), msg)
+			g.Publish(t.Context(), msg)
 		}
 		synctest.Wait()
 
 		if got, want := failures.messages(), []int{1}; !slices.Equal(got, want) {
 			t.Errorf("error handler got failures for messages %v, want %v", got, want)
 		}
-		checkStats(t, b, id, subscriber.Stats{Delivered: 3, Handled: 2, Failed: 1})
+		checkStats(t, g, id, subscriber.Stats{Delivered: 3, Handled: 2, Failed: 1})
 
-		unsubscribe(t, b, id)
+		unsubscribe(t, g, id)
 		waitClosed(t, done, "the loop to end once unsubscribed")
 		synctest.Wait()
 	})
@@ -205,8 +205,8 @@ func TestSubscribeSeq_RangeOnce(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newGroup[int](t)
-		_, seq := subscribeSeq(t, b)
+		g := newGroup[int](t)
+		_, seq := subscribeSeq(t, g)
 
 		done := make(chan struct{})
 		go func() {
@@ -220,8 +220,8 @@ func TestSubscribeSeq_RangeOnce(t *testing.T) {
 		for msg := range seq {
 			t.Errorf("a second loop alongside the first got %d, want nothing", msg)
 		}
-		if n := b.Broadcast(t.Context(), 1); n != 1 {
-			t.Errorf("Broadcast handed the message to %d subscribers, want 1", n)
+		if n := g.Publish(t.Context(), 1); n != 1 {
+			t.Errorf("Publish handed the message to %d subscribers, want 1", n)
 		}
 		waitClosed(t, done, "the first loop to break")
 
@@ -237,11 +237,11 @@ func TestSubscribeSeq_Panic(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		closed := &recorder[int]{}
-		_, seq := subscribeSeq(t, b, subscriber.WithErrorHandler[int](recordClosed(t, closed)))
+		_, seq := subscribeSeq(t, g, subscriber.WithErrorHandler[int](recordClosed(t, closed)))
 
-		go b.Broadcast(t.Context(), 1)
+		go g.Publish(t.Context(), 1)
 		p := recovered(func() {
 			for msg := range seq {
 				panic(handleError(msg))
@@ -250,8 +250,8 @@ func TestSubscribeSeq_Panic(t *testing.T) {
 		if p != handleError(1) {
 			t.Errorf("loop panicked with %v, want %v", p, handleError(1))
 		}
-		if n := b.Broadcast(t.Context(), 2); n != 0 {
-			t.Errorf("Broadcast after the loop panicked handed the message to %d subscribers, want 0", n)
+		if n := g.Publish(t.Context(), 2); n != 0 {
+			t.Errorf("Publish after the loop panicked handed the message to %d subscribers, want 0", n)
 		}
 		synctest.Wait()
 		if got, want := closed.messages(), []int{1}; !slices.Equal(got, want) {

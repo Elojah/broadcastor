@@ -11,39 +11,39 @@ import (
 	"github.com/elojah/multicast/subscriber"
 )
 
-// A filtered message never reaches the subscriber: Broadcast neither waits for it, stuck as it is, nor counts it, and
+// A filtered message never reaches the subscriber: Publish neither waits for it, stuck as it is, nor counts it, and
 // it is neither reported nor in Stats.
 func TestSubscriberWithFilter(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		stuck := &recorder[int]{hold: make(chan struct{})}
-		id := subscribe(t, b, stuck.handle, subscriber.WithFilter(even), subscriber.WithTimeout[int](time.Second),
+		id := subscribe(t, g, stuck.handle, subscriber.WithFilter(even), subscriber.WithTimeout[int](time.Second),
 			subscriber.WithErrorHandler[int](func(_ context.Context, err error) {
 				t.Errorf("error handler got %v, want none", err)
 			}))
 
-		b.Broadcast(t.Context(), 2) // stuck holds on to 2
+		g.Publish(t.Context(), 2) // stuck holds on to 2
 		start := time.Now()
 		for _, msg := range []int{1, 3} {
-			if n := b.Broadcast(t.Context(), msg); n != 0 {
-				t.Errorf("Broadcast handed %d, which the filter rejects, to %d subscribers, want 0", msg, n)
+			if n := g.Publish(t.Context(), msg); n != 0 {
+				t.Errorf("Publish handed %d, which the filter rejects, to %d subscribers, want 0", msg, n)
 			}
 		}
 		if elapsed := time.Since(start); elapsed != 0 {
-			t.Errorf("Broadcasts of rejected messages returned after %v, want no wait", elapsed)
+			t.Errorf("Publish calls of rejected messages returned after %v, want no wait", elapsed)
 		}
 		synctest.Wait()
-		checkStats(t, b, id, subscriber.Stats{Delivered: 1})
+		checkStats(t, g, id, subscriber.Stats{Delivered: 1})
 
 		stuck.release()
-		if n := b.Broadcast(t.Context(), 4); n != 1 {
-			t.Errorf("Broadcast handed 4 to %d subscribers, want 1", n)
+		if n := g.Publish(t.Context(), 4); n != 1 {
+			t.Errorf("Publish handed 4 to %d subscribers, want 1", n)
 		}
 		synctest.Wait()
-		checkStats(t, b, id, subscriber.Stats{Delivered: 2, Handled: 2})
-		unsubscribe(t, b, id)
+		checkStats(t, g, id, subscriber.Stats{Delivered: 2, Handled: 2})
+		unsubscribe(t, g, id)
 		synctest.Wait()
 
 		if got, want := stuck.messages(), []int{2, 4}; !slices.Equal(got, want) {
@@ -58,10 +58,10 @@ func TestSubscriberWithFilter_Several(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		seen := &recorder[int]{}
 		r := &recorder[int]{}
-		id := subscribe(t, b, r.handle,
+		id := subscribe(t, g, r.handle,
 			subscriber.WithFilter(even),
 			subscriber.WithFilter[int](nil),
 			subscriber.WithFilter(func(msg int) bool {
@@ -71,9 +71,9 @@ func TestSubscriberWithFilter_Several(t *testing.T) {
 			}))
 
 		for msg := 1; msg <= 6; msg++ {
-			b.Broadcast(t.Context(), msg)
+			g.Publish(t.Context(), msg)
 		}
-		unsubscribe(t, b, id)
+		unsubscribe(t, g, id)
 		synctest.Wait()
 
 		if got, want := seen.messages(), []int{2, 4, 6}; !slices.Equal(got, want) {
@@ -85,36 +85,36 @@ func TestSubscriberWithFilter_Several(t *testing.T) {
 	})
 }
 
-// A Broadcast hands its message only to the subscribers it picks: it neither waits for the others, stuck as they are,
+// A Publish hands its message only to the subscribers it picks: it neither waits for the others, stuck as they are,
 // nor counts them, and nothing about them is reported or in their Stats.
 func TestMessageWithSubscriberFilter(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		stuck := &recorder[int]{hold: make(chan struct{})}
-		stuckID := subscribe(t, b, stuck.handle, subscriber.WithTimeout[int](time.Second),
+		stuckID := subscribe(t, g, stuck.handle, subscriber.WithTimeout[int](time.Second),
 			subscriber.WithErrorHandler[int](func(_ context.Context, err error) {
 				t.Errorf("error handler got %v, want none", err)
 			}))
-		picked, pickedID := record(t, b)
+		picked, pickedID := record(t, g)
 		only := message.WithSubscriberFilter[int](func(id uint64) bool { return id == pickedID })
 
-		b.Broadcast(t.Context(), 0) // stuck holds on to 0
+		g.Publish(t.Context(), 0) // stuck holds on to 0
 		start := time.Now()
 		for _, msg := range []int{1, 2} {
-			if n := b.Broadcast(t.Context(), msg, only); n != 1 {
-				t.Errorf("Broadcast handed %d to %d subscribers, want 1: the one picked", msg, n)
+			if n := g.Publish(t.Context(), msg, only); n != 1 {
+				t.Errorf("Publish handed %d to %d subscribers, want 1: the one picked", msg, n)
 			}
 		}
 		if elapsed := time.Since(start); elapsed != 0 {
-			t.Errorf("Broadcasts skipping the stuck subscriber returned after %v, want no wait", elapsed)
+			t.Errorf("Publish calls skipping the stuck subscriber returned after %v, want no wait", elapsed)
 		}
 		synctest.Wait()
-		checkStats(t, b, stuckID, subscriber.Stats{Delivered: 1})
+		checkStats(t, g, stuckID, subscriber.Stats{Delivered: 1})
 
 		stuck.release()
-		unsubscribeAll(t, b, stuckID, pickedID)
+		unsubscribeAll(t, g, stuckID, pickedID)
 		synctest.Wait()
 
 		if got, want := stuck.messages(), []int{0}; !slices.Equal(got, want) {
@@ -126,26 +126,26 @@ func TestMessageWithSubscriberFilter(t *testing.T) {
 	})
 }
 
-// A subscriber's own filters never see a message the Broadcast skips it for, so a stateful one only learns what the
+// A subscriber's own filters never see a message the Publish skips it for, so a stateful one only learns what the
 // subscriber was handed.
 func TestMessageWithSubscriberFilter_BeforeSubscriberFilter(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		seen := &recorder[int]{}
 		r := &recorder[int]{}
-		id := subscribe(t, b, r.handle, subscriber.WithFilter(func(msg int) bool {
+		id := subscribe(t, g, r.handle, subscriber.WithFilter(func(msg int) bool {
 			seen.record(msg)
 
 			return true
 		}))
 
-		if n := b.Broadcast(t.Context(), 1, message.WithSubscriberFilter[int](func(uint64) bool { return false })); n != 0 {
-			t.Errorf("Broadcast picking no subscriber handed the message to %d, want 0", n)
+		if n := g.Publish(t.Context(), 1, message.WithSubscriberFilter[int](func(uint64) bool { return false })); n != 0 {
+			t.Errorf("Publish picking no subscriber handed the message to %d, want 0", n)
 		}
-		b.Broadcast(t.Context(), 2)
-		unsubscribe(t, b, id)
+		g.Publish(t.Context(), 2)
+		unsubscribe(t, g, id)
 		synctest.Wait()
 
 		if got, want := seen.messages(), []int{2}; !slices.Equal(got, want) {
@@ -163,14 +163,14 @@ func TestMessageWithSubscriberFilter_Several(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newGroup[int](t)
-		first, firstID := record(t, b)
-		second, secondID := record(t, b)
-		third, thirdID := record(t, b)
-		// Only Broadcast's goroutine calls the filters.
+		g := newGroup[int](t)
+		first, firstID := record(t, g)
+		second, secondID := record(t, g)
+		third, thirdID := record(t, g)
+		// Only Publish's goroutine calls the filters.
 		var seen []uint64
 
-		n := b.Broadcast(t.Context(), 1,
+		n := g.Publish(t.Context(), 1,
 			message.WithSubscriberFilter[int](func(id uint64) bool { return id != firstID }),
 			message.WithSubscriberFilter[int](nil),
 			message.WithSubscriberFilter[int](func(id uint64) bool {
@@ -179,9 +179,9 @@ func TestMessageWithSubscriberFilter_Several(t *testing.T) {
 				return id != secondID
 			}))
 		if n != 1 {
-			t.Errorf("Broadcast handed the message to %d subscribers, want 1", n)
+			t.Errorf("Publish handed the message to %d subscribers, want 1", n)
 		}
-		unsubscribeAll(t, b, firstID, secondID, thirdID)
+		unsubscribeAll(t, g, firstID, secondID, thirdID)
 		synctest.Wait()
 
 		if len(seen) != 2 || !slices.Contains(seen, secondID) || !slices.Contains(seen, thirdID) {

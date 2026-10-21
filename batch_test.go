@@ -20,17 +20,17 @@ import (
 
 // A subscriber hands a batch whole to its batch handler, through the batch middlewares, and each single message to
 // handle. One without a batch handler hands each value to handle, through its middlewares. Stats count values.
-func TestBroadcastBatch(t *testing.T) {
+func TestPublishBatch(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		unrolled, wrapped := &recorder[int]{}, &recorder[int]{}
-		unrolledID := subscribe(t, b, unrolled.handle, subscriber.WithMiddleware(recordMiddleware(wrapped)))
+		unrolledID := subscribe(t, g, unrolled.handle, subscriber.WithMiddleware(recordMiddleware(wrapped)))
 		singles, batches := &recorder[int]{}, &batchRecorder{}
 		sent := batchOf(1, 2, 3)
 		var calls atomic.Int64
-		batchID := subscribe(t, b, singles.handle, subscriber.WithBatchHandler(
+		batchID := subscribe(t, g, singles.handle, subscriber.WithBatchHandler(
 			func(ctx context.Context, id uint64, batch message.Batch[int]) error {
 				if batch != message.Batch[int](sent) {
 					t.Errorf("batch handler got %v, want the batch sent", batch)
@@ -46,15 +46,15 @@ func TestBroadcastBatch(t *testing.T) {
 				}
 			}))
 
-		if n := b.BroadcastBatch(t.Context(), sent); n != 2 {
-			t.Errorf("BroadcastBatch handed the batch to %d subscribers, want 2", n)
+		if n := g.PublishBatch(t.Context(), sent); n != 2 {
+			t.Errorf("PublishBatch handed the batch to %d subscribers, want 2", n)
 		}
-		if n := b.Broadcast(t.Context(), 4); n != 2 {
-			t.Errorf("Broadcast handed the message to %d subscribers, want 2", n)
+		if n := g.Publish(t.Context(), 4); n != 2 {
+			t.Errorf("Publish handed the message to %d subscribers, want 2", n)
 		}
 		for _, empty := range []message.Batch[int]{nil, batchOf()} {
-			if n := b.BroadcastBatch(t.Context(), empty); n != 0 {
-				t.Errorf("BroadcastBatch(%v) handed it to %d subscribers, want none", empty, n)
+			if n := g.PublishBatch(t.Context(), empty); n != 0 {
+				t.Errorf("PublishBatch(%v) handed it to %d subscribers, want none", empty, n)
 			}
 		}
 		synctest.Wait()
@@ -73,22 +73,22 @@ func TestBroadcastBatch(t *testing.T) {
 		if n := calls.Load(); n != 1 {
 			t.Errorf("the batch middleware ran %d times, want once", n)
 		}
-		checkStats(t, b, unrolledID, subscriber.Stats{Delivered: 4, Handled: 4})
-		checkStats(t, b, batchID, subscriber.Stats{Delivered: 4, Handled: 4, Batches: 1})
+		checkStats(t, g, unrolledID, subscriber.Stats{Delivered: 4, Handled: 4})
+		checkStats(t, g, batchID, subscriber.Stats{Delivered: 4, Handled: 4, Batches: 1})
 	})
 }
 
 // A batch the subscriber cannot take is lost whole: reported once, with the batch in the error, to the subscriber's
 // error handler then to the batch's, and stored one value at a time, each with that error. Stats count each value.
-func TestBroadcastBatch_Lost(t *testing.T) {
+func TestPublishBatch_Lost(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		handled := &recorder[int]{hold: make(chan struct{})}
 		var subscriberErrs, batchErrs []string
 		store := &recordStore{}
-		id := subscribe(t, b, handled.handle, subscriber.WithDeadLetters[int](store),
+		id := subscribe(t, g, handled.handle, subscriber.WithDeadLetters[int](store),
 			subscriber.WithErrorHandler[int](func(_ context.Context, err error) {
 				subscriberErrs = append(subscriberErrs, describeBatchLoss(t, err))
 			}))
@@ -97,15 +97,15 @@ func TestBroadcastBatch_Lost(t *testing.T) {
 		})
 
 		// handle holds on to 0, so the batches find it busy.
-		b.Broadcast(t.Context(), 0)
+		g.Publish(t.Context(), 0)
 		synctest.Wait()
-		if n := b.BroadcastBatch(t.Context(), batchOf(1, 2, 3), message.WithNonBlocking[int](), recordBatchErrs); n != 0 {
-			t.Errorf("non-blocking BroadcastBatch to a busy subscriber handed it over %d times, want none", n)
+		if n := g.PublishBatch(t.Context(), batchOf(1, 2, 3), message.WithNonBlocking[int](), recordBatchErrs); n != 0 {
+			t.Errorf("non-blocking PublishBatch to a busy subscriber handed it over %d times, want none", n)
 		}
-		if n := b.BroadcastBatch(t.Context(), batchOf(4, 5), message.WithTimeout[int](time.Second), recordBatchErrs); n != 0 {
-			t.Errorf("BroadcastBatch timing out handed it over %d times, want none", n)
+		if n := g.PublishBatch(t.Context(), batchOf(4, 5), message.WithTimeout[int](time.Second), recordBatchErrs); n != 0 {
+			t.Errorf("PublishBatch timing out handed it over %d times, want none", n)
 		}
-		checkStats(t, b, id, subscriber.Stats{Delivered: 1, TimedOut: 2, Dropped: 3, Handling: time.Second})
+		checkStats(t, g, id, subscriber.Stats{Delivered: 1, TimedOut: 2, Dropped: 3, Handling: time.Second})
 		handled.release()
 		synctest.Wait()
 
@@ -124,7 +124,7 @@ func TestBroadcastBatch_Lost(t *testing.T) {
 		if wantStored := []int{1, 2, 3, 4, 5}; !slices.Equal(stored, wantStored) {
 			t.Errorf("dead letters got %v, want %v", stored, wantStored)
 		}
-		checkStats(t, b, id, subscriber.Stats{Delivered: 1, Handled: 1, TimedOut: 2, Dropped: 3, HandleTime: time.Second})
+		checkStats(t, g, id, subscriber.Stats{Delivered: 1, Handled: 1, TimedOut: 2, Dropped: 3, HandleTime: time.Second})
 	})
 }
 
@@ -134,12 +134,12 @@ func TestSubscriberWithBatchHandler_Errors(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		type key struct{}
 		var handledWith any
 		var subscriberErrs, batchErrs []error
 		store := &recordStore{}
-		id := subscribe(t, b, (&recorder[int]{}).handle, subscriber.WithDeadLetters[int](store),
+		id := subscribe(t, g, (&recorder[int]{}).handle, subscriber.WithDeadLetters[int](store),
 			subscriber.WithBatchHandler(func(ctx context.Context, _ uint64, batch message.Batch[int]) error {
 				handledWith = ctx.Value(key{})
 
@@ -152,7 +152,7 @@ func TestSubscriberWithBatchHandler_Errors(t *testing.T) {
 				subscriberErrs = append(subscriberErrs, err)
 			}))
 
-		b.BroadcastBatch(t.Context(), batchOf(1, 2, 3), message.WithContext[int](context.WithValue(t.Context(), key{}, "batch")),
+		g.PublishBatch(t.Context(), batchOf(1, 2, 3), message.WithContext[int](context.WithValue(t.Context(), key{}, "batch")),
 			message.WithErrorHandler[int](func(_ context.Context, err error) { batchErrs = append(batchErrs, err) }))
 		synctest.Wait()
 
@@ -171,18 +171,18 @@ func TestSubscriberWithBatchHandler_Errors(t *testing.T) {
 		if got := store.messages(); !slices.Equal(got, wantRecords) {
 			t.Errorf("dead letters got %v, want %v", got, wantRecords)
 		}
-		checkStats(t, b, id, subscriber.Stats{Delivered: 3, Failed: 3, Batches: 1})
+		checkStats(t, g, id, subscriber.Stats{Delivered: 3, Failed: 3, Batches: 1})
 	})
 }
 
 // A subscriber's filter sees each value of a batch once. Of a batch it keeps part of, the subscriber takes a batch of
 // the same type holding what it keeps, of one it keeps whole, the batch itself, and of one it keeps nothing of,
 // nothing, neither counted nor reported.
-func TestBroadcastBatch_Filter(t *testing.T) {
+func TestPublishBatch_Filter(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		var filtered atomic.Int64
 		keepEven := subscriber.WithFilter(func(msg int) bool {
 			filtered.Add(1)
@@ -190,7 +190,7 @@ func TestBroadcastBatch_Filter(t *testing.T) {
 			return msg%2 == 0
 		})
 		var got []message.Batch[int]
-		batchID := subscribe(t, b, (&recorder[int]{}).handle, keepEven, subscriber.WithBatchHandler(
+		batchID := subscribe(t, g, (&recorder[int]{}).handle, keepEven, subscriber.WithBatchHandler(
 			func(_ context.Context, _ uint64, batch message.Batch[int]) error {
 				got = append(got, batch)
 
@@ -199,15 +199,15 @@ func TestBroadcastBatch_Filter(t *testing.T) {
 			t.Errorf("error handler got %v, want nothing", err)
 		}))
 		unrolled := &recorder[int]{}
-		unrolledID := subscribe(t, b, unrolled.handle, subscriber.WithFilter(func(msg int) bool { return msg%2 == 0 }))
+		unrolledID := subscribe(t, g, unrolled.handle, subscriber.WithFilter(func(msg int) bool { return msg%2 == 0 }))
 
 		part, whole, none := &tally{values: []int{1, 2, 3, 4}}, &tally{values: []int{6, 8}}, &tally{values: []int{5, 7}}
 		for _, tt := range []struct {
 			batch *tally
 			want  int
 		}{{part, 2}, {whole, 2}, {none, 0}} {
-			if n := b.BroadcastBatch(t.Context(), tt.batch); n != tt.want {
-				t.Errorf("BroadcastBatch(%v) handed it to %d subscribers, want %d", tt.batch.values, n, tt.want)
+			if n := g.PublishBatch(t.Context(), tt.batch); n != tt.want {
+				t.Errorf("PublishBatch(%v) handed it to %d subscribers, want %d", tt.batch.values, n, tt.want)
 			}
 		}
 		synctest.Wait()
@@ -227,33 +227,33 @@ func TestBroadcastBatch_Filter(t *testing.T) {
 		if got, want := unrolled.messages(), []int{2, 4, 6, 8}; !slices.Equal(got, want) {
 			t.Errorf("handle without a batch handler got %v, want %v", got, want)
 		}
-		checkStats(t, b, batchID, subscriber.Stats{Delivered: 4, Handled: 4, Batches: 2})
-		checkStats(t, b, unrolledID, subscriber.Stats{Delivered: 4, Handled: 4})
+		checkStats(t, g, batchID, subscriber.Stats{Delivered: 4, Handled: 4, Batches: 2})
+		checkStats(t, g, unrolledID, subscriber.Stats{Delivered: 4, Handled: 4})
 	})
 }
 
 // A Map holds each value Add gives it under a key of its own. A batch handler gets it whole, or, of one its filter keeps
 // part of, a new Map holding what it keeps, and a subscriber without one gets each value, in no particular order.
-func TestBroadcastBatch_Map(t *testing.T) {
+func TestPublishBatch_Map(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		var whole, part []message.Batch[int]
-		subscribe(t, b, (&recorder[int]{}).handle, subscriber.WithBatchHandler(
+		subscribe(t, g, (&recorder[int]{}).handle, subscriber.WithBatchHandler(
 			func(_ context.Context, _ uint64, batch message.Batch[int]) error {
 				whole = append(whole, batch)
 
 				return nil
 			}))
-		subscribe(t, b, (&recorder[int]{}).handle, subscriber.WithFilter(func(msg int) bool { return msg%2 == 0 }),
+		subscribe(t, g, (&recorder[int]{}).handle, subscriber.WithFilter(func(msg int) bool { return msg%2 == 0 }),
 			subscriber.WithBatchHandler(func(_ context.Context, _ uint64, batch message.Batch[int]) error {
 				part = append(part, batch)
 
 				return nil
 			}))
 		unrolled := &recorder[int]{}
-		subscribe(t, b, unrolled.handle)
+		subscribe(t, g, unrolled.handle)
 
 		sent := new(message.Map[int])
 		for msg := range 4 {
@@ -262,8 +262,8 @@ func TestBroadcastBatch_Map(t *testing.T) {
 		if n := sent.Len(); n != 4 {
 			t.Fatalf("Map holds %d values after 4 Adds, want 4", n)
 		}
-		if n := b.BroadcastBatch(t.Context(), sent); n != 3 {
-			t.Errorf("BroadcastBatch handed the Map to %d subscribers, want 3", n)
+		if n := g.PublishBatch(t.Context(), sent); n != 3 {
+			t.Errorf("PublishBatch handed the Map to %d subscribers, want 3", n)
 		}
 		synctest.Wait()
 
@@ -284,24 +284,24 @@ func TestBroadcastBatch_Map(t *testing.T) {
 
 // A batch the subscriber discards while it waits in the buffer is reported whole, once. Once handed to handle one
 // value at a time, what is left is reported a value at a time.
-func TestBroadcastBatch_Discard(t *testing.T) {
+func TestPublishBatch_Discard(t *testing.T) {
 	t.Parallel()
 
 	t.Run("buffered", func(t *testing.T) {
 		t.Parallel()
 
 		synctest.Test(t, func(t *testing.T) {
-			b := newGroup[int](t)
+			g := newGroup[int](t)
 			handled := &recorder[int]{hold: make(chan struct{})}
 			var errs []string
-			id := subscribe(t, b, handled.handle, subscriber.WithBuffer[int](1),
+			id := subscribe(t, g, handled.handle, subscriber.WithBuffer[int](1),
 				subscriber.WithErrorHandler[int](func(_ context.Context, err error) { errs = append(errs, describeBatchLoss(t, err)) }))
-			b.Broadcast(t.Context(), 0)
+			g.Publish(t.Context(), 0)
 			synctest.Wait()
-			b.BroadcastBatch(t.Context(), batchOf(1, 2, 3))
-			checkStats(t, b, id, subscriber.Stats{Delivered: 4, Queued: 3, Buffer: 1})
+			g.PublishBatch(t.Context(), batchOf(1, 2, 3))
+			checkStats(t, g, id, subscriber.Stats{Delivered: 4, Queued: 3, Buffer: 1})
 
-			if err := b.Unsubscribe(t.Context(), id, subscriber.WithUnsubscribeDiscard()); err != nil {
+			if err := g.Unsubscribe(t.Context(), id, subscriber.WithUnsubscribeDiscard()); err != nil {
 				t.Fatalf("Unsubscribe: %v", err)
 			}
 			handled.release()
@@ -320,17 +320,17 @@ func TestBroadcastBatch_Discard(t *testing.T) {
 		t.Parallel()
 
 		synctest.Test(t, func(t *testing.T) {
-			b := newGroup[int](t)
+			g := newGroup[int](t)
 			handled, closed := &recorder[int]{}, &recorder[int]{}
-			subscribe(t, b, func(ctx context.Context, id uint64, msg int) error {
+			subscribe(t, g, func(ctx context.Context, id uint64, msg int) error {
 				handled.record(msg)
-				if err := b.Unsubscribe(ctx, id, subscriber.WithUnsubscribeDiscard()); err != nil {
+				if err := g.Unsubscribe(ctx, id, subscriber.WithUnsubscribeDiscard()); err != nil {
 					t.Errorf("Unsubscribe: %v", err)
 				}
 
 				return nil
 			}, subscriber.WithErrorHandler[int](recordClosed(t, closed)))
-			b.BroadcastBatch(t.Context(), batchOf(1, 2, 3))
+			g.PublishBatch(t.Context(), batchOf(1, 2, 3))
 			synctest.Wait()
 
 			if got := handled.messages(); !slices.Equal(got, []int{1}) {
@@ -349,26 +349,26 @@ func TestSubscriberWithHolder_Batch(t *testing.T) {
 	t.Parallel()
 
 	synctest.Test(t, func(t *testing.T) {
-		b := newGroup[int](t)
+		g := newGroup[int](t)
 		singles, batches := &recorder[int]{}, &batchRecorder{}
-		id := subscribe(t, b, singles.handle, subscriber.WithHolder(holder.NewBatch[int](holdFor, 3)),
+		id := subscribe(t, g, singles.handle, subscriber.WithHolder(holder.NewBatch[int](holdFor, 3)),
 			subscriber.WithBatchHandler(batches.handle))
 
-		b.Broadcast(t.Context(), 1)
-		b.Broadcast(t.Context(), 2)
-		b.BroadcastBatch(t.Context(), batchOf(3, 4, 5, 6, 7))
+		g.Publish(t.Context(), 1)
+		g.Publish(t.Context(), 2)
+		g.PublishBatch(t.Context(), batchOf(3, 4, 5, 6, 7))
 		synctest.Wait()
 		checkBatches(t, batches, [][]int{{1, 2, 3}, {4, 5, 6}})
-		checkStats(t, b, id, subscriber.Stats{Delivered: 7, Handled: 6, Held: 1, Batches: 2})
+		checkStats(t, g, id, subscriber.Stats{Delivered: 7, Handled: 6, Held: 1, Batches: 2})
 
 		time.Sleep(holdFor)
 		synctest.Wait()
 		checkBatches(t, batches, [][]int{{1, 2, 3}, {4, 5, 6}, {7}})
-		checkStats(t, b, id, subscriber.Stats{Delivered: 7, Handled: 7, Batches: 3})
+		checkStats(t, g, id, subscriber.Stats{Delivered: 7, Handled: 7, Batches: 3})
 
-		b.Broadcast(t.Context(), 8)
+		g.Publish(t.Context(), 8)
 		start := time.Now()
-		if err := waitShutdown(t, shutdown(t.Context(), b)); err != nil {
+		if err := waitShutdown(t, shutdown(t.Context(), g)); err != nil {
 			t.Errorf("Shutdown = %v, want nil", err)
 		}
 		if waited := time.Since(start); waited != 0 {

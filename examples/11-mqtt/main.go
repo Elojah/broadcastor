@@ -1,5 +1,5 @@
 // A gateway takes readings over MQTT and fans each out to a rule, a local store, and an uplink. paho's message handler
-// must not block, so it broadcasts with message.WithNonBlocking, to buffered subscribers. The uplink only queues each
+// must not block, so it publishes with message.WithNonBlocking, to buffered subscribers. The uplink only queues each
 // reading in an outbox (store.Enqueue), and store.Drain sends them in order once the link is back.
 //
 // It is a module of its own, to keep paho out of the library's go.mod: `go run -C examples/11-mqtt .` uses the broker
@@ -66,9 +66,9 @@ func run(addr string) {
 	ctx := context.Background()
 	readings := []reading{at(0, 20), at(1, 31), at(2, 22), at(3, 33)}
 
-	b := multicast.New[reading]()
+	g := multicast.New[reading]()
 	local, outbox := store.NewRing[reading](1024), store.NewRing[reading](1024)
-	subscribe(ctx, b, local, outbox)
+	subscribe(ctx, g, local, outbox)
 	up := make(chan struct{})
 	drained := uplink(ctx, outbox, up, len(readings))
 
@@ -84,7 +84,7 @@ func run(addr string) {
 
 			return
 		}
-		b.Broadcast(ctx, r, message.WithNonBlocking[reading]())
+		g.Publish(ctx, r, message.WithNonBlocking[reading]())
 	}))
 
 	sensor := mqtt.NewClient(mqtt.NewClientOptions().AddBroker("tcp://" + addr).SetClientID("multicast-example-sensor"))
@@ -103,7 +103,7 @@ func run(addr string) {
 	gateway.Disconnect(quiesce)
 	shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	if err := b.Shutdown(shutdownCtx); err != nil {
+	if err := g.Shutdown(shutdownCtx); err != nil {
 		log.Fatal(err)
 	}
 
@@ -116,9 +116,9 @@ func run(addr string) {
 	}
 }
 
-// subscribe adds the rule, the local store and the uplink, each with a buffer, since the gateway broadcasts without
+// subscribe adds the rule, the local store and the uplink, each with a buffer, since the gateway publishes without
 // waiting: a reading that finds a buffer full is lost, as a *subscriber.DroppedError.
-func subscribe(ctx context.Context, b *multicast.Group[reading], local, outbox *store.Ring[reading]) {
+func subscribe(ctx context.Context, g *multicast.Group[reading], local, outbox *store.Ring[reading]) {
 	options := []subscriber.Option[reading]{
 		subscriber.WithBuffer[reading](64),
 		subscriber.WithErrorHandler[reading](func(_ context.Context, err error) { log.Println(err) }),
@@ -137,7 +137,7 @@ func subscribe(ctx context.Context, b *multicast.Group[reading], local, outbox *
 		store.Enqueue[reading](outbox),
 	}
 	for _, handle := range handlers {
-		if _, err := b.Subscribe(ctx, handle, options...); err != nil {
+		if _, err := g.Subscribe(ctx, handle, options...); err != nil {
 			log.Fatal(err)
 		}
 	}
